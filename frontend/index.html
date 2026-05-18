@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BackupVault</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0c10;
+  --surface:#111318;
+  --surface2:#181c24;
+  --border:#1f2633;
+  --accent:#00e5a0;
+  --accent2:#0066ff;
+  --azure:#0089d6;
+  --gcs:#ea4335;
+  --pg:#336791;
+  --mongo:#47a248;
+  --text:#e8eaf0;
+  --muted:#6b7280;
+  --danger:#ff4757;
+  --warn:#ffa502;
+  --success:#00e5a0;
+  --radius:12px;
+}
+body{font-family:'Syne',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+.mono{font-family:'DM Mono',monospace}
+
+
+.form-group{margin-bottom:20px}
+.form-group label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}
+.form-group input,.form-group select,.form-group textarea{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 16px;color:var(--text);font-family:'Syne',sans-serif;font-size:14px;outline:none;transition:.2s}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,229,160,.1)}
+.form-group select option{background:var(--surface2)}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 24px;border-radius:10px;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;border:none;transition:.2s;text-decoration:none}
+.btn-primary{background:var(--accent);color:#000;width:100%;justify-content:center}
+.btn-primary:hover{background:#00ffb3;transform:translateY(-1px)}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.btn-secondary:hover{border-color:var(--accent);color:var(--accent)}
+.btn-danger{background:rgba(255,71,87,.15);color:var(--danger);border:1px solid rgba(255,71,87,.3)}
+.btn-danger:hover{background:rgba(255,71,87,.25)}
+.btn-sm{padding:8px 16px;font-size:13px}
+.btn-icon{padding:8px;border-radius:8px}
+.error-msg{color:var(--danger);font-size:13px;margin-top:8px;display:none}
+
+/* LAYOUT */
+#app{display:none;height:100vh;flex-direction:row}
+.sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+.sidebar-logo{padding:24px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
+.sidebar-logo .icon{width:36px;height:36px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px}
+.sidebar-logo h1{font-size:18px;font-weight:800}
+.sidebar-logo span{color:var(--accent)}
+nav{padding:16px 12px;flex:1}
+.nav-section{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;padding:0 8px;margin:16px 0 8px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;cursor:pointer;color:var(--muted);font-size:14px;font-weight:600;transition:.15s;margin-bottom:2px}
+.nav-item:hover{background:var(--surface2);color:var(--text)}
+.nav-item.active{background:rgba(0,229,160,.1);color:var(--accent)}
+.nav-item .nav-icon{font-size:16px;width:20px;text-align:center}
+.sidebar-footer{padding:16px;border-top:1px solid var(--border)}
+.user-info{display:flex;align-items:center;gap:10px;padding:10px;border-radius:10px;background:var(--surface2)}
+.avatar{width:32px;height:32px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#000;flex-shrink:0}
+.user-details{flex:1;min-width:0}
+.user-name{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.user-email{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.logout-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:4px;border-radius:6px;transition:.2s}
+.logout-btn:hover{color:var(--danger)}
+
+.main{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+.topbar{padding:20px 32px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--surface)}
+.topbar h2{font-size:20px;font-weight:800}
+.content{padding:32px;flex:1}
+
+/* PAGES */
+.page{display:none}
+.page.active{display:block}
+
+/* STATS */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:32px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.stat-card.green::before{background:var(--accent)}
+.stat-card.blue::before{background:var(--accent2)}
+.stat-card.orange::before{background:var(--warn)}
+.stat-card.red::before{background:var(--danger)}
+.stat-label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+.stat-value{font-size:32px;font-weight:800}
+.stat-sub{font-size:12px;color:var(--muted);margin-top:4px}
+
+/* TABLES */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.card-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.card-title{font-size:15px;font-weight:700}
+table{width:100%;border-collapse:collapse}
+th{padding:12px 16px;text-align:left;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)}
+td{padding:14px 16px;font-size:14px;border-bottom:1px solid var(--border)}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(255,255,255,.02)}
+.empty-row td{text-align:center;color:var(--muted);padding:40px}
+
+/* BADGES */
+.badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600}
+.badge-green{background:rgba(0,229,160,.1);color:var(--accent)}
+.badge-blue{background:rgba(0,102,255,.1);color:#5599ff}
+.badge-orange{background:rgba(255,165,2,.1);color:var(--warn)}
+.badge-red{background:rgba(255,71,87,.1);color:var(--danger)}
+.badge-pg{background:rgba(51,103,145,.15);color:#6fa3d0}
+.badge-mongo{background:rgba(71,162,72,.15);color:#74c375}
+.badge-azure{background:rgba(0,137,214,.15);color:#4db8f0}
+.badge-gcs{background:rgba(234,67,53,.15);color:#f57c6e}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block}
+
+/* MODAL */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);z-index:100;display:none;align-items:center;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:32px;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto}
+.modal-title{font-size:18px;font-weight:800;margin-bottom:24px}
+.modal-actions{display:flex;gap:12px;justify-content:flex-end;margin-top:24px}
+
+/* TOAST */
+.toast-container{position:fixed;bottom:24px;right:24px;z-index:200;display:flex;flex-direction:column;gap:8px}
+.toast{padding:14px 20px;border-radius:12px;font-size:14px;font-weight:600;animation:slideIn .3s ease;display:flex;align-items:center;gap:10px;min-width:280px}
+.toast-success{background:rgba(0,229,160,.15);border:1px solid rgba(0,229,160,.3);color:var(--accent)}
+.toast-error{background:rgba(255,71,87,.15);border:1px solid rgba(255,71,87,.3);color:var(--danger)}
+.toast-info{background:rgba(0,102,255,.15);border:1px solid rgba(0,102,255,.3);color:#5599ff}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+
+/* MISC */
+.actions{display:flex;gap:8px}
+.flex{display:flex}
+.items-center{align-items:center}
+.gap-2{gap:8px}
+.gap-3{gap:12px}
+.justify-between{justify-content:space-between}
+.mb-4{margin-bottom:16px}
+.mb-6{margin-bottom:24px}
+.text-muted{color:var(--muted)}
+.text-sm{font-size:13px}
+.spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+.size-bar{height:4px;background:var(--surface2);border-radius:2px;margin-top:6px;overflow:hidden}
+.size-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width .5s ease}
+.conditional{display:none}
+</style>
+</head>
+<body>
+
+
+
+<!-- APP -->
+<div id="app">
+  <div class="sidebar">
+    <div class="sidebar-logo">
+      <div class="icon">🗄️</div>
+      <h1>Backup<span>Vault</span></h1>
+    </div>
+    <nav>
+      <div class="nav-section">Overview</div>
+      <div class="nav-item active" onclick="showPage('dashboard')">
+        <span class="nav-icon">📊</span> Dashboard
+      </div>
+      <div class="nav-section">Manage</div>
+      <div class="nav-item" onclick="showPage('databases')">
+        <span class="nav-icon">🗃️</span> Databases
+      </div>
+      <div class="nav-item" onclick="showPage('storage')">
+        <span class="nav-icon">☁️</span> Storage
+      </div>
+      <div class="nav-item" onclick="showPage('backups')">
+        <span class="nav-icon">💾</span> Backups
+      </div>
+      <div class="nav-item" onclick="showPage('schedules')">
+        <span class="nav-icon">⏰</span> Schedules
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-info">
+        <div class="avatar" id="user-avatar">?</div>
+        <div class="user-details">
+          <div class="user-name" id="user-name-display">—</div>
+          <div class="user-email" id="user-email-display">—</div>
+        </div>
+        <button class="logout-btn" style="display:none">↩</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="topbar">
+      <h2 id="page-title">Dashboard</h2>
+      <div id="topbar-action"></div>
+    </div>
+    <div class="content">
+
+      <!-- DASHBOARD -->
+      <div class="page active" id="page-dashboard">
+        <div class="stats-grid" id="stats-grid">
+          <div class="stat-card green"><div class="stat-label">Total Backups</div><div class="stat-value" id="stat-total">—</div></div>
+          <div class="stat-card blue"><div class="stat-label">Completed</div><div class="stat-value" id="stat-completed">—</div></div>
+          <div class="stat-card orange"><div class="stat-label">Running</div><div class="stat-value" id="stat-running">—</div></div>
+          <div class="stat-card green"><div class="stat-label">Storage Used</div><div class="stat-value" id="stat-size">—</div><div class="stat-sub">MB across all backups</div></div>
+          <div class="stat-card blue"><div class="stat-label">Databases</div><div class="stat-value" id="stat-dbs">—</div></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><div class="card-title">Recent Backups</div></div>
+          <table>
+            <thead><tr><th>Label</th><th>Database</th><th>Storage</th><th>Status</th><th>Size</th><th>Date</th></tr></thead>
+            <tbody id="recent-backups-table"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- DATABASES -->
+      <div class="page" id="page-databases">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Databases</div>
+            <button class="btn btn-primary btn-sm" onclick="openModal('db-modal')">+ Add Database</button>
+          </div>
+          <table>
+            <thead><tr><th>Name</th><th>Type</th><th>Host</th><th>Database</th><th>Added</th><th>Actions</th></tr></thead>
+            <tbody id="databases-table"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- STORAGE -->
+      <div class="page" id="page-storage">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Storage Destinations</div>
+            <button class="btn btn-primary btn-sm" onclick="openModal('storage-modal')">+ Add Storage</button>
+          </div>
+          <table>
+            <thead><tr><th>Name</th><th>Type</th><th>Bucket / Container</th><th>Added</th><th>Actions</th></tr></thead>
+            <tbody id="storage-table"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- BACKUPS -->
+      <div class="page" id="page-backups">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Backup History</div>
+            <button class="btn btn-primary btn-sm" onclick="openModal('backup-modal')">▶ Run Backup</button>
+          </div>
+          <table>
+            <thead><tr><th>Label</th><th>Database</th><th>Storage</th><th>Status</th><th>Size (MB)</th><th>Duration</th><th>Date</th><th></th></tr></thead>
+            <tbody id="backups-table"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- SCHEDULES -->
+      <div class="page" id="page-schedules">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Backup Schedules</div>
+            <button class="btn btn-primary btn-sm" onclick="openModal('schedule-modal')">+ Add Schedule</button>
+          </div>
+          <table>
+            <thead><tr><th>Name</th><th>Database</th><th>Storage</th><th>Frequency</th><th>Time</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody id="schedules-table"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- MODALS -->
+<!-- Add Database -->
+<div class="modal-overlay" id="db-modal">
+  <div class="modal">
+    <div class="modal-title">Add Database</div>
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" id="db-name" placeholder="My Production DB"/>
+    </div>
+    <div class="form-group">
+      <label>Type</label>
+      <select id="db-type">
+        <option value="postgresql">PostgreSQL</option>
+        <option value="mongodb">MongoDB</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Host</label>
+        <input type="text" id="db-host" placeholder="localhost"/>
+      </div>
+      <div class="form-group">
+        <label>Port</label>
+        <input type="number" id="db-port" placeholder="5432"/>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" id="db-user" placeholder="postgres"/>
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="db-pass" placeholder="••••••••"/>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Database Name</label>
+      <input type="text" id="db-dbname" placeholder="myapp"/>
+    </div>
+    <div class="form-group">
+      <label>Description (optional)</label>
+      <input type="text" id="db-desc" placeholder="Production app database"/>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('db-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="addDatabase()">Add Database</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Storage -->
+<div class="modal-overlay" id="storage-modal">
+  <div class="modal">
+    <div class="modal-title">Add Storage</div>
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" id="st-name" placeholder="My Azure Bucket"/>
+    </div>
+    <div class="form-group">
+      <label>Type</label>
+      <select id="st-type" onchange="toggleStorageFields()">
+        <option value="azure">Azure Blob Storage</option>
+        <option value="gcs">Google Cloud Storage</option>
+      </select>
+    </div>
+    <div id="azure-fields">
+      <div class="form-group">
+        <label>Account Name</label>
+        <input type="text" id="st-azure-account" placeholder="mystorageaccount"/>
+      </div>
+      <div class="form-group">
+        <label>Account Key</label>
+        <input type="password" id="st-azure-key" placeholder="base64-encoded key"/>
+      </div>
+      <div class="form-group">
+        <label>Container Name</label>
+        <input type="text" id="st-azure-container" placeholder="backups"/>
+      </div>
+    </div>
+    <div id="gcs-fields" style="display:none">
+      <div class="form-group">
+        <label>Bucket Name</label>
+        <input type="text" id="st-gcs-bucket" placeholder="my-backup-bucket"/>
+      </div>
+      <div class="form-group">
+        <label>Service Account JSON</label>
+        <textarea id="st-gcs-creds" rows="4" placeholder='{"type":"service_account",...}'></textarea>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('storage-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="addStorage()">Add Storage</button>
+    </div>
+  </div>
+</div>
+
+<!-- Run Backup -->
+<div class="modal-overlay" id="backup-modal">
+  <div class="modal">
+    <div class="modal-title">Run Backup</div>
+    <div class="form-group">
+      <label>Database</label>
+      <select id="bk-db"></select>
+    </div>
+    <div class="form-group">
+      <label>Storage Destination</label>
+      <select id="bk-storage"></select>
+    </div>
+    <div class="form-group">
+      <label>Label (optional)</label>
+      <input type="text" id="bk-label" placeholder="e.g. pre-release-backup"/>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('backup-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="runBackup()">▶ Start Backup</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Schedule -->
+<div class="modal-overlay" id="schedule-modal">
+  <div class="modal">
+    <div class="modal-title">Add Schedule</div>
+    <div class="form-group">
+      <label>Schedule Name</label>
+      <input type="text" id="sc-name" placeholder="Nightly Production Backup"/>
+    </div>
+    <div class="form-group">
+      <label>Database</label>
+      <select id="sc-db"></select>
+    </div>
+    <div class="form-group">
+      <label>Storage Destination</label>
+      <select id="sc-storage"></select>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Frequency</label>
+        <select id="sc-freq">
+          <option value="hourly">Hourly</option>
+          <option value="daily" selected>Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Time (HH:MM)</label>
+        <input type="time" id="sc-time" value="02:00"/>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('schedule-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="addSchedule()">Create Schedule</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container" id="toasts"></div>
+
+<script>
+const API = 'http://localhost:8000/api';
+let token = 'no-auth';
+let currentUser = {id:'local',name:'Admin',email:'admin@local'};
+
+// ---- APP INIT ----
+function initApp() {
+  document.getElementById('app').style.display='flex';
+  document.getElementById('user-name-display').textContent = currentUser.name;
+  document.getElementById('user-email-display').textContent = currentUser.email;
+  document.getElementById('user-avatar').textContent = 'A';
+  showPage('dashboard');
+}
+
+// ---- NAVIGATION ----
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById(`page-${name}`).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n=>{if(n.textContent.trim().toLowerCase().includes(name))n.classList.add('active')});
+  const titles = {dashboard:'Dashboard',databases:'Databases',storage:'Storage Destinations',backups:'Backup History',schedules:'Schedules'};
+  document.getElementById('page-title').textContent = titles[name]||name;
+  loadPage(name);
+}
+
+async function loadPage(name) {
+  if(name==='dashboard') await loadDashboard();
+  else if(name==='databases') await loadDatabases();
+  else if(name==='storage') await loadStorage();
+  else if(name==='backups') await loadBackups();
+  else if(name==='schedules') await loadSchedules();
+}
+
+// ---- API HELPERS ----
+async function apiFetch(path, opts={}) {
+  const r = await fetch(`${API}${path}`, {
+    ...opts,
+    headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`,...(opts.headers||{})}
+  });
+  const d = await r.json();
+  if(!r.ok) throw new Error(d.detail||'Request failed');
+  return d;
+}
+
+// ---- DASHBOARD ----
+async function loadDashboard() {
+  try {
+    const stats = await apiFetch('/backups/stats');
+    document.getElementById('stat-total').textContent = stats.total;
+    document.getElementById('stat-completed').textContent = stats.completed;
+    document.getElementById('stat-running').textContent = stats.running;
+    document.getElementById('stat-size').textContent = stats.total_size_mb;
+    document.getElementById('stat-dbs').textContent = stats.databases;
+    const backups = await apiFetch('/backups/');
+    const tbody = document.getElementById('recent-backups-table');
+    tbody.innerHTML = backups.slice(0,8).map(b=>`
+      <tr>
+        <td class="mono">${b.label}</td>
+        <td>${dbBadge(b.database_type)}${b.database_name}</td>
+        <td>${storageBadge(b.storage_type)}${b.storage_name}</td>
+        <td>${statusBadge(b.status)}</td>
+        <td>${b.size_mb??'—'}</td>
+        <td class="text-muted text-sm">${fmtDate(b.created_at)}</td>
+      </tr>`).join('')||emptyRow(6,'No backups yet');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// ---- DATABASES ----
+async function loadDatabases() {
+  try {
+    const dbs = await apiFetch('/databases/');
+    const tbody = document.getElementById('databases-table');
+    tbody.innerHTML = dbs.map(d=>`
+      <tr>
+        <td><strong>${d.name}</strong><br><span class="text-muted text-sm">${d.description||''}</span></td>
+        <td>${dbBadge(d.type)}</td>
+        <td class="mono text-sm">${d.host}:${d.port}</td>
+        <td class="mono text-sm">${d.database_name}</td>
+        <td class="text-muted text-sm">${fmtDate(d.created_at)}</td>
+        <td><div class="actions">
+          <button class="btn btn-secondary btn-sm btn-icon" onclick="testConn('${d.id}')" title="Test Connection">🔌</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteDatabase('${d.id}')">Delete</button>
+        </div></td>
+      </tr>`).join('')||emptyRow(6,'No databases added yet. Click "+ Add Database" to get started.');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function addDatabase() {
+  try {
+    await apiFetch('/databases/',{method:'POST',body:JSON.stringify({
+      name:v('db-name'),type:v('db-type'),host:v('db-host'),port:parseInt(v('db-port')),
+      username:v('db-user'),password:v('db-pass'),database_name:v('db-dbname'),description:v('db-desc')
+    })});
+    closeModal('db-modal');
+    toast('Database added!','success');
+    loadDatabases();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function deleteDatabase(id) {
+  if(!confirm('Delete this database?')) return;
+  await apiFetch(`/databases/${id}`,{method:'DELETE'});
+  toast('Deleted','success'); loadDatabases();
+}
+
+async function testConn(id) {
+  try {
+    const r = await apiFetch(`/databases/${id}/test`);
+    toast(r.message,'success');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// ---- STORAGE ----
+function toggleStorageFields() {
+  const t = document.getElementById('st-type').value;
+  document.getElementById('azure-fields').style.display = t==='azure'?'block':'none';
+  document.getElementById('gcs-fields').style.display = t==='gcs'?'block':'none';
+}
+
+async function loadStorage() {
+  try {
+    const storages = await apiFetch('/storage/');
+    const tbody = document.getElementById('storage-table');
+    tbody.innerHTML = storages.map(s=>`
+      <tr>
+        <td><strong>${s.name}</strong></td>
+        <td>${storageBadge(s.type)}</td>
+        <td class="mono text-sm">${s.azure_container||s.gcs_bucket||'—'}</td>
+        <td class="text-muted text-sm">${fmtDate(s.created_at)}</td>
+        <td><button class="btn btn-danger btn-sm" onclick="deleteStorage('${s.id}')">Delete</button></td>
+      </tr>`).join('')||emptyRow(5,'No storage configured yet.');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function addStorage() {
+  const type = v('st-type');
+  try {
+    await apiFetch('/storage/',{method:'POST',body:JSON.stringify({
+      name:v('st-name'),type,
+      azure_account_name:v('st-azure-account'),azure_account_key:v('st-azure-key'),azure_container:v('st-azure-container'),
+      gcs_bucket:v('st-gcs-bucket'),gcs_credentials_json:v('st-gcs-creds')
+    })});
+    closeModal('storage-modal');
+    toast('Storage added!','success');
+    loadStorage();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function deleteStorage(id) {
+  if(!confirm('Delete this storage?')) return;
+  await apiFetch(`/storage/${id}`,{method:'DELETE'});
+  toast('Deleted','success'); loadStorage();
+}
+
+// ---- BACKUPS ----
+async function loadBackups() {
+  try {
+    const backups = await apiFetch('/backups/');
+    const tbody = document.getElementById('backups-table');
+    tbody.innerHTML = backups.map(b=>`
+      <tr>
+        <td class="mono text-sm">${b.label}</td>
+        <td>${dbBadge(b.database_type)} ${b.database_name}</td>
+        <td>${storageBadge(b.storage_type)} ${b.storage_name}</td>
+        <td>${statusBadge(b.status)}</td>
+        <td>${b.size_mb??'—'}</td>
+        <td>${b.duration_seconds?b.duration_seconds+'s':'—'}</td>
+        <td class="text-muted text-sm">${fmtDate(b.created_at)}</td>
+        <td><button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}')">🗑</button></td>
+      </tr>`).join('')||emptyRow(8,'No backups yet. Click "Run Backup" to start.');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function openBackupModal() {
+  await populateSelects();
+  openModal('backup-modal');
+}
+
+async function populateSelects() {
+  const dbs = await apiFetch('/databases/');
+  const sts = await apiFetch('/storage/');
+  ['bk-db','sc-db'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.innerHTML = dbs.map(d=>`<option value="${d.id}">${d.name} (${d.type})</option>`).join('');
+  });
+  ['bk-storage','sc-storage'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.innerHTML = sts.map(s=>`<option value="${s.id}">${s.name} (${s.type})</option>`).join('');
+  });
+}
+
+async function runBackup() {
+  try {
+    await apiFetch('/backups/',{method:'POST',body:JSON.stringify({
+      database_id:v('bk-db'),storage_id:v('bk-storage'),label:v('bk-label')
+    })});
+    closeModal('backup-modal');
+    toast('Backup started!','info');
+    showPage('backups');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function deleteBackup(id) {
+  await apiFetch(`/backups/${id}`,{method:'DELETE'});
+  toast('Deleted','success'); loadBackups();
+}
+
+// ---- SCHEDULES ----
+async function loadSchedules() {
+  try {
+    const schedules = await apiFetch('/schedules/');
+    const tbody = document.getElementById('schedules-table');
+    tbody.innerHTML = schedules.map(s=>`
+      <tr>
+        <td><strong>${s.name}</strong></td>
+        <td>${s.database_name}</td>
+        <td>${s.storage_name}</td>
+        <td><span class="badge badge-blue">${s.frequency}</span></td>
+        <td class="mono text-sm">${s.time}</td>
+        <td>${s.enabled?'<span class="badge badge-green"><span class="dot"></span>Active</span>':'<span class="badge badge-red"><span class="dot"></span>Paused</span>'}</td>
+        <td><div class="actions">
+          <button class="btn btn-secondary btn-sm" onclick="toggleSchedule('${s.id}')">${s.enabled?'Pause':'Resume'}</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteSchedule('${s.id}')">Delete</button>
+        </div></td>
+      </tr>`).join('')||emptyRow(7,'No schedules yet. Automate your backups!');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function addSchedule() {
+  try {
+    await apiFetch('/schedules/',{method:'POST',body:JSON.stringify({
+      name:v('sc-name'),database_id:v('sc-db'),storage_id:v('sc-storage'),
+      frequency:v('sc-freq'),time:v('sc-time'),enabled:true
+    })});
+    closeModal('schedule-modal');
+    toast('Schedule created!','success');
+    loadSchedules();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function toggleSchedule(id) {
+  await apiFetch(`/schedules/${id}/toggle`,{method:'PATCH'});
+  loadSchedules();
+}
+
+async function deleteSchedule(id) {
+  if(!confirm('Delete schedule?')) return;
+  await apiFetch(`/schedules/${id}`,{method:'DELETE'});
+  toast('Deleted','success'); loadSchedules();
+}
+
+// ---- MODALS ----
+function openModal(id) {
+  if(id==='backup-modal'||id==='schedule-modal') populateSelects();
+  document.getElementById(id).classList.add('open');
+}
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open')}));
+
+// ---- HELPERS ----
+function v(id){return document.getElementById(id)?.value||''}
+function emptyRow(cols,msg){return `<tr class="empty-row"><td colspan="${cols}">${msg}</td></tr>`}
+function fmtDate(iso){if(!iso)return'—';const d=new Date(iso);return d.toLocaleDateString()+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}
+function dbBadge(t){return t==='postgresql'?'<span class="badge badge-pg" style="margin-right:6px">🐘 PG</span>':'<span class="badge badge-mongo" style="margin-right:6px">🍃 Mongo</span>'}
+function storageBadge(t){return t==='azure'?'<span class="badge badge-azure" style="margin-right:6px">☁ Azure</span>':'<span class="badge badge-gcs" style="margin-right:6px">🌐 GCS</span>'}
+function statusBadge(s){const m={completed:'badge-green',running:'badge-orange',failed:'badge-red'};return `<span class="badge ${m[s]||'badge-blue'}"><span class="dot"></span>${s}</span>`}
+
+function toast(msg, type='info') {
+  const c = document.getElementById('toasts');
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.innerHTML = `<span>${type==='success'?'✓':type==='error'?'✗':'ℹ'}</span> ${msg}`;
+  c.appendChild(t);
+  setTimeout(()=>t.remove(), 4000);
+}
+
+// ---- BOOT ----
+initApp();
+</script>
+</body>
+</html>
