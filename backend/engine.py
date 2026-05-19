@@ -76,7 +76,24 @@ def download_from_storage(storage: dict, remote_name: str, local_path: str):
 # ─── MONGODB ──────────────────────────────────────────────────────────────────
  
 def mongo_uri(db: dict) -> str:
-    return f"mongodb://{db['username']}:{db['password']}@{db['host']}:{db['port']}/{db['database_name']}"
+    host = db.get('host', '').strip()
+    port = db.get('port', '')
+    user = db.get('username', '')
+    password = db.get('password', '')
+    dbname = db.get('database_name', '')
+ 
+    if not host:
+        raise ValueError("Database host is empty")
+    if not port or str(port).strip() == '':
+        raise ValueError("Database port is empty or invalid")
+ 
+    port = int(str(port).strip())
+    if port < 1 or port > 65535:
+        raise ValueError(f"Database port {port} is out of range [1, 65535]")
+ 
+    if user and password:
+        return f"mongodb://{user}:{password}@{host}:{port}/{dbname}"
+    return f"mongodb://{host}:{port}/{dbname}"
  
 def run_mongo_backup(db: dict, collection: str, tmp_dir: str) -> str:
     """Run mongodump and return path to .gz file."""
@@ -303,4 +320,3 @@ def do_restore(restore_id: str):
         fail(str(e))
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
- 
