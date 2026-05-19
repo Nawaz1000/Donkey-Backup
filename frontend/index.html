@@ -259,11 +259,15 @@ tr:hover td{background:rgba(255,255,255,.02)}
           <div style="font-size:13px;color:var(--muted);margin-bottom:10px" id="live-label">—</div>
           <div class="progress-wrap"><div class="progress-bar" id="live-bar" style="width:0%"></div></div>
           <div class="progress-label" id="live-pct">0%</div>
+          <div id="live-logs" style="margin-top:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;font-family:'DM Mono',monospace;font-size:12px;max-height:120px;overflow-y:auto;line-height:1.8"></div>
         </div>
         <div class="card">
           <div class="card-header">
             <div class="card-title">Backup History</div>
-            <button class="btn btn-primary btn-sm" onclick="openModal('backup-modal')">▶ Run Backup</button>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-secondary btn-sm" onclick="loadBackups()">🔄 Refresh</button>
+              <button class="btn btn-primary btn-sm" onclick="openModal('backup-modal')">▶ Run Backup</button>
+            </div>
           </div>
           <table>
             <thead><tr><th>Label</th><th>Database</th><th>Storage</th><th>Status</th><th>Size (MB)</th><th>Duration</th><th>Date</th><th></th></tr></thead>
@@ -291,7 +295,10 @@ tr:hover td{background:rgba(255,255,255,.02)}
         <div class="card" style="margin-bottom:24px">
           <div class="card-header">
             <div class="card-title">Restore from Backup</div>
-            <button class="btn btn-primary btn-sm" onclick="openModal('restore-modal')">♻️ New Restore</button>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-secondary btn-sm" onclick="loadRestores()">🔄 Refresh</button>
+              <button class="btn btn-primary btn-sm" onclick="openModal('restore-modal')">♻️ New Restore</button>
+            </div>
           </div>
           <table>
             <thead><tr><th>Backup Label</th><th>Collection</th><th>Target Database</th><th>Status</th><th>Duration</th><th>Date</th></tr></thead>
@@ -457,8 +464,14 @@ tr:hover td{background:rgba(255,255,255,.02)}
   <div class="modal">
     <div class="modal-title">Run Backup</div>
     <div class="form-group">
-      <label>Database</label>
+      <label>Database Connection</label>
       <select id="bk-db" onchange="onBackupDbChange()"></select>
+    </div>
+    <div class="form-group">
+      <label>Database Name <span style="color:var(--muted);font-size:11px">(fetched from server)</span></label>
+      <select id="bk-dbname" onchange="onBackupDbnameChange()">
+        <option value="">— select database connection first —</option>
+      </select>
     </div>
     <div class="form-group">
       <label>Backup Type</label>
@@ -468,8 +481,10 @@ tr:hover td{background:rgba(255,255,255,.02)}
       </select>
     </div>
     <div class="form-group" id="bk-collection-group" style="display:none">
-      <label>Collection / Table Name</label>
-      <input type="text" id="bk-collection" placeholder="e.g. users, orders"/>
+      <label>Collection / Table <span style="color:var(--muted);font-size:11px">(fetched from server)</span></label>
+      <select id="bk-collection-select">
+        <option value="">— select database name first —</option>
+      </select>
     </div>
     <div class="form-group">
       <label>Storage Destination</label>
@@ -856,18 +871,64 @@ async function populateSelects() {
   const sts = await apiFetch('/storage/');
   ['bk-db','sc-db'].forEach(id=>{
     const el = document.getElementById(id);
-    if(el) el.innerHTML = dbs.map(d=>`<option value="${d.id}">${d.name} (${d.type})</option>`).join('');
+    if(el) el.innerHTML = dbs.map(d=>`<option value="${d.id}" data-type="${d.type}">${d.name} (${d.type})</option>`).join('');
   });
   ['bk-storage','sc-storage'].forEach(id=>{
     const el = document.getElementById(id);
     if(el) el.innerHTML = sts.map(s=>`<option value="${s.id}">${s.name} (${s.type})</option>`).join('');
   });
+  if(dbs.length) onBackupDbChange();
+}
+
+async function onBackupDbChange() {
+  const dbId = v('bk-db');
+  if(!dbId) return;
+  const dbnameEl = document.getElementById('bk-dbname');
+  const collEl = document.getElementById('bk-collection-select');
+  if(!dbnameEl) return;
+  dbnameEl.innerHTML = '<option>⏳ Loading databases...</option>';
+  if(collEl) collEl.innerHTML = '<option>— select database name first —</option>';
+  try {
+    const r = await apiFetch(`/databases/${dbId}/databases`);
+    dbnameEl.innerHTML = r.databases.map(d=>`<option value="${d}">${d}</option>`).join('');
+    onBackupDbnameChange();
+  } catch(e) {
+    dbnameEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
+  }
+}
+
+async function onBackupDbnameChange() {
+  const dbId = v('bk-db');
+  const dbname = v('bk-dbname');
+  if(!dbId || !dbname) return;
+  const collEl = document.getElementById('bk-collection-select');
+  if(!collEl) return;
+  collEl.innerHTML = '<option>⏳ Loading collections...</option>';
+  try {
+    const r = await apiFetch(`/databases/${dbId}/collections?database=${encodeURIComponent(dbname)}`);
+    collEl.innerHTML = r.collections.map(c=>`<option value="${c}">${c}</option>`).join('');
+  } catch(e) {
+    collEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
+  }
+}
+
+function onBackupTypeChange() {
+  const isCollection = document.getElementById('bk-type').value === 'collection';
+  document.getElementById('bk-collection-group').style.display = isCollection ? 'block' : 'none';
 }
 
 async function runBackup() {
-  const collection = v('bk-type')==='collection' ? v('bk-collection') : '';
+  const dbId = v('bk-db');
+  const dbname = v('bk-dbname');
+  const type = v('bk-type');
+  const collection = type === 'collection' ? v('bk-collection-select') : '';
   const label = v('bk-label') || `backup-${Date.now()}`;
-  await startBackupNow(v('bk-db'), v('bk-storage'), label, collection);
+  if(!dbId){ toast('Select a database connection','error'); return; }
+  if(!dbname){ toast('Select a database name','error'); return; }
+  if(type === 'collection' && !collection){ toast('Select a collection','error'); return; }
+  // Save selected db name back to db record
+  try { await apiFetch(`/databases/${dbId}`, {method:'PATCH', body: JSON.stringify({database_name: dbname})}); } catch(e){}
+  await startBackupNow(dbId, v('bk-storage'), label, collection);
   closeModal('backup-modal');
 }
 
@@ -889,33 +950,85 @@ function simulateProgress(backupId, label) {
   const pct = document.getElementById('live-pct');
   const badge = document.getElementById('live-pct-badge');
   const lbl = document.getElementById('live-label');
+  const logsEl = document.getElementById('live-logs');
   card.classList.add('active');
   lbl.textContent = label;
   let progress = 0;
+  let stuckCount = 0;
   if(progressInterval) clearInterval(progressInterval);
+  if(logsEl) logsEl.innerHTML = '<div style="color:var(--muted)">⏳ Connecting to database...</div>';
+
   progressInterval = setInterval(async () => {
-    progress = Math.min(progress + Math.random() * 12, 95);
-    bar.style.width = progress.toFixed(0) + '%';
-    pct.textContent = progress.toFixed(0) + '%';
-    badge.textContent = progress.toFixed(0) + '%';
-    // Check if actually done
     try {
       const backups = await apiFetch('/backups/');
       const b = backups.find(x=>x.id===backupId);
+
       if(b && b.status === 'completed') {
         clearInterval(progressInterval);
         bar.style.width = '100%';
         pct.textContent = '100%';
         badge.textContent = '100%';
         badge.className = 'badge badge-green';
-        setTimeout(()=>{ card.classList.remove('active'); loadBackups(); }, 1500);
-      } else if(b && b.status === 'failed') {
+        badge.style.color = 'var(--accent)';
+        // Fetch real logs
+        try {
+          const logData = await apiFetch(`/backups/${backupId}/logs`);
+          if(logsEl && logData.logs) {
+            logsEl.innerHTML = logData.logs.split('\n').filter(Boolean).map(l=>
+              `<div style="color:${l.includes('error')||l.includes('fail')?'var(--danger)':'var(--muted)'}">${l}</div>`
+            ).join('');
+          }
+        } catch(e){}
+        if(logsEl) logsEl.innerHTML += `<div style="color:var(--accent)">✅ Backup completed! Size: ${b.size_mb} MB | Duration: ${b.duration_seconds}s</div>`;
+        if(logsEl) logsEl.scrollTop = logsEl.scrollHeight;
+        setTimeout(()=>{ card.classList.remove('active'); loadBackups(); }, 3000);
+        return;
+      }
+
+      if(b && b.status === 'failed') {
         clearInterval(progressInterval);
         card.classList.remove('active');
         toast(b.error ? b.error.split('\n')[0] : 'Backup failed!','error');
+        if(logsEl) logsEl.innerHTML += `<div style="color:var(--danger)">❌ ${b.error||'Backup failed'}</div>`;
         loadBackups();
+        return;
       }
-    } catch(e){}
+
+      // Still running — animate progress but cap at 90% until done
+      stuckCount++;
+      const increment = Math.random() * 8;
+      progress = Math.min(progress + increment, 90);
+      bar.style.width = progress.toFixed(0) + '%';
+      pct.textContent = progress.toFixed(0) + '%';
+      badge.textContent = progress.toFixed(0) + '%';
+
+      // Add log messages
+      if(logsEl) {
+        const msgs = [
+          'Connecting to database...',
+          'Starting mongodump...',
+          'Dumping collections...',
+          'Compressing data...',
+          'Uploading to storage...',
+          'Verifying upload...',
+        ];
+        const msgIdx = Math.min(Math.floor(progress / 18), msgs.length - 1);
+        const last = logsEl.lastElementChild;
+        if(!last || last.textContent !== `⏳ ${msgs[msgIdx]}`) {
+          logsEl.innerHTML += `<div style="color:var(--muted)">⏳ ${msgs[msgIdx]}</div>`;
+          logsEl.scrollTop = logsEl.scrollHeight;
+        }
+      }
+
+      // If stuck at 90% for too long (>60s), keep polling
+      if(stuckCount > 120) {
+        // 120 * 800ms = ~96s, just keep polling, don't stop
+        stuckCount = 80;
+      }
+
+    } catch(e) {
+      // Network error, keep trying
+    }
   }, 800);
 }
 
