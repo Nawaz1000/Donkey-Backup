@@ -13,11 +13,13 @@ FROM python:3.11-slim
 RUN apt-get update && apt-get install -y \
     nginx supervisor \
     postgresql-client \
-    gnupg curl \
-    && curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg --dearmor \
-    && echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" | tee /etc/apt/sources.list.d/mongodb-org-7.0.list \
-    && apt-get update && apt-get install -y mongodb-database-tools \
+    gnupg curl wget \
     && rm -rf /var/lib/apt/lists/*
+
+# Install MongoDB Database Tools directly (no apt repo needed)
+RUN wget -q https://fastdl.mongodb.org/tools/db/mongodb-database-tools-debian12-x86_64-100.10.0.deb \
+    && dpkg -i mongodb-database-tools-debian12-x86_64-100.10.0.deb \
+    && rm mongodb-database-tools-debian12-x86_64-100.10.0.deb
 
 # Copy installed Python packages and app from build stage
 COPY --from=backend /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
