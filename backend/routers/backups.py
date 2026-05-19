@@ -12,6 +12,7 @@ class BackupCreate(BaseModel):
     database_id: str
     storage_id: str
     label: Optional[str] = ""
+    collection: Optional[str] = ""  # specific collection/table, empty = full backup
 
 def simulate_backup(backup_id: str):
     import time, random
@@ -56,6 +57,7 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
         "database_id": req.database_id,
         "storage_id": req.storage_id,
         "label": req.label or f"backup-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}",
+        "collection": req.collection or "full",
         "status": "running",
         "size_mb": None,
         "created_at": datetime.utcnow().isoformat(),

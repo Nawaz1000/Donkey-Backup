@@ -51,6 +51,18 @@ def delete_database(db_id: str, user=Depends(get_current_user)):
     write_json("data/databases.json", dbs)
     return {"message": "Deleted"}
 
+@router.patch("/{db_id}")
+def update_database(db_id: str, req: dict, user=Depends(get_current_user)):
+    dbs = read_json("data/databases.json")
+    for d in dbs:
+        if d["id"] == db_id and d["user_id"] == user["sub"]:
+            for k, v in req.items():
+                if k != "id" and k != "user_id":
+                    d[k] = v
+            break
+    write_json("data/databases.json", dbs)
+    return {"message": "Updated"}
+
 @router.get("/{db_id}/test")
 def test_connection(db_id: str, user=Depends(get_current_user)):
     dbs = read_json("data/databases.json")

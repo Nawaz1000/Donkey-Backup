@@ -143,6 +143,11 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .size-bar{height:4px;background:var(--surface2);border-radius:2px;margin-top:6px;overflow:hidden}
 .size-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width .5s ease}
 .conditional{display:none}
+.progress-wrap{background:var(--surface2);border-radius:20px;height:8px;overflow:hidden;margin-top:6px}
+.progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:20px;transition:width .4s ease}
+.progress-label{font-size:12px;color:var(--accent);font-weight:700;margin-top:4px}
+.backup-live{background:var(--surface);border:1px solid rgba(0,229,160,.25);border-radius:var(--radius);padding:20px;margin-bottom:24px;display:none}
+.backup-live.active{display:block}
 </style>
 </head>
 <body>
@@ -242,6 +247,16 @@ tr:hover td{background:rgba(255,255,255,.02)}
 
       <!-- BACKUPS -->
       <div class="page" id="page-backups">
+        <!-- Live progress card -->
+        <div class="backup-live" id="backup-live-card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div style="font-weight:700;font-size:15px">⚡ Backup In Progress</div>
+            <span class="badge badge-orange" id="live-pct-badge">0%</span>
+          </div>
+          <div style="font-size:13px;color:var(--muted);margin-bottom:10px" id="live-label">—</div>
+          <div class="progress-wrap"><div class="progress-bar" id="live-bar" style="width:0%"></div></div>
+          <div class="progress-label" id="live-pct">0%</div>
+        </div>
         <div class="card">
           <div class="card-header">
             <div class="card-title">Backup History</div>
@@ -369,13 +384,57 @@ tr:hover td{background:rgba(255,255,255,.02)}
   </div>
 </div>
 
+<!-- Edit Database -->
+<div class="modal-overlay" id="edit-db-modal">
+  <div class="modal">
+    <div class="modal-title">Edit Database</div>
+    <input type="hidden" id="edit-db-id"/>
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" id="edit-db-name"/>
+    </div>
+    <div class="form-group">
+      <label>Type</label>
+      <select id="edit-db-type">
+        <option value="postgresql">PostgreSQL</option>
+        <option value="mongodb">MongoDB</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Host</label><input type="text" id="edit-db-host"/></div>
+      <div class="form-group"><label>Port</label><input type="number" id="edit-db-port"/></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Username</label><input type="text" id="edit-db-user"/></div>
+      <div class="form-group"><label>Password</label><input type="password" id="edit-db-pass" placeholder="Leave blank to keep current"/></div>
+    </div>
+    <div class="form-group"><label>Database Name</label><input type="text" id="edit-db-dbname"/></div>
+    <div class="form-group"><label>Description</label><input type="text" id="edit-db-desc"/></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('edit-db-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditDatabase()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
 <!-- Run Backup -->
 <div class="modal-overlay" id="backup-modal">
   <div class="modal">
     <div class="modal-title">Run Backup</div>
     <div class="form-group">
       <label>Database</label>
-      <select id="bk-db"></select>
+      <select id="bk-db" onchange="onBackupDbChange()"></select>
+    </div>
+    <div class="form-group">
+      <label>Backup Type</label>
+      <select id="bk-type" onchange="onBackupTypeChange()">
+        <option value="full">Full Database</option>
+        <option value="collection">Specific Collection / Table</option>
+      </select>
+    </div>
+    <div class="form-group" id="bk-collection-group" style="display:none">
+      <label>Collection / Table Name</label>
+      <input type="text" id="bk-collection" placeholder="e.g. users, orders"/>
     </div>
     <div class="form-group">
       <label>Storage Destination</label>
@@ -513,6 +572,8 @@ async function loadDatabases() {
         <td class="text-muted text-sm">${fmtDate(d.created_at)}</td>
         <td><div class="actions">
           <button class="btn btn-secondary btn-sm btn-icon" onclick="testConn('${d.id}')" title="Test Connection">🔌</button>
+          <button class="btn btn-secondary btn-sm btn-icon" onclick="openEditDb('${d.id}')" title="Edit">✏️</button>
+          <button class="btn btn-primary btn-sm" onclick="quickBackup('${d.id}','${d.name}')" title="Quick Backup">▶ Backup</button>
           <button class="btn btn-danger btn-sm" onclick="deleteDatabase('${d.id}')">Delete</button>
         </div></td>
       </tr>`).join('')||emptyRow(6,'No databases added yet. Click "+ Add Database" to get started.');
@@ -535,6 +596,53 @@ async function deleteDatabase(id) {
   if(!confirm('Delete this database?')) return;
   await apiFetch(`/databases/${id}`,{method:'DELETE'});
   toast('Deleted','success'); loadDatabases();
+}
+
+async function openEditDb(id) {
+  const dbs = await apiFetch('/databases/');
+  const d = dbs.find(x=>x.id===id);
+  if(!d) return;
+  document.getElementById('edit-db-id').value = d.id;
+  document.getElementById('edit-db-name').value = d.name;
+  document.getElementById('edit-db-type').value = d.type;
+  document.getElementById('edit-db-host').value = d.host;
+  document.getElementById('edit-db-port').value = d.port;
+  document.getElementById('edit-db-user').value = d.username;
+  document.getElementById('edit-db-pass').value = '';
+  document.getElementById('edit-db-dbname').value = d.database_name;
+  document.getElementById('edit-db-desc').value = d.description||'';
+  openModal('edit-db-modal');
+}
+
+async function saveEditDatabase() {
+  const id = document.getElementById('edit-db-id').value;
+  const pass = v('edit-db-pass');
+  const payload = {
+    name:v('edit-db-name'), type:v('edit-db-type'), host:v('edit-db-host'),
+    port:parseInt(v('edit-db-port')), username:v('edit-db-user'),
+    database_name:v('edit-db-dbname'), description:v('edit-db-desc')
+  };
+  if(pass) payload.password = pass;
+  try {
+    await apiFetch(`/databases/${id}`,{method:'PATCH',body:JSON.stringify(payload)});
+    closeModal('edit-db-modal');
+    toast('Database updated!','success');
+    loadDatabases();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function quickBackup(dbId, dbName) {
+  const sts = await apiFetch('/storage/');
+  if(!sts.length){ toast('Please add a storage destination first','error'); return; }
+  // Use first available storage, or let user pick if multiple
+  if(sts.length === 1) {
+    await startBackupNow(dbId, sts[0].id, `quick-${dbName}-${Date.now()}`);
+  } else {
+    // Populate backup modal and pre-select this DB
+    await populateSelects();
+    document.getElementById('bk-db').value = dbId;
+    openModal('backup-modal');
+  }
 }
 
 async function testConn(id) {
@@ -624,14 +732,67 @@ async function populateSelects() {
 }
 
 async function runBackup() {
+  const collection = v('bk-type')==='collection' ? v('bk-collection') : '';
+  const label = v('bk-label') || `backup-${Date.now()}`;
+  await startBackupNow(v('bk-db'), v('bk-storage'), label, collection);
+  closeModal('backup-modal');
+}
+
+async function startBackupNow(dbId, storageId, label, collection='') {
   try {
-    await apiFetch('/backups/',{method:'POST',body:JSON.stringify({
-      database_id:v('bk-db'),storage_id:v('bk-storage'),label:v('bk-label')
+    const b = await apiFetch('/backups/',{method:'POST',body:JSON.stringify({
+      database_id:dbId, storage_id:storageId, label, collection
     })});
-    closeModal('backup-modal');
     toast('Backup started!','info');
     showPage('backups');
+    simulateProgress(b.id, label);
   } catch(e) { toast(e.message,'error'); }
+}
+
+let progressInterval = null;
+function simulateProgress(backupId, label) {
+  const card = document.getElementById('backup-live-card');
+  const bar = document.getElementById('live-bar');
+  const pct = document.getElementById('live-pct');
+  const badge = document.getElementById('live-pct-badge');
+  const lbl = document.getElementById('live-label');
+  card.classList.add('active');
+  lbl.textContent = label;
+  let progress = 0;
+  if(progressInterval) clearInterval(progressInterval);
+  progressInterval = setInterval(async () => {
+    progress = Math.min(progress + Math.random() * 12, 95);
+    bar.style.width = progress.toFixed(0) + '%';
+    pct.textContent = progress.toFixed(0) + '%';
+    badge.textContent = progress.toFixed(0) + '%';
+    // Check if actually done
+    try {
+      const backups = await apiFetch('/backups/');
+      const b = backups.find(x=>x.id===backupId);
+      if(b && b.status === 'completed') {
+        clearInterval(progressInterval);
+        bar.style.width = '100%';
+        pct.textContent = '100%';
+        badge.textContent = '100%';
+        badge.className = 'badge badge-green';
+        setTimeout(()=>{ card.classList.remove('active'); loadBackups(); }, 1500);
+      } else if(b && b.status === 'failed') {
+        clearInterval(progressInterval);
+        card.classList.remove('active');
+        toast('Backup failed!','error');
+        loadBackups();
+      }
+    } catch(e){}
+  }, 800);
+}
+
+function onBackupTypeChange() {
+  const isCollection = document.getElementById('bk-type').value === 'collection';
+  document.getElementById('bk-collection-group').style.display = isCollection ? 'block' : 'none';
+}
+
+function onBackupDbChange() {
+  // Could auto-detect mongo and show collection hint
 }
 
 async function deleteBackup(id) {
