@@ -1037,10 +1037,6 @@ function onBackupTypeChange() {
   document.getElementById('bk-collection-group').style.display = isCollection ? 'block' : 'none';
 }
 
-function onBackupDbChange() {
-  // Could auto-detect mongo and show collection hint
-}
-
 async function deleteBackup(id) {
   await apiFetch(`/backups/${id}`,{method:'DELETE'});
   toast('Deleted','success'); loadBackups();
@@ -1182,11 +1178,15 @@ function simulateRestoreProgress(restoreId) {
 }
 
 // ---- MODALS ----
-function openModal(id) {
-  if(id==='backup-modal'||id==='schedule-modal') populateSelects();
-  if(id==='restore-modal') populateRestoreSelects();
+async function openModal(id) {
+  document.getElementById(id).classList.add('open');
+  if(id==='backup-modal'||id==='schedule-modal') {
+    await populateSelects();
+  }
+  if(id==='restore-modal') {
+    await populateRestoreSelects();
+  }
   if(id==='db-modal') {
-    // Reset form and set correct field visibility
     document.getElementById('db-name').value='';
     document.getElementById('db-type').value='mongodb';
     document.getElementById('db-host').value='';
@@ -1197,9 +1197,8 @@ function openModal(id) {
     document.getElementById('db-mongo-uri').value='';
     document.getElementById('db-desc').value='';
     document.getElementById('db-test-result').style.display='none';
-    onDbTypeChange('db'); // show correct fields
+    onDbTypeChange('db');
   }
-  document.getElementById(id).classList.add('open');
 }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open')}));
