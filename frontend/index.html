@@ -179,6 +179,9 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <div class="nav-item" onclick="showPage('schedules')">
         <span class="nav-icon">⏰</span> Schedules
       </div>
+      <div class="nav-item" onclick="showPage('restores')">
+        <span class="nav-icon">♻️</span> Restores
+      </div>
     </nav>
     <div class="sidebar-footer">
       <div class="user-info">
@@ -279,6 +282,20 @@ tr:hover td{background:rgba(255,255,255,.02)}
           <table>
             <thead><tr><th>Name</th><th>Database</th><th>Storage</th><th>Frequency</th><th>Time</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="schedules-table"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- RESTORES -->
+      <div class="page" id="page-restores">
+        <div class="card" style="margin-bottom:24px">
+          <div class="card-header">
+            <div class="card-title">Restore from Backup</div>
+            <button class="btn btn-primary btn-sm" onclick="openModal('restore-modal')">♻️ New Restore</button>
+          </div>
+          <table>
+            <thead><tr><th>Backup Label</th><th>Collection</th><th>Target Database</th><th>Status</th><th>Duration</th><th>Date</th></tr></thead>
+            <tbody id="restores-table"></tbody>
           </table>
         </div>
       </div>
@@ -489,6 +506,31 @@ tr:hover td{background:rgba(255,255,255,.02)}
   </div>
 </div>
 
+<!-- Restore Modal -->
+<div class="modal-overlay" id="restore-modal">
+  <div class="modal">
+    <div class="modal-title">♻️ Restore Backup</div>
+    <div style="background:rgba(255,165,2,.08);border:1px solid rgba(255,165,2,.25);border-radius:10px;padding:14px;margin-bottom:20px;font-size:13px;color:var(--warn)">
+      ⚠️ Restore will overwrite existing data in the target database. Make sure you have a recent backup before proceeding.
+    </div>
+    <div class="form-group">
+      <label>Select Backup to Restore</label>
+      <select id="rs-backup"></select>
+    </div>
+    <div class="form-group">
+      <label>Restore To (Target Database)</label>
+      <select id="rs-target-db"></select>
+    </div>
+    <div id="rs-info" style="background:var(--surface2);border-radius:10px;padding:14px;font-size:13px;color:var(--muted);margin-bottom:8px;display:none">
+      <span id="rs-info-text"></span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('restore-modal')">Cancel</button>
+      <button class="btn btn-danger" style="width:auto" onclick="runRestore()">♻️ Start Restore</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast-container" id="toasts"></div>
 
 <script>
@@ -522,6 +564,7 @@ async function loadPage(name) {
   else if(name==='storage') await loadStorage();
   else if(name==='backups') await loadBackups();
   else if(name==='schedules') await loadSchedules();
+  else if(name==='restores') await loadRestores();
 }
 
 // ---- API HELPERS ----
@@ -708,7 +751,10 @@ async function loadBackups() {
         <td>${b.size_mb??'—'}</td>
         <td>${b.duration_seconds?b.duration_seconds+'s':'—'}</td>
         <td class="text-muted text-sm">${fmtDate(b.created_at)}</td>
-        <td><button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}')">🗑</button></td>
+        <td><div class="actions">
+          ${b.status==='completed'?`<button class="btn btn-secondary btn-sm" onclick="openRestoreFromBackup('${b.id}','${b.label.replace(/'/g,"\\'")}')">♻️ Restore</button>`:''}
+          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}')">🗑</button>
+        </div></td>
       </tr>`).join('')||emptyRow(8,'No backups yet. Click "Run Backup" to start.');
   } catch(e) { toast(e.message,'error'); }
 }
@@ -844,9 +890,98 @@ async function deleteSchedule(id) {
   toast('Deleted','success'); loadSchedules();
 }
 
+// ---- RESTORES ----
+async function loadRestores() {
+  try {
+    const restores = await apiFetch('/backups/restores');
+    const tbody = document.getElementById('restores-table');
+    tbody.innerHTML = restores.map(r=>`
+      <tr>
+        <td class="mono text-sm">${r.backup_label||'—'}</td>
+        <td><span class="badge badge-blue">${r.backup_collection||'full'}</span></td>
+        <td>${r.target_database_name}</td>
+        <td>${statusBadge(r.status)}</td>
+        <td>${r.duration_seconds?r.duration_seconds+'s':'—'}</td>
+        <td class="text-muted text-sm">${fmtDate(r.started_at)}</td>
+      </tr>`).join('')||emptyRow(6,'No restores yet. Click "New Restore" to restore a backup.');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function openRestoreFromBackup(backupId, backupLabel) {
+  await populateRestoreSelects();
+  const sel = document.getElementById('rs-backup');
+  if(sel) sel.value = backupId;
+  updateRestoreInfo();
+  openModal('restore-modal');
+}
+
+async function populateRestoreSelects() {
+  const backups = await apiFetch('/backups/');
+  const dbs = await apiFetch('/databases/');
+  const completed = backups.filter(b=>b.status==='completed');
+  document.getElementById('rs-backup').innerHTML = completed.map(b=>
+    `<option value="${b.id}">${b.label} — ${b.database_name} (${fmtDate(b.created_at)})</option>`
+  ).join('');
+  document.getElementById('rs-target-db').innerHTML = dbs.map(d=>
+    `<option value="${d.id}">${d.name} (${d.type})</option>`
+  ).join('');
+  updateRestoreInfo();
+  document.getElementById('rs-backup').onchange = updateRestoreInfo;
+}
+
+async function updateRestoreInfo() {
+  const backupId = document.getElementById('rs-backup').value;
+  const backups = await apiFetch('/backups/');
+  const b = backups.find(x=>x.id===backupId);
+  const info = document.getElementById('rs-info');
+  const infoText = document.getElementById('rs-info-text');
+  if(b) {
+    info.style.display='block';
+    infoText.innerHTML = `📦 <strong>${b.label}</strong> &nbsp;|&nbsp; Collection: <strong>${b.collection||'full'}</strong> &nbsp;|&nbsp; Size: <strong>${b.size_mb} MB</strong> &nbsp;|&nbsp; DB: <strong>${b.database_name}</strong>`;
+  }
+}
+
+async function runRestore() {
+  const backupId = document.getElementById('rs-backup').value;
+  const targetDbId = document.getElementById('rs-target-db').value;
+  if(!backupId||!targetDbId){ toast('Select backup and target database','error'); return; }
+  if(!confirm('This will overwrite data in the target database. Are you sure?')) return;
+  try {
+    const r = await apiFetch('/backups/restore',{method:'POST',body:JSON.stringify({
+      backup_id: backupId,
+      target_database_id: targetDbId
+    })});
+    closeModal('restore-modal');
+    toast('Restore started!','info');
+    showPage('restores');
+    simulateRestoreProgress(r.id);
+  } catch(e) { toast(e.message,'error'); }
+}
+
+let restoreInterval = null;
+function simulateRestoreProgress(restoreId) {
+  if(restoreInterval) clearInterval(restoreInterval);
+  restoreInterval = setInterval(async()=>{
+    try {
+      const restores = await apiFetch('/backups/restores');
+      const r = restores.find(x=>x.id===restoreId);
+      if(r && r.status==='completed'){
+        clearInterval(restoreInterval);
+        toast('✅ Restore completed successfully!','success');
+        loadRestores();
+      } else if(r && r.status==='failed'){
+        clearInterval(restoreInterval);
+        toast('Restore failed!','error');
+        loadRestores();
+      }
+    } catch(e){}
+  }, 1500);
+}
+
 // ---- MODALS ----
 function openModal(id) {
   if(id==='backup-modal'||id==='schedule-modal') populateSelects();
+  if(id==='restore-modal') populateRestoreSelects();
   document.getElementById(id).classList.add('open');
 }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }

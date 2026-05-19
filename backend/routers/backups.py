@@ -14,9 +14,13 @@ class BackupCreate(BaseModel):
     label: Optional[str] = ""
     collection: Optional[str] = ""  # specific collection/table, empty = full backup
 
+class RestoreRequest(BaseModel):
+    backup_id: str
+    target_database_id: str  # can be same or different DB
+
 def simulate_backup(backup_id: str):
     import time, random
-    time.sleep(2)  # Simulate backup time
+    time.sleep(2)
     backups = read_json("data/backups.json")
     for b in backups:
         if b["id"] == backup_id:
@@ -26,6 +30,18 @@ def simulate_backup(backup_id: str):
             b["duration_seconds"] = random.randint(5, 120)
             break
     write_json("data/backups.json", backups)
+
+def simulate_restore(restore_id: str):
+    import time
+    time.sleep(3)
+    restores = read_json("data/restores.json")
+    for r in restores:
+        if r["id"] == restore_id:
+            r["status"] = "completed"
+            r["completed_at"] = datetime.utcnow().isoformat()
+            r["duration_seconds"] = random.randint(5, 180)
+            break
+    write_json("data/restores.json", restores)
 
 @router.get("/")
 def list_backups(user=Depends(get_current_user)):
@@ -94,3 +110,62 @@ def backup_stats(user=Depends(get_current_user)):
         "total_size_mb": round(total_size, 2),
         "databases": len(user_db_ids),
     }
+
+# ---- RESTORE ----
+
+@router.get("/restores")
+def list_restores(user=Depends(get_current_user)):
+    import os
+    if not os.path.exists("data/restores.json"):
+        write_json("data/restores.json", [])
+    restores = read_json("data/restores.json")
+    dbs = read_json("data/databases.json")
+    backups = read_json("data/backups.json")
+    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
+    result = []
+    for r in restores:
+        if r["target_database_id"] in user_db_ids:
+            db = next((d for d in dbs if d["id"] == r["target_database_id"]), {})
+            bk = next((b for b in backups if b["id"] == r["backup_id"]), {})
+            result.append({**r,
+                "target_database_name": db.get("name",""),
+                "backup_label": bk.get("label",""),
+                "backup_collection": bk.get("collection","full"),
+            })
+    return sorted(result, key=lambda x: x["started_at"], reverse=True)
+
+@router.post("/restore")
+def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
+    import os
+    if not os.path.exists("data/restores.json"):
+        write_json("data/restores.json", [])
+
+    # Validate backup exists and belongs to user
+    backups = read_json("data/backups.json")
+    dbs = read_json("data/databases.json")
+    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
+    backup = next((b for b in backups if b["id"] == req.backup_id and b["database_id"] in user_db_ids), None)
+    if not backup:
+        raise HTTPException(404, "Backup not found")
+    if backup["status"] != "completed":
+        raise HTTPException(400, "Only completed backups can be restored")
+
+    # Validate target DB
+    target_db = next((d for d in dbs if d["id"] == req.target_database_id and d["user_id"] == user["sub"]), None)
+    if not target_db:
+        raise HTTPException(404, "Target database not found")
+
+    restores = read_json("data/restores.json")
+    restore = {
+        "id": str(uuid.uuid4()),
+        "backup_id": req.backup_id,
+        "target_database_id": req.target_database_id,
+        "status": "running",
+        "started_at": datetime.utcnow().isoformat(),
+        "completed_at": None,
+        "duration_seconds": None,
+    }
+    restores.append(restore)
+    write_json("data/restores.json", restores)
+    background_tasks.add_task(simulate_restore, restore["id"])
+    return restore
