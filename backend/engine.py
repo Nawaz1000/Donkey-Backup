@@ -75,10 +75,36 @@ def download_from_storage(storage: dict, remote_name: str, local_path: str):
  
 # ─── MONGODB ──────────────────────────────────────────────────────────────────
  
+def sanitize_mongo_uri(uri: str) -> str:
+    """Auto-encode special characters in password part of MongoDB URI."""
+    from urllib.parse import quote
+    try:
+        if "://" not in uri:
+            return uri
+        scheme_end = uri.index("://") + 3
+        scheme = uri[:scheme_end]
+        rest = uri[scheme_end:]
+        if "@" not in rest:
+            return uri
+        at_pos = rest.rfind("@")
+        userinfo = rest[:at_pos]
+        hostpart = rest[at_pos+1:]
+        if ":" in userinfo:
+            colon_pos = userinfo.index(":")
+            user = userinfo[:colon_pos]
+            password = userinfo[colon_pos+1:]
+            safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+            encoded_password = quote(password, safe=safe)
+            encoded_user = quote(user, safe=safe)
+            return f"{scheme}{encoded_user}:{encoded_password}@{hostpart}"
+        return uri
+    except Exception:
+        return uri
+ 
 def mongo_uri(db: dict) -> str:
-    # Prefer stored URI if available
-    if db.get("mongo_uri"):
-        return db["mongo_uri"]
+    uri = db.get("mongo_uri") or ""
+    if uri:
+        return sanitize_mongo_uri(uri)
  
     host = db.get('host', '').strip()
     port = db.get('port', '')
@@ -96,7 +122,7 @@ def mongo_uri(db: dict) -> str:
         raise ValueError(f"Database port {port} is out of range [1, 65535]")
  
     if user and password:
-        return f"mongodb://{user}:{password}@{host}:{port}/{dbname}"
+        return sanitize_mongo_uri(f"mongodb://{user}:{password}@{host}:{port}/{dbname}")
     return f"mongodb://{host}:{port}/{dbname}"
  
 def run_mongo_backup(db: dict, collection: str, tmp_dir: str) -> str:

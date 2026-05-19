@@ -5,6 +5,29 @@ import uuid
 from datetime import datetime
 from utils import get_current_user, read_json, write_json
  
+def sanitize_mongo_uri(uri: str) -> str:
+    from urllib.parse import quote
+    try:
+        if "://" not in uri:
+            return uri
+        scheme_end = uri.index("://") + 3
+        scheme = uri[:scheme_end]
+        rest = uri[scheme_end:]
+        if "@" not in rest:
+            return uri
+        at_pos = rest.rfind("@")
+        userinfo = rest[:at_pos]
+        hostpart = rest[at_pos+1:]
+        if ":" in userinfo:
+            colon_pos = userinfo.index(":")
+            user = userinfo[:colon_pos]
+            password = userinfo[colon_pos+1:]
+            safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+            return f"{scheme}{quote(user, safe=safe)}:{quote(password, safe=safe)}@{hostpart}"
+        return uri
+    except Exception:
+        return uri
+ 
 router = APIRouter()
  
 class DatabaseCreate(BaseModel):
@@ -58,7 +81,8 @@ def test_uri(req: TestUriRequest, user=Depends(get_current_user)):
         raise HTTPException(400, "Only MongoDB URI testing is supported")
     try:
         from pymongo import MongoClient
-        client = MongoClient(req.uri, serverSelectionTimeoutMS=5000)
+        clean_uri = sanitize_mongo_uri(req.uri)
+        client = MongoClient(clean_uri, serverSelectionTimeoutMS=5000)
         info = client.server_info()
         version = info.get("version", "unknown")
         client.close()
@@ -96,7 +120,7 @@ def test_connection(db_id: str, user=Depends(get_current_user)):
         try:
             from pymongo import MongoClient
             uri = db.get("mongo_uri") or f"mongodb://{db['username']}:{db['password']}@{db['host']}:{db['port']}/{db['database_name']}"
-            client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+            client = MongoClient(sanitize_mongo_uri(uri), serverSelectionTimeoutMS=5000)
             info = client.server_info()
             version = info.get("version", "unknown")
             client.close()
