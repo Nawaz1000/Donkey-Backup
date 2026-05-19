@@ -76,6 +76,10 @@ def download_from_storage(storage: dict, remote_name: str, local_path: str):
 # ─── MONGODB ──────────────────────────────────────────────────────────────────
  
 def mongo_uri(db: dict) -> str:
+    # Prefer stored URI if available
+    if db.get("mongo_uri"):
+        return db["mongo_uri"]
+ 
     host = db.get('host', '').strip()
     port = db.get('port', '')
     user = db.get('username', '')

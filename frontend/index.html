@@ -315,35 +315,53 @@ tr:hover td{background:rgba(255,255,255,.02)}
     </div>
     <div class="form-group">
       <label>Type</label>
-      <select id="db-type">
+      <select id="db-type" onchange="onDbTypeChange('db')">
         <option value="postgresql">PostgreSQL</option>
         <option value="mongodb">MongoDB</option>
       </select>
     </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Host</label>
-        <input type="text" id="db-host" placeholder="localhost"/>
+
+    <!-- PostgreSQL fields -->
+    <div id="db-pg-fields">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Host</label>
+          <input type="text" id="db-host" placeholder="localhost"/>
+        </div>
+        <div class="form-group">
+          <label>Port</label>
+          <input type="number" id="db-port" placeholder="5432"/>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="db-user" placeholder="postgres"/>
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="db-pass" placeholder="••••••••"/>
+        </div>
       </div>
       <div class="form-group">
-        <label>Port</label>
-        <input type="number" id="db-port" placeholder="5432"/>
+        <label>Database Name</label>
+        <input type="text" id="db-dbname" placeholder="myapp"/>
       </div>
     </div>
-    <div class="form-row">
+
+    <!-- MongoDB URI field -->
+    <div id="db-mongo-fields" style="display:none">
       <div class="form-group">
-        <label>Username</label>
-        <input type="text" id="db-user" placeholder="postgres"/>
+        <label>MongoDB Connection URI</label>
+        <input type="text" id="db-mongo-uri" placeholder="mongodb://user:pass@host:27017/dbname"/>
+        <div style="font-size:12px;color:var(--muted);margin-top:6px">
+          Supports: <code style="color:var(--accent)">mongodb://</code> and <code style="color:var(--accent)">mongodb+srv://</code>
+        </div>
       </div>
-      <div class="form-group">
-        <label>Password</label>
-        <input type="password" id="db-pass" placeholder="••••••••"/>
-      </div>
+      <div id="db-test-result" style="display:none;padding:12px;border-radius:10px;font-size:13px;font-weight:600;margin-bottom:8px"></div>
+      <button class="btn btn-secondary" style="width:100%;margin-bottom:8px" onclick="testMongoUri()">🔌 Test Connection</button>
     </div>
-    <div class="form-group">
-      <label>Database Name</label>
-      <input type="text" id="db-dbname" placeholder="myapp"/>
-    </div>
+
     <div class="form-group">
       <label>Description (optional)</label>
       <input type="text" id="db-desc" placeholder="Production app database"/>
@@ -623,17 +641,79 @@ async function loadDatabases() {
   } catch(e) { toast(e.message,'error'); }
 }
 
-async function addDatabase() {
-  const port = parseInt(v('db-port'));
-  if(!v('db-name')||!v('db-host')||!v('db-port')||isNaN(port)||port<1||port>65535){
-    toast('Please fill all fields. Port must be between 1-65535','error'); return;
-  }
+function onDbTypeChange(prefix) {
+  const type = document.getElementById(`${prefix}-type`).value;
+  const isMongo = type === 'mongodb';
+  const pgFields = document.getElementById(`${prefix}-pg-fields`);
+  const mongoFields = document.getElementById(`${prefix}-mongo-fields`);
+  if(pgFields) pgFields.style.display = isMongo ? 'none' : 'block';
+  if(mongoFields) mongoFields.style.display = isMongo ? 'block' : 'none';
+}
+
+async function testMongoUri() {
+  const uri = v('db-mongo-uri').trim();
+  const resultBox = document.getElementById('db-test-result');
+  if(!uri){ toast('Please enter a MongoDB URI first','error'); return; }
+  resultBox.style.display='block';
+  resultBox.style.background='rgba(0,102,255,.1)';
+  resultBox.style.border='1px solid rgba(0,102,255,.3)';
+  resultBox.style.color='#5599ff';
+  resultBox.textContent='🔄 Testing connection...';
   try {
-    await apiFetch('/databases/',{method:'POST',body:JSON.stringify({
-      name:v('db-name'),type:v('db-type'),host:v('db-host'),port,
-      username:v('db-user'),password:v('db-pass'),database_name:v('db-dbname'),description:v('db-desc')
-    })});
+    const r = await apiFetch('/databases/test-uri', {
+      method:'POST',
+      body: JSON.stringify({uri, type:'mongodb'})
+    });
+    resultBox.style.background='rgba(0,229,160,.1)';
+    resultBox.style.border='1px solid rgba(0,229,160,.3)';
+    resultBox.style.color='var(--accent)';
+    resultBox.textContent=`✅ ${r.message}`;
+  } catch(e) {
+    resultBox.style.background='rgba(255,71,87,.1)';
+    resultBox.style.border='1px solid rgba(255,71,87,.3)';
+    resultBox.style.color='var(--danger)';
+    resultBox.textContent=`❌ ${e.message}`;
+  }
+}
+
+async function addDatabase() {
+  const type = v('db-type');
+  if(!v('db-name')){ toast('Please enter a name','error'); return; }
+
+  let payload = { name:v('db-name'), type, description:v('db-desc') };
+
+  if(type === 'mongodb') {
+    const uri = v('db-mongo-uri').trim();
+    if(!uri){ toast('Please enter MongoDB URI','error'); return; }
+    payload.mongo_uri = uri;
+    // Parse host/port/dbname from URI for display
+    try {
+      const url = new URL(uri.replace('mongodb+srv://', 'http://').replace('mongodb://', 'http://'));
+      payload.host = url.hostname;
+      payload.port = url.port ? parseInt(url.port) : 27017;
+      payload.username = url.username || '';
+      payload.password = url.password || '';
+      payload.database_name = url.pathname.replace('/','') || 'admin';
+    } catch(e) {
+      payload.host = 'mongodb'; payload.port = 27017;
+      payload.username = ''; payload.password = '';
+      payload.database_name = 'admin';
+    }
+  } else {
+    const port = parseInt(v('db-port'));
+    if(!v('db-host')||!v('db-port')||isNaN(port)||port<1||port>65535){
+      toast('Please fill all fields. Port must be 1-65535','error'); return;
+    }
+    payload = {...payload, host:v('db-host'), port, username:v('db-user'),
+      password:v('db-pass'), database_name:v('db-dbname')};
+  }
+
+  try {
+    await apiFetch('/databases/',{method:'POST',body:JSON.stringify(payload)});
     closeModal('db-modal');
+    // Reset form
+    document.getElementById('db-mongo-uri').value='';
+    document.getElementById('db-test-result').style.display='none';
     toast('Database added!','success');
     loadDatabases();
   } catch(e) { toast(e.message,'error'); }
