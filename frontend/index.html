@@ -316,13 +316,13 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div class="form-group">
       <label>Type</label>
       <select id="db-type" onchange="onDbTypeChange('db')">
-        <option value="postgresql">PostgreSQL</option>
         <option value="mongodb">MongoDB</option>
+        <option value="postgresql">PostgreSQL</option>
       </select>
     </div>
 
     <!-- PostgreSQL fields -->
-    <div id="db-pg-fields">
+    <div id="db-pg-fields" style="display:none">
       <div class="form-row">
         <div class="form-group">
           <label>Host</label>
@@ -350,7 +350,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     </div>
 
     <!-- MongoDB URI field -->
-    <div id="db-mongo-fields" style="display:none">
+    <div id="db-mongo-fields" style="display:block">
       <div class="form-group">
         <label>MongoDB Connection URI</label>
         <input type="text" id="db-mongo-uri" placeholder="mongodb://user:pass@host:27017/dbname"/>
@@ -1072,6 +1072,20 @@ function simulateRestoreProgress(restoreId) {
 function openModal(id) {
   if(id==='backup-modal'||id==='schedule-modal') populateSelects();
   if(id==='restore-modal') populateRestoreSelects();
+  if(id==='db-modal') {
+    // Reset form and set correct field visibility
+    document.getElementById('db-name').value='';
+    document.getElementById('db-type').value='mongodb';
+    document.getElementById('db-host').value='';
+    document.getElementById('db-port').value='';
+    document.getElementById('db-user').value='';
+    document.getElementById('db-pass').value='';
+    document.getElementById('db-dbname').value='';
+    document.getElementById('db-mongo-uri').value='';
+    document.getElementById('db-desc').value='';
+    document.getElementById('db-test-result').style.display='none';
+    onDbTypeChange('db'); // show correct fields
+  }
   document.getElementById(id).classList.add('open');
 }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
