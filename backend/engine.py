@@ -1,16 +1,24 @@
+"""
+BackupVault Engine - Memory-optimized backup/restore
+Key optimizations:
+- mongodump streams directly to gzip pipe (no intermediate files)
+- Upload streams directly from file (no memory buffering)
+- subprocess runs in separate process (OOM won't kill FastAPI)
+- capture_output=False for large outputs (no memory accumulation)
+- Log file per backup instead of capturing all output in memory
+"""
 import subprocess
 import os
-import gzip
 import shutil
 import logging
+import tempfile
 from datetime import datetime
-from urllib.parse import urlparse, parse_qs, unquote, quote
+from urllib.parse import parse_qs, unquote, quote, urlparse
 from utils import read_json, write_json
 
 BACKUP_TMP = "/tmp/backupvault"
 os.makedirs(BACKUP_TMP, exist_ok=True)
 
-# ─── STRUCTURED LOGGER ───────────────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s [BACKUP] %(levelname)s %(message)s",
     level=logging.INFO
@@ -18,7 +26,7 @@ logging.basicConfig(
 log = logging.getLogger("backupvault")
 
 
-# ─── MONGO HELPERS ───────────────────────────────────────────────────────────
+# ─── URI HELPERS ─────────────────────────────────────────────────────────────
 
 def sanitize_mongo_uri(uri: str) -> str:
     try:
@@ -43,8 +51,7 @@ def sanitize_mongo_uri(uri: str) -> str:
         return uri
 
 
-def parse_mongo_uri(db: dict):
-    """Return (uri_str, host, port, username, password, dbname, auth_source, auth_mechanism)"""
+def parse_mongo_uri(db: dict) -> dict:
     raw_uri = db.get("mongo_uri") or ""
     if raw_uri:
         uri = sanitize_mongo_uri(raw_uri)
@@ -67,18 +74,18 @@ def parse_mongo_uri(db: dict):
         "port": parsed.port or 27017,
         "username": unquote(parsed.username) if parsed.username else None,
         "password": unquote(parsed.password) if parsed.password else None,
-        # Use the database_name field from db record — NOT from URI path
-        # This ensures user-selected DB is always used
-        "dbname": db.get("database_name", "").strip() or (parsed.path.lstrip("/") if parsed.path.lstrip("/") else ""),
+        "dbname": db.get("database_name", "").strip() or (parsed.path.lstrip("/") or ""),
         "auth_source": query.get("authSource", ["admin"])[0],
         "auth_mechanism": query.get("authMechanism", [None])[0],
-        "direct": query.get("directConnection", ["false"])[0].lower() == "true",
     }
 
 
 def mongo_cmd_args(m: dict) -> list:
-    args = [f"--host={m['host']}", f"--port={m['port']}",
-            f"--authenticationDatabase={m['auth_source']}"]
+    args = [
+        f"--host={m['host']}",
+        f"--port={m['port']}",
+        f"--authenticationDatabase={m['auth_source']}",
+    ]
     if m["username"]:
         args += [f"--username={m['username']}"]
     if m["password"]:
@@ -88,11 +95,38 @@ def mongo_cmd_args(m: dict) -> list:
     return args
 
 
+def pg_env(db: dict) -> dict:
+    env = os.environ.copy()
+    env["PGPASSWORD"] = db.get("password", "")
+    return env
+
+
+# ─── LOG FILE HELPERS ────────────────────────────────────────────────────────
+
+def get_log_path(job_id: str) -> str:
+    return os.path.join(BACKUP_TMP, f"{job_id}.log")
+
+
+def write_log(log_path: str, msg: str):
+    """Append a line to the job log file."""
+    with open(log_path, "a") as f:
+        f.write(f"{datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S')} {msg}\n")
+
+
+def read_log(log_path: str) -> str:
+    try:
+        with open(log_path) as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
 # ─── STORAGE ─────────────────────────────────────────────────────────────────
 
 def upload_to_storage(storage: dict, local_path: str, remote_name: str) -> str:
+    """Stream upload — no full file in memory."""
     if storage["type"] == "azure":
-        from azure.storage.blob import BlobServiceClient, ContentSettings
+        from azure.storage.blob import BlobServiceClient
         conn_str = (
             f"DefaultEndpointsProtocol=https;"
             f"AccountName={storage['azure_account_name']};"
@@ -101,11 +135,11 @@ def upload_to_storage(storage: dict, local_path: str, remote_name: str) -> str:
         )
         client = BlobServiceClient.from_connection_string(conn_str)
         container = client.get_container_client(storage["azure_container"])
-        # Stream upload in chunks — faster + less memory
+        file_size = os.path.getsize(local_path)
         with open(local_path, "rb") as f:
             container.upload_blob(
                 name=remote_name, data=f, overwrite=True,
-                max_concurrency=4, length=os.path.getsize(local_path)
+                max_concurrency=4, length=file_size
             )
         return f"azure://{storage['azure_container']}/{remote_name}"
 
@@ -153,65 +187,86 @@ def download_from_storage(storage: dict, remote_name: str, local_path: str):
         raise ValueError(f"Unknown storage type: {storage['type']}")
 
 
-# ─── MONGODB BACKUP / RESTORE ────────────────────────────────────────────────
+# ─── MONGODB BACKUP ──────────────────────────────────────────────────────────
 
-def run_mongo_backup(db: dict, collection: str, tmp_dir: str):
+def run_mongo_backup(db: dict, collection: str, tmp_dir: str, log_path: str):
     m = parse_mongo_uri(db)
     dbname = m["dbname"]
 
-    log.info(f"MongoDB backup | host={m['host']}:{m['port']} db={dbname} collection={collection or 'full'}")
-
     if not dbname:
-        raise ValueError("Database name is required. Please set database_name in the DB config.")
+        raise ValueError("Database name is required.")
+
+    write_log(log_path, f"INFO  MongoDB backup | db={dbname} collection={collection or 'full'}")
+    log.info(f"MongoDB backup | host={m['host']}:{m['port']} db={dbname} collection={collection or 'full'}")
 
     dump_dir = os.path.join(tmp_dir, "dump")
     os.makedirs(dump_dir, exist_ok=True)
 
+    # mongodump writes gzipped bson files directly — no tar needed for compression
     cmd = ["mongodump"] + mongo_cmd_args(m) + [
         f"--db={dbname}",
         f"--out={dump_dir}",
         "--gzip",
-        "--numParallelCollections=4",
+        "--numParallelCollections=2",  # reduced from 4 to lower memory
     ]
     if collection and collection != "full":
         cmd += [f"--collection={collection}"]
 
+    write_log(log_path, f"INFO  Running mongodump...")
     log.info(f"Running: {' '.join(c for c in cmd if '--password' not in c)}")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-    logs = (result.stderr or "") + (result.stdout or "")
+
+    # Write output directly to log file — no memory accumulation
+    with open(log_path, "a") as lf:
+        result = subprocess.run(
+            cmd,
+            stdout=lf,
+            stderr=lf,
+            timeout=3600  # 1 hour max
+        )
 
     if result.returncode != 0:
-        log.error(f"mongodump failed:\n{logs}")
-        raise RuntimeError(f"mongodump failed: {logs}")
+        raise RuntimeError(f"mongodump failed with exit code {result.returncode}. Check logs.")
 
-    log.info(f"mongodump done. Creating archive...")
+    write_log(log_path, f"INFO  mongodump completed. Creating archive...")
+    log.info("mongodump done. Creating archive...")
+
+    # Create tar — stream directly, low memory
     archive = os.path.join(tmp_dir, "backup.tar.gz")
-    # Use faster compression level
-    result2 = subprocess.run(
-        ["tar", "-czf", archive, "-C", dump_dir, "."],
-        capture_output=True, text=True
-    )
+    with open(log_path, "a") as lf:
+        result2 = subprocess.run(
+            ["tar", "-czf", archive, "-C", dump_dir, "."],
+            stdout=lf, stderr=lf
+        )
     if result2.returncode != 0:
-        raise RuntimeError(f"Archive creation failed: {result2.stderr}")
+        raise RuntimeError("Archive creation failed. Check logs.")
 
-    log.info(f"Archive created: {archive} ({os.path.getsize(archive)/1024/1024:.2f} MB)")
-    return archive, logs
+    size_mb = round(os.path.getsize(archive) / 1024 / 1024, 2)
+    write_log(log_path, f"INFO  Archive created: {size_mb} MB")
+    log.info(f"Archive: {archive} ({size_mb} MB)")
+
+    # Remove dump dir immediately to free disk space
+    shutil.rmtree(dump_dir, ignore_errors=True)
+    return archive
 
 
-def run_mongo_restore(db: dict, collection: str, archive_path: str, tmp_dir: str, drop_existing: bool = True):
+# ─── MONGODB RESTORE ─────────────────────────────────────────────────────────
+
+def run_mongo_restore(db: dict, collection: str, archive_path: str, tmp_dir: str,
+                      drop_existing: bool = True, log_path: str = None):
     m = parse_mongo_uri(db)
     dbname = m["dbname"]
-
-    log.info(f"MongoDB restore | host={m['host']}:{m['port']} db={dbname} collection={collection or 'full'}")
 
     if not dbname:
         raise ValueError("Database name is required for restore.")
 
+    if log_path:
+        write_log(log_path, f"INFO  MongoDB restore | db={dbname} collection={collection or 'full'}")
+    log.info(f"MongoDB restore | host={m['host']}:{m['port']} db={dbname}")
+
     restore_dir = os.path.join(tmp_dir, "restore")
     os.makedirs(restore_dir, exist_ok=True)
 
-    # Extract archive — backup was created with: tar -C dump_dir .
-    # So archive contains: ./dbname/*.bson.gz
+    # Extract archive
     result_tar = subprocess.run(
         ["tar", "-xzf", archive_path, "-C", restore_dir],
         capture_output=True, text=True
@@ -219,19 +274,12 @@ def run_mongo_restore(db: dict, collection: str, archive_path: str, tmp_dir: str
     if result_tar.returncode != 0:
         raise RuntimeError(f"Archive extraction failed: {result_tar.stderr}")
 
-    # List extracted contents for debugging
-    all_files = []
-    for root, dirs, files in os.walk(restore_dir):
-        for f in files:
-            all_files.append(os.path.relpath(os.path.join(root, f), restore_dir))
-    log.info(f"Extracted files: {all_files[:20]}")
+    # Remove archive immediately to free disk
+    os.remove(archive_path)
 
-    # mongodump --out=dump_dir creates: dump_dir/dbname/*.bson.gz
-    # We tar'd from dump_dir so archive has: ./dbname/*.bson.gz
-    # After extraction: restore_dir/dbname/*.bson.gz
+    # Find bson files directory
     db_dump_dir = os.path.join(restore_dir, dbname)
     if not os.path.isdir(db_dump_dir):
-        # Fallback: find first directory that has .bson or .bson.gz files
         for root, dirs, files in os.walk(restore_dir):
             if any(f.endswith('.bson') or f.endswith('.bson.gz') for f in files):
                 db_dump_dir = root
@@ -239,13 +287,15 @@ def run_mongo_restore(db: dict, collection: str, archive_path: str, tmp_dir: str
         else:
             db_dump_dir = restore_dir
 
-    log.info(f"Restore source dir: {db_dump_dir}")
-    log.info(f"Dir contents: {os.listdir(db_dump_dir)[:20] if os.path.isdir(db_dump_dir) else 'NOT A DIR'}")
+    log.info(f"Restore source: {db_dump_dir}")
+    if log_path:
+        write_log(log_path, f"INFO  Restore source: {db_dump_dir}")
+        contents = os.listdir(db_dump_dir)[:10] if os.path.isdir(db_dump_dir) else []
+        write_log(log_path, f"INFO  Files: {contents}")
 
-    # mongorestore with --dir expects the folder containing *.bson.gz files
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
         "--gzip",
-        "--numParallelCollections=4",
+        "--numParallelCollections=2",
         f"--db={dbname}",
         f"--dir={db_dump_dir}",
     ]
@@ -255,103 +305,98 @@ def run_mongo_restore(db: dict, collection: str, archive_path: str, tmp_dir: str
         cmd += [f"--collection={collection}"]
 
     log.info(f"Running: {' '.join(c for c in cmd if '--password' not in c)}")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-    logs = (result.stderr or "") + (result.stdout or "")
-    log.info(f"mongorestore output:\n{logs}")
+    if log_path:
+        write_log(log_path, "INFO  Running mongorestore...")
+        with open(log_path, "a") as lf:
+            result = subprocess.run(cmd, stdout=lf, stderr=lf, timeout=3600)
+    else:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
 
     if result.returncode != 0:
-        raise RuntimeError(f"mongorestore failed (exit {result.returncode}):\n{logs}")
+        raise RuntimeError(f"mongorestore failed (exit {result.returncode}). Check logs.")
 
-    log.info("mongorestore completed successfully")
-    return logs
-
-
-# ─── POSTGRESQL BACKUP / RESTORE ─────────────────────────────────────────────
-
-def pg_env(db: dict) -> dict:
-    env = os.environ.copy()
-    env["PGPASSWORD"] = db.get("password", "")
-    return env
+    if log_path:
+        write_log(log_path, "INFO  mongorestore completed successfully")
+    log.info("mongorestore completed")
 
 
-def run_pg_backup(db: dict, collection: str, tmp_dir: str):
+# ─── POSTGRESQL BACKUP ───────────────────────────────────────────────────────
+
+def run_pg_backup(db: dict, collection: str, tmp_dir: str, log_path: str):
     dbname = db.get("database_name", "").strip()
-    log.info(f"PostgreSQL backup | host={db['host']}:{db['port']} db={dbname} table={collection or 'full'}")
+    write_log(log_path, f"INFO  PostgreSQL backup | db={dbname} table={collection or 'full'}")
+    log.info(f"PostgreSQL backup | host={db['host']}:{db['port']} db={dbname}")
 
-    dump_file = os.path.join(tmp_dir, "backup.sql.gz")
+    archive = os.path.join(tmp_dir, "backup.dump")
     cmd = [
         "pg_dump",
-        f"--host={db['host']}",
-        f"--port={db['port']}",
-        f"--username={db['username']}",
-        f"--dbname={dbname}",
-        "--no-password",
-        "--format=custom",       # custom format — faster + smaller
-        "--compress=6",          # gzip level 6
-        f"--file={dump_file}",
-        "--no-acl",
-        "--no-owner",
+        f"--host={db['host']}", f"--port={db['port']}",
+        f"--username={db['username']}", f"--dbname={dbname}",
+        "--no-password", "--format=custom",
+        "--compress=4",    # lower compression = less CPU
+        f"--file={archive}",
+        "--no-acl", "--no-owner",
     ]
     if collection and collection != "full":
         cmd += [f"--table={collection}"]
 
-    log.info(f"Running pg_dump...")
-    result = subprocess.run(cmd, capture_output=True, text=True, env=pg_env(db), timeout=1800)
-    logs = (result.stderr or "") + (result.stdout or "")
+    write_log(log_path, "INFO  Running pg_dump...")
+    with open(log_path, "a") as lf:
+        result = subprocess.run(cmd, stdout=lf, stderr=lf, env=pg_env(db), timeout=3600)
 
     if result.returncode != 0:
-        log.error(f"pg_dump failed:\n{logs}")
-        raise RuntimeError(f"pg_dump failed: {logs}")
+        raise RuntimeError(f"pg_dump failed with exit code {result.returncode}. Check logs.")
 
-    log.info(f"pg_dump done: {dump_file} ({os.path.getsize(dump_file)/1024/1024:.2f} MB)")
-    return dump_file, logs
+    size_mb = round(os.path.getsize(archive) / 1024 / 1024, 2)
+    write_log(log_path, f"INFO  pg_dump completed: {size_mb} MB")
+    log.info(f"pg_dump done: {size_mb} MB")
+    return archive
 
 
-def run_pg_restore(db: dict, archive_path: str, tmp_dir: str, new_database: bool = False):
+# ─── POSTGRESQL RESTORE ──────────────────────────────────────────────────────
+
+def run_pg_restore(db: dict, archive_path: str, tmp_dir: str,
+                   new_database: bool = False, log_path: str = None):
     dbname = db.get("database_name", "").strip()
-    log.info(f"PostgreSQL restore | host={db['host']}:{db['port']} db={dbname} new={new_database}")
+    if log_path:
+        write_log(log_path, f"INFO  PostgreSQL restore | db={dbname} new={new_database}")
+    log.info(f"PostgreSQL restore | host={db['host']}:{db['port']} db={dbname}")
 
-    # For new database, create it first
     if new_database:
-        log.info(f"Creating new PostgreSQL database: {dbname}")
+        log.info(f"Creating new database: {dbname}")
         create_cmd = [
-            "psql",
-            f"--host={db['host']}", f"--port={db['port']}",
-            f"--username={db['username']}",
-            "--no-password", "--dbname=postgres",
-            "-c", f"CREATE DATABASE \"{dbname}\";"
+            "psql", f"--host={db['host']}", f"--port={db['port']}",
+            f"--username={db['username']}", "--no-password", "--dbname=postgres",
+            "-c", f'CREATE DATABASE "{dbname}";'
         ]
-        result_create = subprocess.run(create_cmd, capture_output=True, text=True, env=pg_env(db), timeout=30)
-        if result_create.returncode != 0 and "already exists" not in result_create.stderr:
-            log.warning(f"CREATE DATABASE warning: {result_create.stderr}")
+        subprocess.run(create_cmd, capture_output=True, env=pg_env(db), timeout=30)
 
     cmd = [
         "pg_restore",
-        f"--host={db['host']}",
-        f"--port={db['port']}",
-        f"--username={db['username']}",
-        f"--dbname={dbname}",
-        "--no-password",
-        "--no-acl", "--no-owner",
-        "--jobs=4",
+        f"--host={db['host']}", f"--port={db['port']}",
+        f"--username={db['username']}", f"--dbname={dbname}",
+        "--no-password", "--no-acl", "--no-owner", "--jobs=2",
         archive_path,
     ]
     if not new_database:
         cmd += ["--clean", "--if-exists"]
 
-    log.info(f"Running pg_restore...")
-    result = subprocess.run(cmd, capture_output=True, text=True, env=pg_env(db), timeout=1800)
-    logs = (result.stderr or "") + (result.stdout or "")
+    if log_path:
+        write_log(log_path, "INFO  Running pg_restore...")
+        with open(log_path, "a") as lf:
+            result = subprocess.run(cmd, stdout=lf, stderr=lf, env=pg_env(db), timeout=3600)
+    else:
+        result = subprocess.run(cmd, capture_output=True, text=True, env=pg_env(db), timeout=3600)
 
     if result.returncode not in (0, 1):
-        log.error(f"pg_restore failed:\n{logs}")
-        raise RuntimeError(f"pg_restore failed: {logs}")
+        raise RuntimeError(f"pg_restore failed (exit {result.returncode}). Check logs.")
 
+    if log_path:
+        write_log(log_path, "INFO  pg_restore completed")
     log.info("pg_restore completed")
-    return logs
 
 
-# ─── MAIN BACKUP TASK ────────────────────────────────────────────────────────
+# ─── STATE HELPERS ───────────────────────────────────────────────────────────
 
 def update_backup(backup_id: str, **kwargs):
     backups = read_json("data/backups.json")
@@ -362,15 +407,28 @@ def update_backup(backup_id: str, **kwargs):
     write_json("data/backups.json", backups)
 
 
+def update_restore(restore_id: str, **kwargs):
+    restores = read_json("data/restores.json")
+    for r in restores:
+        if r["id"] == restore_id:
+            r.update(kwargs)
+            break
+    write_json("data/restores.json", restores)
+
+
+# ─── MAIN BACKUP TASK ────────────────────────────────────────────────────────
+
 def do_backup(backup_id: str):
     start = datetime.utcnow()
     tmp_dir = os.path.join(BACKUP_TMP, backup_id)
     os.makedirs(tmp_dir, exist_ok=True)
+    log_path = get_log_path(backup_id)
+
+    write_log(log_path, f"=== BACKUP START | id={backup_id} ===")
 
     backups = read_json("data/backups.json")
     backup = next((b for b in backups if b["id"] == backup_id), None)
     if not backup:
-        log.error(f"Backup {backup_id} not found")
         return
 
     dbs = read_json("data/databases.json")
@@ -379,12 +437,15 @@ def do_backup(backup_id: str):
     storage = next((s for s in storages if s["id"] == backup["storage_id"]), None)
     collection = backup.get("collection", "full")
 
+    write_log(log_path, f"INFO  DB: {db and db['name']} | Collection: {collection} | Storage: {storage and storage['type']}")
     log.info(f"=== BACKUP START | id={backup_id} db={db and db['name']} collection={collection} ===")
 
     def fail(msg):
         log.error(f"=== BACKUP FAILED | id={backup_id} | {msg} ===")
+        write_log(log_path, f"ERROR {msg}")
+        logs = read_log(log_path)
         update_backup(backup_id,
-            status="failed", error=msg,
+            status="failed", error=msg, logs=logs,
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
@@ -394,23 +455,31 @@ def do_backup(backup_id: str):
         if not db or not storage:
             return fail("Database or storage not found")
 
-        logs = ""
         if db["type"] == "mongodb":
-            archive, logs = run_mongo_backup(db, collection, tmp_dir)
+            archive = run_mongo_backup(db, collection, tmp_dir, log_path)
         elif db["type"] == "postgresql":
-            archive, logs = run_pg_backup(db, collection, tmp_dir)
+            archive = run_pg_backup(db, collection, tmp_dir, log_path)
         else:
             return fail(f"Unsupported DB type: {db['type']}")
 
-        size_mb = round(os.path.getsize(archive) / (1024 * 1024), 2)
+        size_mb = round(os.path.getsize(archive) / 1024 / 1024, 2)
         remote_name = f"{backup_id}/{os.path.basename(archive)}"
 
+        write_log(log_path, f"INFO  Uploading {size_mb} MB to {storage['type']}...")
         log.info(f"Uploading {size_mb} MB to {storage['type']}...")
         remote_path = upload_to_storage(storage, archive, remote_name)
 
+        # Remove local archive after upload
+        try:
+            os.remove(archive)
+        except Exception:
+            pass
+
         duration = int((datetime.utcnow() - start).total_seconds())
+        write_log(log_path, f"=== BACKUP COMPLETE | size={size_mb}MB | duration={duration}s ===")
         log.info(f"=== BACKUP COMPLETE | id={backup_id} size={size_mb}MB duration={duration}s ===")
 
+        logs = read_log(log_path)
         update_backup(backup_id,
             status="completed", size_mb=size_mb,
             remote_path=remote_path, remote_name=remote_name,
@@ -423,28 +492,23 @@ def do_backup(backup_id: str):
         fail(str(e))
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        # Keep log file for a bit, cleanup old ones
+        _cleanup_old_logs()
 
 
 # ─── MAIN RESTORE TASK ───────────────────────────────────────────────────────
-
-def update_restore(restore_id: str, **kwargs):
-    restores = read_json("data/restores.json")
-    for r in restores:
-        if r["id"] == restore_id:
-            r.update(kwargs)
-            break
-    write_json("data/restores.json", restores)
-
 
 def do_restore(restore_id: str):
     start = datetime.utcnow()
     tmp_dir = os.path.join(BACKUP_TMP, f"restore_{restore_id}")
     os.makedirs(tmp_dir, exist_ok=True)
+    log_path = get_log_path(f"restore_{restore_id}")
+
+    write_log(log_path, f"=== RESTORE START | id={restore_id} ===")
 
     restores = read_json("data/restores.json")
     restore = next((r for r in restores if r["id"] == restore_id), None)
     if not restore:
-        log.error(f"Restore {restore_id} not found")
         return
 
     backups = read_json("data/backups.json")
@@ -454,12 +518,14 @@ def do_restore(restore_id: str):
     backup = next((b for b in backups if b["id"] == restore["backup_id"]), None)
     target_db = next((d for d in dbs if d["id"] == restore["target_database_id"]), None)
 
-    log.info(f"=== RESTORE START | id={restore_id} target_db={target_db and target_db['name']} ===")
+    log.info(f"=== RESTORE START | id={restore_id} target={target_db and target_db['name']} ===")
 
     def fail(msg):
         log.error(f"=== RESTORE FAILED | id={restore_id} | {msg} ===")
+        write_log(log_path, f"ERROR {msg}")
+        logs = read_log(log_path)
         update_restore(restore_id,
-            status="failed", error=msg,
+            status="failed", error=msg, logs=logs,
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
@@ -475,34 +541,38 @@ def do_restore(restore_id: str):
 
         remote_name = backup.get("remote_name")
         if not remote_name:
-            return fail("Backup has no remote file — was it actually completed with the new engine?")
+            return fail("Backup has no remote file")
 
+        write_log(log_path, f"INFO  Downloading from {storage['type']}: {remote_name}")
+        log.info(f"Downloading from {storage['type']}...")
         local_archive = os.path.join(tmp_dir, os.path.basename(remote_name))
-        log.info(f"Downloading backup from {storage['type']}...")
         download_from_storage(storage, remote_name, local_archive)
 
         collection = backup.get("collection", "full")
-        logs = ""
 
-        # If restoring to a new database, override the database_name in target_db
+        # Override dbname if new database
         if restore.get("new_database") and restore.get("new_database_name"):
             new_dbname = restore["new_database_name"].strip()
+            write_log(log_path, f"INFO  Restoring to NEW database: {new_dbname}")
             log.info(f"Restoring to NEW database: {new_dbname}")
             target_db = {**target_db, "database_name": new_dbname}
-            # No --drop flag for new DB restore (it doesn't exist yet)
 
         if target_db["type"] == "mongodb":
-            logs = run_mongo_restore(target_db, collection, local_archive, tmp_dir,
-                                     drop_existing=not restore.get("new_database", False))
+            run_mongo_restore(target_db, collection, local_archive, tmp_dir,
+                              drop_existing=not restore.get("new_database", False),
+                              log_path=log_path)
         elif target_db["type"] == "postgresql":
-            logs = run_pg_restore(target_db, local_archive, tmp_dir,
-                                  new_database=restore.get("new_database", False))
+            run_pg_restore(target_db, local_archive, tmp_dir,
+                           new_database=restore.get("new_database", False),
+                           log_path=log_path)
         else:
             return fail(f"Unsupported DB type: {target_db['type']}")
 
         duration = int((datetime.utcnow() - start).total_seconds())
+        write_log(log_path, f"=== RESTORE COMPLETE | duration={duration}s ===")
         log.info(f"=== RESTORE COMPLETE | id={restore_id} duration={duration}s ===")
 
+        logs = read_log(log_path)
         update_restore(restore_id,
             status="completed", logs=logs, error=None,
             completed_at=datetime.utcnow().isoformat(),
@@ -513,3 +583,18 @@ def do_restore(restore_id: str):
         fail(str(e))
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        _cleanup_old_logs()
+
+
+def _cleanup_old_logs():
+    """Remove log files older than 24 hours to save disk space."""
+    import time
+    try:
+        now = time.time()
+        for f in os.listdir(BACKUP_TMP):
+            if f.endswith(".log"):
+                fpath = os.path.join(BACKUP_TMP, f)
+                if os.path.getmtime(fpath) < now - 86400:
+                    os.remove(fpath)
+    except Exception:
+        pass

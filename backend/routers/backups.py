@@ -80,7 +80,10 @@ def get_backup_logs(backup_id: str, user=Depends(get_current_user)):
     backup = next((b for b in backups if b["id"] == backup_id and b["database_id"] in user_db_ids), None)
     if not backup:
         raise HTTPException(404, "Backup not found")
-    return {"logs": backup.get("logs",""), "status": backup["status"], "error": backup.get("error")}
+    from engine import get_log_path, read_log
+    live_logs = read_log(get_log_path(backup_id))
+    logs = live_logs or backup.get("logs", "")
+    return {"logs": logs, "status": backup["status"], "error": backup.get("error")}
 
 @router.delete("/{backup_id}")
 def delete_backup(backup_id: str, user=Depends(get_current_user)):
@@ -139,7 +142,10 @@ def get_restore_logs(restore_id: str, user=Depends(get_current_user)):
     restore = next((r for r in restores if r["id"] == restore_id and r["target_database_id"] in user_db_ids), None)
     if not restore:
         raise HTTPException(404, "Restore not found")
-    return {"logs": restore.get("logs",""), "status": restore["status"], "error": restore.get("error")}
+    from engine import get_log_path, read_log
+    live_logs = read_log(get_log_path(f"restore_{restore_id}"))
+    logs = live_logs or restore.get("logs", "")
+    return {"logs": logs, "status": restore["status"], "error": restore.get("error")}
 
 @router.post("/restore")
 def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=Depends(get_current_user)):

@@ -1000,36 +1000,44 @@ function simulateProgress(backupId, label) {
   const badge = document.getElementById('live-pct-badge');
   const lbl = document.getElementById('live-label');
   const logsEl = document.getElementById('live-logs');
+
   card.classList.add('active');
   lbl.textContent = label;
+  logsEl.innerHTML = '<div style="color:var(--muted)">⏳ Starting backup...</div>';
   let progress = 0;
-  let stuckCount = 0;
+  let lastLogLen = 0;
+
   if(progressInterval) clearInterval(progressInterval);
-  if(logsEl) logsEl.innerHTML = '<div style="color:var(--muted)">⏳ Connecting to database...</div>';
 
   progressInterval = setInterval(async () => {
     try {
-      const backups = await apiFetch('/backups/');
+      // Fetch status + live logs together
+      const [backups, logData] = await Promise.all([
+        apiFetch('/backups/'),
+        apiFetch(`/backups/${backupId}/logs`).catch(()=>null)
+      ]);
       const b = backups.find(x=>x.id===backupId);
+
+      // Update live logs from log file
+      if(logData && logData.logs && logData.logs.length !== lastLogLen) {
+        lastLogLen = logData.logs.length;
+        const lines = logData.logs.split('\n').filter(Boolean);
+        logsEl.innerHTML = lines.map(l => {
+          const isErr = l.toLowerCase().includes('error') || l.toLowerCase().includes('fail');
+          const isOk = l.toLowerCase().includes('complete') || l.toLowerCase().includes('success');
+          const color = isErr ? 'var(--danger)' : isOk ? 'var(--accent)' : 'var(--muted)';
+          return `<div style="color:${color}">${escHtml(l)}</div>`;
+        }).join('');
+        logsEl.scrollTop = logsEl.scrollHeight;
+      }
 
       if(b && b.status === 'completed') {
         clearInterval(progressInterval);
-        bar.style.width = '100%';
-        pct.textContent = '100%';
-        badge.textContent = '100%';
-        badge.className = 'badge badge-green';
+        bar.style.width = '100%'; pct.textContent = '100%';
+        badge.textContent = '100%'; badge.className = 'badge badge-green';
         badge.style.color = 'var(--accent)';
-        // Fetch real logs
-        try {
-          const logData = await apiFetch(`/backups/${backupId}/logs`);
-          if(logsEl && logData.logs) {
-            logsEl.innerHTML = logData.logs.split('\n').filter(Boolean).map(l=>
-              `<div style="color:${l.includes('error')||l.includes('fail')?'var(--danger)':'var(--muted)'}">${l}</div>`
-            ).join('');
-          }
-        } catch(e){}
-        if(logsEl) logsEl.innerHTML += `<div style="color:var(--accent)">✅ Backup completed! Size: ${b.size_mb} MB | Duration: ${b.duration_seconds}s</div>`;
-        if(logsEl) logsEl.scrollTop = logsEl.scrollHeight;
+        logsEl.innerHTML += `<div style="color:var(--accent)">✅ Backup completed! Size: ${b.size_mb} MB | Duration: ${b.duration_seconds}s</div>`;
+        logsEl.scrollTop = logsEl.scrollHeight;
         setTimeout(()=>{ card.classList.remove('active'); loadBackups(); }, 3000);
         return;
       }
@@ -1037,48 +1045,22 @@ function simulateProgress(backupId, label) {
       if(b && b.status === 'failed') {
         clearInterval(progressInterval);
         card.classList.remove('active');
-        toast(b.error ? b.error.split('\n')[0] : 'Backup failed!','error');
-        if(logsEl) logsEl.innerHTML += `<div style="color:var(--danger)">❌ ${b.error||'Backup failed'}</div>`;
+        const errMsg = b.error || 'Backup failed';
+        logsEl.innerHTML += `<div style="color:var(--danger)">❌ ${escHtml(errMsg)}</div>`;
+        logsEl.scrollTop = logsEl.scrollHeight;
+        toast(errMsg.split('\n')[0].substring(0, 120), 'error');
         loadBackups();
         return;
       }
 
-      // Still running — animate progress but cap at 90% until done
-      stuckCount++;
-      const increment = Math.random() * 8;
-      progress = Math.min(progress + increment, 90);
+      // Still running — animate progress bar slowly up to 90%
+      progress = Math.min(progress + Math.random() * 5, 90);
       bar.style.width = progress.toFixed(0) + '%';
       pct.textContent = progress.toFixed(0) + '%';
       badge.textContent = progress.toFixed(0) + '%';
 
-      // Add log messages
-      if(logsEl) {
-        const msgs = [
-          'Connecting to database...',
-          'Starting mongodump...',
-          'Dumping collections...',
-          'Compressing data...',
-          'Uploading to storage...',
-          'Verifying upload...',
-        ];
-        const msgIdx = Math.min(Math.floor(progress / 18), msgs.length - 1);
-        const last = logsEl.lastElementChild;
-        if(!last || last.textContent !== `⏳ ${msgs[msgIdx]}`) {
-          logsEl.innerHTML += `<div style="color:var(--muted)">⏳ ${msgs[msgIdx]}</div>`;
-          logsEl.scrollTop = logsEl.scrollHeight;
-        }
-      }
-
-      // If stuck at 90% for too long (>60s), keep polling
-      if(stuckCount > 120) {
-        // 120 * 800ms = ~96s, just keep polling, don't stop
-        stuckCount = 80;
-      }
-
-    } catch(e) {
-      // Network error, keep trying
-    }
-  }, 800);
+    } catch(e) { /* keep polling on network error */ }
+  }, 1500);
 }
 
 function onBackupTypeChange() {
@@ -1273,29 +1255,38 @@ function trackRestoreProgress(restoreId) {
 
   card.classList.add('active');
   lbl.textContent = `Restore ID: ${restoreId.substring(0,8)}...`;
-  logsEl.innerHTML = '<div style="color:var(--muted)">⏳ Downloading backup from storage...</div>';
+  logsEl.innerHTML = '<div style="color:var(--muted)">⏳ Starting restore...</div>';
   let progress = 0;
+  let lastLogLen = 0;
 
   if(restoreInterval) clearInterval(restoreInterval);
+
   restoreInterval = setInterval(async()=>{
     try {
-      const restores = await apiFetch('/backups/restores');
+      const [restores, logData] = await Promise.all([
+        apiFetch('/backups/restores'),
+        apiFetch(`/backups/restores/${restoreId}/logs`).catch(()=>null)
+      ]);
       const r = restores.find(x=>x.id===restoreId);
+
+      // Update live logs
+      if(logData && logData.logs && logData.logs.length !== lastLogLen) {
+        lastLogLen = logData.logs.length;
+        const lines = logData.logs.split('\n').filter(Boolean);
+        logsEl.innerHTML = lines.map(l => {
+          const isErr = l.toLowerCase().includes('error') || l.toLowerCase().includes('fail');
+          const isOk = l.toLowerCase().includes('complete') || l.toLowerCase().includes('success');
+          const color = isErr ? 'var(--danger)' : isOk ? 'var(--accent)' : 'var(--muted)';
+          return `<div style="color:${color}">${escHtml(l)}</div>`;
+        }).join('');
+        logsEl.scrollTop = logsEl.scrollHeight;
+      }
 
       if(r && r.status==='completed') {
         clearInterval(restoreInterval);
         bar.style.width='100%'; pct.textContent='100%';
         badge.textContent='100%'; badge.className='badge badge-green';
         lbl.textContent = `Restore completed in ${r.duration_seconds}s`;
-        // Fetch real logs
-        try {
-          const logData = await apiFetch(`/backups/restores/${restoreId}/logs`);
-          if(logData.logs) {
-            logsEl.innerHTML = logData.logs.split('\n').filter(Boolean).map(l=>
-              `<div style="color:${l.toLowerCase().includes('error')||l.toLowerCase().includes('fail')?'var(--danger)':'var(--muted)'}">${escHtml(l)}</div>`
-            ).join('');
-          }
-        } catch(e){}
         logsEl.innerHTML += `<div style="color:var(--accent)">✅ Restore completed! Duration: ${r.duration_seconds}s</div>`;
         logsEl.scrollTop = logsEl.scrollHeight;
         toast('✅ Restore completed successfully!','success');
@@ -1314,21 +1305,13 @@ function trackRestoreProgress(restoreId) {
         return;
       }
 
-      // Still running
-      progress = Math.min(progress + Math.random() * 10, 90);
+      progress = Math.min(progress + Math.random() * 5, 90);
       bar.style.width = progress.toFixed(0)+'%';
       pct.textContent = progress.toFixed(0)+'%';
       badge.textContent = progress.toFixed(0)+'%';
 
-      const msgs = ['Downloading backup from storage...','Extracting archive...','Running mongorestore / pg_restore...','Applying data to target database...','Verifying restore...'];
-      const msgIdx = Math.min(Math.floor(progress/20), msgs.length-1);
-      const last = logsEl.lastElementChild;
-      if(!last || last.textContent !== `⏳ ${msgs[msgIdx]}`) {
-        logsEl.innerHTML += `<div style="color:var(--muted)">⏳ ${msgs[msgIdx]}</div>`;
-        logsEl.scrollTop = logsEl.scrollHeight;
-      }
     } catch(e){}
-  }, 1000);
+  }, 1500);
 }
 
 // ---- MODALS ----
