@@ -14,6 +14,8 @@ class ScheduleCreate(BaseModel):
     frequency: Literal["hourly", "daily", "weekly", "monthly"]
     time: Optional[str] = "02:00"  # HH:MM
     enabled: bool = True
+    backup_method: Literal["full", "incremental"] = "full"
+    incremental_field: Optional[str] = None
 
 @router.get("/")
 def list_schedules(user=Depends(get_current_user)):
@@ -44,6 +46,8 @@ def create_schedule(req: ScheduleCreate, user=Depends(get_current_user)):
         "frequency": req.frequency,
         "time": req.time,
         "enabled": req.enabled,
+        "backup_method": req.backup_method,
+        "incremental_field": req.incremental_field,
         "created_at": datetime.utcnow().isoformat(),
         "last_run": None,
         "next_run": datetime.utcnow().isoformat(),

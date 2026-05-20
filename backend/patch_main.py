@@ -1,18 +1,14 @@
-from fastapi import FastAPI, HTTPException, Depends, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from contextlib import asynccontextmanager
-import uvicorn
-import json
-import os
-import asyncio
+import re
+
+with open("backend/main.py", "r", encoding="utf-8") as f:
+    content = f.read()
+
+scheduler_code = """import asyncio
 from datetime import datetime, timedelta
 import threading
 import uuid
 from utils import read_json, write_json
 from engine import do_backup
-
-from routers import auth, databases, backups, storage, schedules
 
 async def scheduler_loop():
     while True:
@@ -111,27 +107,11 @@ async def lifespan(app: FastAPI):
                 
     asyncio.create_task(scheduler_loop())
     yield
+"""
 
+# Replace imports and lifespan
+content = content.replace("import os\n", "import os\n" + "\n".join(scheduler_code.split("\n")[:6]) + "\n")
+content = re.sub(r"@asynccontextmanager.*?yield", "\n".join(scheduler_code.split("\n")[7:]), content, flags=re.DOTALL)
 
-app = FastAPI(title="BackupVault API", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-app.include_router(databases.router, prefix="/api/databases", tags=["databases"])
-app.include_router(backups.router, prefix="/api/backups", tags=["backups"])
-app.include_router(storage.router, prefix="/api/storage", tags=["storage"])
-app.include_router(schedules.router, prefix="/api/schedules", tags=["schedules"])
-
-@app.get("/api/health")
-def health():
-    return {"status": "ok", "app": "BackupVault"}
-
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+with open("backend/main.py", "w", encoding="utf-8") as f:
+    f.write(content)

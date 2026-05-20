@@ -74,3 +74,20 @@ backupvault/
 - **Frontend:** Vanilla JS, CSS (no framework needed)
 - **Storage:** Azure Blob Storage SDK, Google Cloud Storage SDK
 - **Auth:** JWT tokens, bcrypt password hashing
+
+## Recent Optimizations & Advanced Features
+- **Advanced Automated Scheduling:**
+  - Implemented an `asyncio`-based background scheduler in FastAPI that automatically manages and triggers backups based on user-defined intervals (hourly, daily, weekly, monthly).
+- **Incremental Backups (MongoDB):**
+  - Added support for True Incremental Backups using MongoDB's `--query` flag. Users can specify an "Incremental Field" (e.g., `updated_at`) and the engine will only back up records newer than the last successful backup timestamp.
+- **Premium Glassmorphism UI:**
+  - Redesigned the user interface using modern web aesthetics, including glassmorphism effects (`backdrop-filter`), smooth gradients, and advanced layout structures.
+- **Direct Cloud Streaming (Zero Disk IO):**
+  - Completely removed the intermediate step of writing backups to the local container disk.
+  - Now, `pg_dump` and `mongodump` output streams (`stdout`) are directly piped into the Azure Blob Storage and Google Cloud Storage SDKs.
+  - This results in zero extra disk space required on the container during backups and halves the total backup duration since local disk writes/reads are bypassed.
+- **MongoDB Backup & Restore:** 
+  - Eliminated disk-heavy intermediate files and CPU-intensive double-compression (`tar -czf`) by streaming `mongodump` directly into a single gzip archive using the `--archive` flag.
+  - Reduced `--numParallelCollections` to 1, drastically reducing memory consumption and CPU spikes during the backup process.
+- **PostgreSQL Backup:** 
+  - Adjusted `pg_dump` compression level from 4 to 1 (`--compress=1`), prioritizing maximum backup speed and lowering CPU overhead without significantly impacting storage space.

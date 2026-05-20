@@ -25,19 +25,19 @@
   --success:#00e5a0;
   --radius:12px;
 }
-body{font-family:'Syne',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+body{background: linear-gradient(135deg, #0a0c10 0%, #1a1f2c 100%);font-family:'Syne',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
 .mono{font-family:'DM Mono',monospace}
 
 
 .form-group{margin-bottom:20px}
 .form-group label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}
-.form-group input,.form-group select,.form-group textarea{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 16px;color:var(--text);font-family:'Syne',sans-serif;font-size:14px;outline:none;transition:.2s}
+.form-group input,.form-group select,.form-group textarea{background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1);width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 16px;color:var(--text);font-family:'Syne',sans-serif;font-size:14px;outline:none;transition:.2s}
 .form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,229,160,.1)}
 .form-group select option{background:var(--surface2)}
 .form-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .btn{display:inline-flex;align-items:center;gap:8px;padding:12px 24px;border-radius:10px;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;border:none;transition:.2s;text-decoration:none}
-.btn-primary{background:var(--accent);color:#000;width:100%;justify-content:center}
-.btn-primary:hover{background:#00ffb3;transform:translateY(-1px)}
+.btn-primary{background: linear-gradient(135deg, var(--accent), #00ffb3); color:#000; box-shadow: 0 4px 12px rgba(0,229,160,0.3); border:1px solid rgba(255,255,255,0.2);background:var(--accent);color:#000;width:100%;justify-content:center}
+.btn-primary:hover{transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,229,160,0.4);background:#00ffb3;transform:translateY(-1px)}
 .btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
 .btn-secondary:hover{border-color:var(--accent);color:var(--accent)}
 .btn-danger{background:rgba(255,71,87,.15);color:var(--danger);border:1px solid rgba(255,71,87,.3)}
@@ -48,7 +48,7 @@ body{font-family:'Syne',sans-serif;background:var(--bg);color:var(--text);min-he
 
 /* LAYOUT */
 #app{display:none;height:100vh;flex-direction:row}
-.sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+.sidebar{background: rgba(17,19,24,0.65); backdrop-filter: blur(20px); border-right: 1px solid rgba(255,255,255,0.05);width:240px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
 .sidebar-logo{padding:24px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
 .sidebar-logo .icon{width:36px;height:36px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px}
 .sidebar-logo h1{font-size:18px;font-weight:800}
@@ -69,7 +69,7 @@ nav{padding:16px 12px;flex:1}
 .logout-btn:hover{color:var(--danger)}
 
 .main{flex:1;overflow-y:auto;display:flex;flex-direction:column}
-.topbar{padding:20px 32px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--surface)}
+.topbar{background: rgba(17,19,24,0.65); backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255,255,255,0.05);padding:20px 32px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--surface)}
 .topbar h2{font-size:20px;font-weight:800}
 .content{padding:32px;flex:1}
 
@@ -79,7 +79,7 @@ nav{padding:16px 12px;flex:1}
 
 /* STATS */
 .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:32px}
-.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;position:relative;overflow:hidden}
+.stat-card{background: rgba(17,19,24,0.65); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 4px 16px rgba(0,0,0,0.1);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;position:relative;overflow:hidden}
 .stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
 .stat-card.green::before{background:var(--accent)}
 .stat-card.blue::before{background:var(--accent2)}
@@ -90,7 +90,7 @@ nav{padding:16px 12px;flex:1}
 .stat-sub{font-size:12px;color:var(--muted);margin-top:4px}
 
 /* TABLES */
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.card{background: rgba(17,19,24,0.65); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 8px 32px rgba(0,0,0,0.2);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
 .card-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
 .card-title{font-size:15px;font-weight:700}
 table{width:100%;border-collapse:collapse}
@@ -115,7 +115,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 /* MODAL */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);z-index:100;display:none;align-items:center;justify-content:center}
 .modal-overlay.open{display:flex}
-.modal{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:32px;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto}
+.modal{background: rgba(17,19,24,0.85); backdrop-filter: blur(24px); border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 24px 64px rgba(0,0,0,0.5);background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:32px;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto}
 .modal-title{font-size:18px;font-weight:800;margin-bottom:24px}
 .modal-actions{display:flex;gap:12px;justify-content:flex-end;margin-top:24px}
 
@@ -485,11 +485,23 @@ tr:hover td{background:rgba(255,255,255,.02)}
       </select>
     </div>
     <div class="form-group">
-      <label>Backup Type</label>
+      <label>Backup Scope</label>
       <select id="bk-type" onchange="onBackupTypeChange()">
         <option value="full">Full Database</option>
         <option value="collection">Specific Collection / Table</option>
       </select>
+    </div>
+    <div class="form-group">
+      <label>Backup Method</label>
+      <select id="bk-method" onchange="onBackupMethodChange('bk')">
+        <option value="full">Full Backup</option>
+        <option value="incremental">Incremental Backup (MongoDB Only)</option>
+      </select>
+    </div>
+    <div class="form-group" id="bk-incremental-group" style="display:none">
+      <label>Incremental Field Name</label>
+      <input type="text" id="bk-incremental-field" placeholder="e.g. updated_at"/>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">Enter the timestamp/date field used to filter new records.</div>
     </div>
     <div class="form-group" id="bk-collection-group" style="display:none">
       <label>Collection / Table <span style="color:var(--muted);font-size:11px">(fetched from server)</span></label>
@@ -527,6 +539,17 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div class="form-group">
       <label>Storage Destination</label>
       <select id="sc-storage"></select>
+    </div>
+    <div class="form-group">
+      <label>Backup Method</label>
+      <select id="sc-method" onchange="onBackupMethodChange('sc')">
+        <option value="full">Full Backup</option>
+        <option value="incremental">Incremental Backup (MongoDB Only)</option>
+      </select>
+    </div>
+    <div class="form-group" id="sc-incremental-group" style="display:none">
+      <label>Incremental Field Name</label>
+      <input type="text" id="sc-incremental-field" placeholder="e.g. updated_at"/>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -614,6 +637,15 @@ tr:hover td{background:rgba(255,255,255,.02)}
 
 <script>
 const API = '/api';
+
+function onBackupMethodChange(prefix) {
+  const method = document.getElementById(`${prefix}-method`).value;
+  const incGroup = document.getElementById(`${prefix}-incremental-group`);
+  if (incGroup) {
+    incGroup.style.display = method === 'incremental' ? 'block' : 'none';
+  }
+}
+
 let token = 'no-auth';
 let currentUser = {id:'local',name:'Admin',email:'admin@local'};
 
