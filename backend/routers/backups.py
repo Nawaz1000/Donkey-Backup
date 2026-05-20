@@ -18,6 +18,8 @@ class BackupCreate(BaseModel):
 class RestoreRequest(BaseModel):
     backup_id: str
     target_database_id: str
+    new_database: bool = False
+    new_database_name: Optional[str] = None
 
 @router.get("/")
 def list_backups(user=Depends(get_current_user)):
@@ -165,6 +167,8 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
         "id": str(uuid.uuid4()),
         "backup_id": req.backup_id,
         "target_database_id": req.target_database_id,
+        "new_database": req.new_database,
+        "new_database_name": req.new_database_name if req.new_database else None,
         "status": "running",
         "error": None,
         "started_at": datetime.utcnow().isoformat(),

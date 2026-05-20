@@ -554,9 +554,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 <div class="modal-overlay" id="restore-modal">
   <div class="modal">
     <div class="modal-title">♻️ Restore Backup</div>
-    <div style="background:rgba(255,165,2,.08);border:1px solid rgba(255,165,2,.25);border-radius:10px;padding:14px;margin-bottom:20px;font-size:13px;color:var(--warn)">
-      ⚠️ Restore will overwrite existing data in the target database. Make sure you have a recent backup before proceeding.
-    </div>
+
     <div class="form-group">
       <label>Select Backup to Restore</label>
       <select id="rs-backup" onchange="onRestoreBackupChange()"></select>
@@ -564,16 +562,47 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div id="rs-info" style="background:var(--surface2);border-radius:10px;padding:12px;font-size:13px;color:var(--muted);margin-bottom:16px;display:none">
       <span id="rs-info-text"></span>
     </div>
+
     <div class="form-group">
       <label>Target Database Connection</label>
       <select id="rs-target-db" onchange="onRestoreTargetDbChange()"></select>
     </div>
+
+    <!-- Restore Mode Toggle -->
     <div class="form-group">
+      <label>Restore Mode</label>
+      <div style="display:flex;gap:8px">
+        <div id="rs-mode-existing" onclick="setRestoreMode('existing')"
+          style="flex:1;padding:12px;border-radius:10px;border:2px solid var(--accent);background:rgba(0,229,160,.08);cursor:pointer;text-align:center;font-size:13px;font-weight:700;color:var(--accent)">
+          📂 Existing Database
+        </div>
+        <div id="rs-mode-new" onclick="setRestoreMode('new')"
+          style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);cursor:pointer;text-align:center;font-size:13px;font-weight:600;color:var(--muted)">
+          ✨ Create New Database
+        </div>
+      </div>
+    </div>
+
+    <!-- Existing DB select -->
+    <div id="rs-existing-fields" class="form-group">
       <label>Target Database Name <span style="color:var(--muted);font-size:11px">(fetched from server)</span></label>
       <select id="rs-target-dbname">
         <option value="">— select connection first —</option>
       </select>
+      <div style="font-size:12px;color:var(--warn);margin-top:6px">⚠️ Existing data will be overwritten</div>
     </div>
+
+    <!-- New DB fields -->
+    <div id="rs-new-fields" style="display:none">
+      <div class="form-group">
+        <label>New Database Name</label>
+        <input type="text" id="rs-new-dbname" placeholder="e.g. HotelStaticData_restored"/>
+      </div>
+      <div style="background:rgba(0,229,160,.06);border:1px solid rgba(0,229,160,.2);border-radius:10px;padding:12px;font-size:13px;color:var(--accent);margin-bottom:16px">
+        ✅ A fresh database will be created — no existing data will be affected
+      </div>
+    </div>
+
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('restore-modal')">Cancel</button>
       <button class="btn btn-danger" style="width:auto" onclick="runRestore()">♻️ Start Restore</button>
@@ -1174,23 +1203,60 @@ async function onRestoreTargetDbChange() {
   }
 }
 
+function setRestoreMode(mode) {
+  const isNew = mode === 'new';
+  document.getElementById('rs-existing-fields').style.display = isNew ? 'none' : 'block';
+  document.getElementById('rs-new-fields').style.display = isNew ? 'block' : 'none';
+  // Toggle button styles
+  const btnExisting = document.getElementById('rs-mode-existing');
+  const btnNew = document.getElementById('rs-mode-new');
+  if(isNew) {
+    btnNew.style.border = '2px solid var(--accent)';
+    btnNew.style.background = 'rgba(0,229,160,.08)';
+    btnNew.style.color = 'var(--accent)';
+    btnExisting.style.border = '1px solid var(--border)';
+    btnExisting.style.background = 'var(--surface2)';
+    btnExisting.style.color = 'var(--muted)';
+  } else {
+    btnExisting.style.border = '2px solid var(--accent)';
+    btnExisting.style.background = 'rgba(0,229,160,.08)';
+    btnExisting.style.color = 'var(--accent)';
+    btnNew.style.border = '1px solid var(--border)';
+    btnNew.style.background = 'var(--surface2)';
+    btnNew.style.color = 'var(--muted)';
+  }
+}
+
 async function runRestore() {
   const backupId = v('rs-backup');
   const targetDbId = v('rs-target-db');
-  const targetDbname = v('rs-target-dbname');
+  const isNew = document.getElementById('rs-new-fields').style.display !== 'none';
+  const targetDbname = isNew ? v('rs-new-dbname').trim() : v('rs-target-dbname');
+
   if(!backupId){ toast('Select a backup to restore','error'); return; }
   if(!targetDbId){ toast('Select a target database connection','error'); return; }
-  if(!targetDbname){ toast('Select a target database name','error'); return; }
-  if(!confirm(`Restore to "${targetDbname}"? This will overwrite existing data.`)) return;
-  // Save selected dbname back
-  try { await apiFetch(`/databases/${targetDbId}`, {method:'PATCH', body: JSON.stringify({database_name: targetDbname})}); } catch(e){}
+  if(!targetDbname){ toast(isNew ? 'Enter a new database name' : 'Select a target database name','error'); return; }
+
+  if(!isNew && !confirm(`Restore to "${targetDbname}"? Existing data will be overwritten.`)) return;
+  if(isNew && !confirm(`Create new database "${targetDbname}" and restore into it?`)) return;
+
+  // Save selected dbname to db record so engine uses it
   try {
-    const r = await apiFetch('/backups/restore',{method:'POST',body:JSON.stringify({
+    await apiFetch(`/databases/${targetDbId}`, {
+      method:'PATCH',
+      body: JSON.stringify({database_name: targetDbname})
+    });
+  } catch(e){}
+
+  try {
+    const r = await apiFetch('/backups/restore', {method:'POST', body:JSON.stringify({
       backup_id: backupId,
-      target_database_id: targetDbId
+      target_database_id: targetDbId,
+      new_database: isNew,
+      new_database_name: isNew ? targetDbname : null,
     })});
     closeModal('restore-modal');
-    toast('Restore started!','info');
+    toast(isNew ? `Creating "${targetDbname}" and restoring...` : 'Restore started!', 'info');
     showPage('restores');
     trackRestoreProgress(r.id);
   } catch(e) { toast(e.message,'error'); }
@@ -1273,6 +1339,7 @@ async function openModal(id) {
   }
   if(id==='restore-modal') {
     await populateRestoreSelects();
+    setRestoreMode('existing');
   }
   if(id==='db-modal') {
     document.getElementById('db-name').value='';

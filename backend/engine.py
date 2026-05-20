@@ -199,7 +199,7 @@ def run_mongo_backup(db: dict, collection: str, tmp_dir: str):
     return archive, logs
 
 
-def run_mongo_restore(db: dict, collection: str, archive_path: str, tmp_dir: str):
+def run_mongo_restore(db: dict, collection: str, archive_path: str, tmp_dir: str, drop_existing: bool = True):
     m = parse_mongo_uri(db)
     dbname = m["dbname"]
 
@@ -245,12 +245,13 @@ def run_mongo_restore(db: dict, collection: str, archive_path: str, tmp_dir: str
 
     # mongorestore with --dir expects the folder containing *.bson.gz files
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
-        "--drop",
         "--gzip",
         "--numParallelCollections=4",
         f"--db={dbname}",
         f"--dir={db_dump_dir}",
     ]
+    if drop_existing:
+        cmd.append("--drop")
     if collection and collection != "full":
         cmd += [f"--collection={collection}"]
 
@@ -307,9 +308,23 @@ def run_pg_backup(db: dict, collection: str, tmp_dir: str):
     return dump_file, logs
 
 
-def run_pg_restore(db: dict, archive_path: str, tmp_dir: str):
+def run_pg_restore(db: dict, archive_path: str, tmp_dir: str, new_database: bool = False):
     dbname = db.get("database_name", "").strip()
-    log.info(f"PostgreSQL restore | host={db['host']}:{db['port']} db={dbname}")
+    log.info(f"PostgreSQL restore | host={db['host']}:{db['port']} db={dbname} new={new_database}")
+
+    # For new database, create it first
+    if new_database:
+        log.info(f"Creating new PostgreSQL database: {dbname}")
+        create_cmd = [
+            "psql",
+            f"--host={db['host']}", f"--port={db['port']}",
+            f"--username={db['username']}",
+            "--no-password", "--dbname=postgres",
+            "-c", f"CREATE DATABASE \"{dbname}\";"
+        ]
+        result_create = subprocess.run(create_cmd, capture_output=True, text=True, env=pg_env(db), timeout=30)
+        if result_create.returncode != 0 and "already exists" not in result_create.stderr:
+            log.warning(f"CREATE DATABASE warning: {result_create.stderr}")
 
     cmd = [
         "pg_restore",
@@ -318,18 +333,18 @@ def run_pg_restore(db: dict, archive_path: str, tmp_dir: str):
         f"--username={db['username']}",
         f"--dbname={dbname}",
         "--no-password",
-        "--clean",
-        "--if-exists",
-        "--no-acl",
-        "--no-owner",
-        "--jobs=4",    # parallel restore
+        "--no-acl", "--no-owner",
+        "--jobs=4",
         archive_path,
     ]
+    if not new_database:
+        cmd += ["--clean", "--if-exists"]
+
     log.info(f"Running pg_restore...")
     result = subprocess.run(cmd, capture_output=True, text=True, env=pg_env(db), timeout=1800)
     logs = (result.stderr or "") + (result.stdout or "")
 
-    if result.returncode not in (0, 1):  # pg_restore exits 1 on warnings, ok
+    if result.returncode not in (0, 1):
         log.error(f"pg_restore failed:\n{logs}")
         raise RuntimeError(f"pg_restore failed: {logs}")
 
@@ -470,10 +485,19 @@ def do_restore(restore_id: str):
         collection = backup.get("collection", "full")
         logs = ""
 
+        # If restoring to a new database, override the database_name in target_db
+        if restore.get("new_database") and restore.get("new_database_name"):
+            new_dbname = restore["new_database_name"].strip()
+            log.info(f"Restoring to NEW database: {new_dbname}")
+            target_db = {**target_db, "database_name": new_dbname}
+            # No --drop flag for new DB restore (it doesn't exist yet)
+
         if target_db["type"] == "mongodb":
-            logs = run_mongo_restore(target_db, collection, local_archive, tmp_dir)
+            logs = run_mongo_restore(target_db, collection, local_archive, tmp_dir,
+                                     drop_existing=not restore.get("new_database", False))
         elif target_db["type"] == "postgresql":
-            logs = run_pg_restore(target_db, local_archive, tmp_dir)
+            logs = run_pg_restore(target_db, local_archive, tmp_dir,
+                                  new_database=restore.get("new_database", False))
         else:
             return fail(f"Unsupported DB type: {target_db['type']}")
 
