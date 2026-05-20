@@ -203,31 +203,64 @@ def run_mongo_restore(db: dict, collection: str, archive_path: str, tmp_dir: str
     m = parse_mongo_uri(db)
     dbname = m["dbname"]
 
-    log.info(f"MongoDB restore | host={m['host']}:{m['port']} db={dbname}")
+    log.info(f"MongoDB restore | host={m['host']}:{m['port']} db={dbname} collection={collection or 'full'}")
+
+    if not dbname:
+        raise ValueError("Database name is required for restore.")
 
     restore_dir = os.path.join(tmp_dir, "restore")
     os.makedirs(restore_dir, exist_ok=True)
 
-    # Extract archive
-    subprocess.run(["tar", "-xzf", archive_path, "-C", restore_dir], check=True)
+    # Extract archive — backup was created with: tar -C dump_dir .
+    # So archive contains: ./dbname/*.bson.gz
+    result_tar = subprocess.run(
+        ["tar", "-xzf", archive_path, "-C", restore_dir],
+        capture_output=True, text=True
+    )
+    if result_tar.returncode != 0:
+        raise RuntimeError(f"Archive extraction failed: {result_tar.stderr}")
 
+    # List extracted contents for debugging
+    all_files = []
+    for root, dirs, files in os.walk(restore_dir):
+        for f in files:
+            all_files.append(os.path.relpath(os.path.join(root, f), restore_dir))
+    log.info(f"Extracted files: {all_files[:20]}")
+
+    # mongodump --out=dump_dir creates: dump_dir/dbname/*.bson.gz
+    # We tar'd from dump_dir so archive has: ./dbname/*.bson.gz
+    # After extraction: restore_dir/dbname/*.bson.gz
+    db_dump_dir = os.path.join(restore_dir, dbname)
+    if not os.path.isdir(db_dump_dir):
+        # Fallback: find first directory that has .bson or .bson.gz files
+        for root, dirs, files in os.walk(restore_dir):
+            if any(f.endswith('.bson') or f.endswith('.bson.gz') for f in files):
+                db_dump_dir = root
+                break
+        else:
+            db_dump_dir = restore_dir
+
+    log.info(f"Restore source dir: {db_dump_dir}")
+    log.info(f"Dir contents: {os.listdir(db_dump_dir)[:20] if os.path.isdir(db_dump_dir) else 'NOT A DIR'}")
+
+    # mongorestore with --dir expects the folder containing *.bson.gz files
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
         "--drop",
         "--gzip",
         "--numParallelCollections=4",
         f"--db={dbname}",
-        restore_dir,
+        f"--dir={db_dump_dir}",
     ]
     if collection and collection != "full":
         cmd += [f"--collection={collection}"]
 
-    log.info(f"Running mongorestore...")
+    log.info(f"Running: {' '.join(c for c in cmd if '--password' not in c)}")
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     logs = (result.stderr or "") + (result.stdout or "")
+    log.info(f"mongorestore output:\n{logs}")
 
     if result.returncode != 0:
-        log.error(f"mongorestore failed:\n{logs}")
-        raise RuntimeError(f"mongorestore failed: {logs}")
+        raise RuntimeError(f"mongorestore failed (exit {result.returncode}):\n{logs}")
 
     log.info("mongorestore completed successfully")
     return logs

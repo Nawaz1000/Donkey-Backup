@@ -292,9 +292,20 @@ tr:hover td{background:rgba(255,255,255,.02)}
 
       <!-- RESTORES -->
       <div class="page" id="page-restores">
+        <!-- Live restore progress card -->
+        <div class="backup-live" id="restore-live-card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div style="font-weight:700;font-size:15px">♻️ Restore In Progress</div>
+            <span class="badge badge-orange" id="restore-pct-badge">0%</span>
+          </div>
+          <div style="font-size:13px;color:var(--muted);margin-bottom:10px" id="restore-live-label">—</div>
+          <div class="progress-wrap"><div class="progress-bar" id="restore-bar" style="width:0%"></div></div>
+          <div class="progress-label" id="restore-pct">0%</div>
+          <div id="restore-logs" style="margin-top:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;font-family:'DM Mono',monospace;font-size:12px;max-height:120px;overflow-y:auto;line-height:1.8"></div>
+        </div>
         <div class="card" style="margin-bottom:24px">
           <div class="card-header">
-            <div class="card-title">Restore from Backup</div>
+            <div class="card-title">Restore History</div>
             <div style="display:flex;gap:8px">
               <button class="btn btn-secondary btn-sm" onclick="loadRestores()">🔄 Refresh</button>
               <button class="btn btn-primary btn-sm" onclick="openModal('restore-modal')">♻️ New Restore</button>
@@ -548,14 +559,20 @@ tr:hover td{background:rgba(255,255,255,.02)}
     </div>
     <div class="form-group">
       <label>Select Backup to Restore</label>
-      <select id="rs-backup"></select>
+      <select id="rs-backup" onchange="onRestoreBackupChange()"></select>
+    </div>
+    <div id="rs-info" style="background:var(--surface2);border-radius:10px;padding:12px;font-size:13px;color:var(--muted);margin-bottom:16px;display:none">
+      <span id="rs-info-text"></span>
     </div>
     <div class="form-group">
-      <label>Restore To (Target Database)</label>
-      <select id="rs-target-db"></select>
+      <label>Target Database Connection</label>
+      <select id="rs-target-db" onchange="onRestoreTargetDbChange()"></select>
     </div>
-    <div id="rs-info" style="background:var(--surface2);border-radius:10px;padding:14px;font-size:13px;color:var(--muted);margin-bottom:8px;display:none">
-      <span id="rs-info-text"></span>
+    <div class="form-group">
+      <label>Target Database Name <span style="color:var(--muted);font-size:11px">(fetched from server)</span></label>
+      <select id="rs-target-dbname">
+        <option value="">— select connection first —</option>
+      </select>
     </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('restore-modal')">Cancel</button>
@@ -848,7 +865,10 @@ async function loadBackups() {
         <td>${storageBadge(b.storage_type)} ${b.storage_name}</td>
         <td>
           ${statusBadge(b.status)}
-          ${b.status==='failed'&&b.error?`<div style="color:var(--danger);font-size:11px;margin-top:4px;max-width:220px;word-break:break-word;" title="${b.error.replace(/"/g,'&quot;')}">⚠ ${b.error.split('\n')[0].substring(0,80)}${b.error.length>80?'…':''}</div>`:''}
+          ${b.status==='failed'&&b.error?`
+            <div style="color:var(--danger);font-size:11px;margin-top:6px;background:rgba(255,71,87,.07);border:1px solid rgba(255,71,87,.2);border-radius:6px;padding:6px 8px;max-width:300px;word-break:break-word;white-space:pre-wrap;">
+              ${escHtml(b.error.split('\n').slice(0,3).join('\n'))}
+            </div>` : ''}
         </td>
         <td>${b.size_mb??'—'}</td>
         <td>${b.duration_seconds?b.duration_seconds+'s':'—'}</td>
@@ -1098,7 +1118,10 @@ async function loadRestores() {
         <td>${r.target_database_name}</td>
         <td>
           ${statusBadge(r.status)}
-          ${r.status==='failed'&&r.error?`<div style="color:var(--danger);font-size:11px;margin-top:4px;max-width:220px;word-break:break-word;">${r.error.split('\n')[0].substring(0,80)}${r.error.length>80?'…':''}</div>`:''}
+          ${r.status==='failed'&&r.error?`
+            <div style="color:var(--danger);font-size:11px;margin-top:6px;background:rgba(255,71,87,.07);border:1px solid rgba(255,71,87,.2);border-radius:6px;padding:6px 8px;max-width:300px;word-break:break-word;white-space:pre-wrap;">
+              ${escHtml(r.error.split('\n').slice(0,3).join('\n'))}
+            </div>` : ''}
         </td>
         <td>${r.duration_seconds?r.duration_seconds+'s':'—'}</td>
         <td class="text-muted text-sm">${fmtDate(r.started_at)}</td>
@@ -1107,44 +1130,60 @@ async function loadRestores() {
 }
 
 async function openRestoreFromBackup(backupId, backupLabel) {
-  await populateRestoreSelects();
+  await openModal('restore-modal');
   const sel = document.getElementById('rs-backup');
-  if(sel) sel.value = backupId;
-  updateRestoreInfo();
-  openModal('restore-modal');
+  if(sel) { sel.value = backupId; onRestoreBackupChange(); }
 }
 
 async function populateRestoreSelects() {
-  const backups = await apiFetch('/backups/');
-  const dbs = await apiFetch('/databases/');
-  const completed = backups.filter(b=>b.status==='completed');
-  document.getElementById('rs-backup').innerHTML = completed.map(b=>
-    `<option value="${b.id}">${b.label} — ${b.database_name} (${fmtDate(b.created_at)})</option>`
-  ).join('');
+  const [backups, dbs] = await Promise.all([apiFetch('/backups/'), apiFetch('/databases/')]);
+  const completed = backups.filter(b=>b.status==='completed'&&b.remote_name);
+  document.getElementById('rs-backup').innerHTML = completed.length
+    ? completed.map(b=>`<option value="${b.id}" data-collection="${b.collection||'full'}" data-size="${b.size_mb}" data-dbname="${b.database_name}">${b.label} — ${b.database_name} (${fmtDate(b.created_at)})</option>`).join('')
+    : '<option value="">— no completed backups —</option>';
   document.getElementById('rs-target-db').innerHTML = dbs.map(d=>
     `<option value="${d.id}">${d.name} (${d.type})</option>`
   ).join('');
-  updateRestoreInfo();
-  document.getElementById('rs-backup').onchange = updateRestoreInfo;
+  onRestoreBackupChange();
+  onRestoreTargetDbChange();
 }
 
-async function updateRestoreInfo() {
-  const backupId = document.getElementById('rs-backup').value;
-  const backups = await apiFetch('/backups/');
-  const b = backups.find(x=>x.id===backupId);
+function onRestoreBackupChange() {
+  const sel = document.getElementById('rs-backup');
+  const opt = sel.options[sel.selectedIndex];
   const info = document.getElementById('rs-info');
   const infoText = document.getElementById('rs-info-text');
-  if(b) {
+  if(opt && opt.value) {
     info.style.display='block';
-    infoText.innerHTML = `📦 <strong>${b.label}</strong> &nbsp;|&nbsp; Collection: <strong>${b.collection||'full'}</strong> &nbsp;|&nbsp; Size: <strong>${b.size_mb} MB</strong> &nbsp;|&nbsp; DB: <strong>${b.database_name}</strong>`;
+    infoText.innerHTML = `📦 <strong>${opt.text.split(' — ')[0]}</strong> &nbsp;|&nbsp; Collection: <strong>${opt.dataset.collection||'full'}</strong> &nbsp;|&nbsp; Size: <strong>${opt.dataset.size||'?'} MB</strong> &nbsp;|&nbsp; Source DB: <strong>${opt.dataset.dbname||'?'}</strong>`;
+  } else {
+    info.style.display='none';
+  }
+}
+
+async function onRestoreTargetDbChange() {
+  const dbId = v('rs-target-db');
+  if(!dbId) return;
+  const el = document.getElementById('rs-target-dbname');
+  el.innerHTML = '<option>⏳ Loading databases...</option>';
+  try {
+    const r = await apiFetch(`/databases/${dbId}/databases`);
+    el.innerHTML = r.databases.map(d=>`<option value="${d}">${d}</option>`).join('');
+  } catch(e) {
+    el.innerHTML = `<option value="">⚠ ${e.message}</option>`;
   }
 }
 
 async function runRestore() {
-  const backupId = document.getElementById('rs-backup').value;
-  const targetDbId = document.getElementById('rs-target-db').value;
-  if(!backupId||!targetDbId){ toast('Select backup and target database','error'); return; }
-  if(!confirm('This will overwrite data in the target database. Are you sure?')) return;
+  const backupId = v('rs-backup');
+  const targetDbId = v('rs-target-db');
+  const targetDbname = v('rs-target-dbname');
+  if(!backupId){ toast('Select a backup to restore','error'); return; }
+  if(!targetDbId){ toast('Select a target database connection','error'); return; }
+  if(!targetDbname){ toast('Select a target database name','error'); return; }
+  if(!confirm(`Restore to "${targetDbname}"? This will overwrite existing data.`)) return;
+  // Save selected dbname back
+  try { await apiFetch(`/databases/${targetDbId}`, {method:'PATCH', body: JSON.stringify({database_name: targetDbname})}); } catch(e){}
   try {
     const r = await apiFetch('/backups/restore',{method:'POST',body:JSON.stringify({
       backup_id: backupId,
@@ -1153,28 +1192,77 @@ async function runRestore() {
     closeModal('restore-modal');
     toast('Restore started!','info');
     showPage('restores');
-    simulateRestoreProgress(r.id);
+    trackRestoreProgress(r.id);
   } catch(e) { toast(e.message,'error'); }
 }
 
 let restoreInterval = null;
-function simulateRestoreProgress(restoreId) {
+function trackRestoreProgress(restoreId) {
+  const card = document.getElementById('restore-live-card');
+  const bar = document.getElementById('restore-bar');
+  const pct = document.getElementById('restore-pct');
+  const badge = document.getElementById('restore-pct-badge');
+  const lbl = document.getElementById('restore-live-label');
+  const logsEl = document.getElementById('restore-logs');
+
+  card.classList.add('active');
+  lbl.textContent = `Restore ID: ${restoreId.substring(0,8)}...`;
+  logsEl.innerHTML = '<div style="color:var(--muted)">⏳ Downloading backup from storage...</div>';
+  let progress = 0;
+
   if(restoreInterval) clearInterval(restoreInterval);
   restoreInterval = setInterval(async()=>{
     try {
       const restores = await apiFetch('/backups/restores');
       const r = restores.find(x=>x.id===restoreId);
-      if(r && r.status==='completed'){
+
+      if(r && r.status==='completed') {
         clearInterval(restoreInterval);
+        bar.style.width='100%'; pct.textContent='100%';
+        badge.textContent='100%'; badge.className='badge badge-green';
+        lbl.textContent = `Restore completed in ${r.duration_seconds}s`;
+        // Fetch real logs
+        try {
+          const logData = await apiFetch(`/backups/restores/${restoreId}/logs`);
+          if(logData.logs) {
+            logsEl.innerHTML = logData.logs.split('\n').filter(Boolean).map(l=>
+              `<div style="color:${l.toLowerCase().includes('error')||l.toLowerCase().includes('fail')?'var(--danger)':'var(--muted)'}">${escHtml(l)}</div>`
+            ).join('');
+          }
+        } catch(e){}
+        logsEl.innerHTML += `<div style="color:var(--accent)">✅ Restore completed! Duration: ${r.duration_seconds}s</div>`;
+        logsEl.scrollTop = logsEl.scrollHeight;
         toast('✅ Restore completed successfully!','success');
-        loadRestores();
-      } else if(r && r.status==='failed'){
+        setTimeout(()=>{ card.classList.remove('active'); loadRestores(); }, 3000);
+        return;
+      }
+
+      if(r && r.status==='failed') {
         clearInterval(restoreInterval);
-        toast('Restore failed!','error');
+        card.classList.remove('active');
+        const errMsg = r.error || 'Restore failed';
+        logsEl.innerHTML += `<div style="color:var(--danger)">❌ ${escHtml(errMsg)}</div>`;
+        logsEl.scrollTop = logsEl.scrollHeight;
+        toast(errMsg.split('\n')[0].substring(0,120), 'error');
         loadRestores();
+        return;
+      }
+
+      // Still running
+      progress = Math.min(progress + Math.random() * 10, 90);
+      bar.style.width = progress.toFixed(0)+'%';
+      pct.textContent = progress.toFixed(0)+'%';
+      badge.textContent = progress.toFixed(0)+'%';
+
+      const msgs = ['Downloading backup from storage...','Extracting archive...','Running mongorestore / pg_restore...','Applying data to target database...','Verifying restore...'];
+      const msgIdx = Math.min(Math.floor(progress/20), msgs.length-1);
+      const last = logsEl.lastElementChild;
+      if(!last || last.textContent !== `⏳ ${msgs[msgIdx]}`) {
+        logsEl.innerHTML += `<div style="color:var(--muted)">⏳ ${msgs[msgIdx]}</div>`;
+        logsEl.scrollTop = logsEl.scrollHeight;
       }
     } catch(e){}
-  }, 1500);
+  }, 1000);
 }
 
 // ---- MODALS ----
@@ -1205,6 +1293,7 @@ document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click
 
 // ---- HELPERS ----
 function v(id){return document.getElementById(id)?.value||''}
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function emptyRow(cols,msg){return `<tr class="empty-row"><td colspan="${cols}">${msg}</td></tr>`}
 function fmtDate(iso){if(!iso)return'—';const d=new Date(iso);return d.toLocaleDateString()+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}
 function dbBadge(t){return t==='postgresql'?'<span class="badge badge-pg" style="margin-right:6px">🐘 PG</span>':'<span class="badge badge-mongo" style="margin-right:6px">🍃 Mongo</span>'}
