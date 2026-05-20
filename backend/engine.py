@@ -79,7 +79,10 @@ def parse_mongo_uri(db: dict):
 def mongo_cmd_args(m: dict) -> list:
     """Build common mongodump/restore auth args from parsed URI dict."""
     args = [f"--host={m['host']}", f"--port={m['port']}",
-            f"--authenticationDatabase={m['auth_source']}"]
+            f"--authenticationDatabase={m['auth_source']}",
+            "--readPreference=primary",
+            "--directConnection",
+            ]
     if m["username"]:
         args += [f"--username={m['username']}"]
     if m["password"]:
@@ -171,8 +174,8 @@ def run_mongo_backup(db: dict, collection: str, tmp_dir: str):
     cmd = ["mongodump"] + mongo_cmd_args(m) + [
         f"--db={dbname}",
         f"--out={dump_dir}",
-        "--gzip",           # compress at dump time — faster overall
-        "--numParallelCollections=4",  # parallel collection dump
+        "--gzip",
+        "--numParallelCollections=4",
     ]
     if collection and collection != "full":
         cmd += [f"--collection={collection}"]
@@ -247,13 +250,14 @@ def run_mongo_restore(db: dict, collection: str, archive_path: str, tmp_dir: str
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
         "--gzip",
         "--numParallelCollections=4",
-        f"--db={dbname}",
+        f"--nsFrom={dbname}.*",
+        f"--nsTo={dbname}.*",
         f"--dir={db_dump_dir}",
     ]
     if drop_existing:
         cmd.append("--drop")
     if collection and collection != "full":
-        cmd += [f"--collection={collection}"]
+        cmd += [f"--nsInclude={dbname}.{collection}"]
 
     log.info(f"Running: {' '.join(c for c in cmd if '--password' not in c)}")
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
