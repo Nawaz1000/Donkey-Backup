@@ -80,7 +80,6 @@ def mongo_cmd_args(m: dict) -> list:
     """Build common mongodump/restore auth args from parsed URI dict."""
     args = [f"--host={m['host']}", f"--port={m['port']}",
             f"--authenticationDatabase={m['auth_source']}",
-            "--readPreference=primary",
             "--directConnection",
             ]
     if m["username"]:
