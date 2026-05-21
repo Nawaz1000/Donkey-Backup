@@ -96,7 +96,7 @@ backupvault/
   - Completely removed intermediate disk writes. Dump output is piped directly into Azure/GCS.
 - **Cloud Upload/Download Tuning**:
   - Configured GCS uploads with an explicit `chunk_size` of 16MB to enable fast resumable uploads and prevent Google Cloud Client Library from loading the entire backup stream into RAM.
-  - Configured Azure uploads and downloads with `max_concurrency=4` and `max_block_size=4MB` to process blocks in parallel, maximizing network throughput while strictly capping client-side memory overhead under 16MB.
+  - Configured Azure `BlobServiceClient` with `max_block_size=4MB` at client initialization and `max_concurrency=4` on uploads to process blocks in parallel, maximizing network throughput while strictly capping client-side memory overhead under 16MB.
 - **Advanced Automated Scheduling:**
   - Implemented an `asyncio`-based background scheduler in FastAPI that automatically manages and triggers backups based on user-defined intervals (hourly, daily, weekly, monthly).
 - **Incremental Backups (MongoDB):**
