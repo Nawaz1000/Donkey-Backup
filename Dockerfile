@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     nginx supervisor \
     postgresql-client \
     gnupg curl wget \
+    zstd pigz \
     && rm -rf /var/lib/apt/lists/*
 
 # Install MongoDB Database Tools directly (no apt repo needed)

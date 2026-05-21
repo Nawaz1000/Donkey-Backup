@@ -129,12 +129,16 @@ import queue
 import threading
 import shutil
 
+from collections import deque
+
 class QueueReader(io.RawIOBase):
     def __init__(self, q: queue.Queue, stop_event: threading.Event):
         self.q = q
         self.stop_event = stop_event
-        self.buffer = b""
+        self.buffer = deque()
+        self.buffer_size = 0
         self.eof = False
+        self.lock = threading.Lock()
 
     def readable(self):
         return True
@@ -143,87 +147,70 @@ class QueueReader(io.RawIOBase):
         return False
 
     def readinto(self, b):
-        size = len(b)
-        
-        # 1. If buffer is empty, block until we get at least one chunk or hit EOF
-        if not self.buffer and not self.eof:
-            while not self.eof:
-                try:
-                    chunk = self.q.get(timeout=1.0)
-                    if chunk is None:  # EOF sentinel
-                        self.eof = True
+        with self.lock:
+            size = len(b)
+            
+            # 1. Block and wait for at least some data if buffer is empty
+            if self.buffer_size == 0 and not self.eof:
+                while not self.eof:
+                    try:
+                        chunk = self.q.get(timeout=1.0)
+                        if chunk is None:
+                            self.eof = True
+                            break
+                        self.buffer.append(chunk)
+                        self.buffer_size += len(chunk)
                         break
-                    self.buffer = chunk
-                    break
-                except queue.Empty:
-                    if self.stop_event.is_set():
-                        self.eof = True
+                    except queue.Empty:
+                        if self.stop_event.is_set():
+                            self.eof = True
+                            break
+
+            # 2. Drain any available chunks without blocking to fill up to size
+            if self.buffer_size > 0 and self.buffer_size < size and not self.eof:
+                while self.buffer_size < size:
+                    try:
+                        chunk = self.q.get_nowait()
+                        if chunk is None:
+                            self.eof = True
+                            break
+                        self.buffer.append(chunk)
+                        self.buffer_size += len(chunk)
+                    except queue.Empty:
                         break
 
-        # 2. Drain any already-available chunks without blocking to accumulate up to 'size'
-        if self.buffer and len(self.buffer) < size and not self.eof:
-            while len(self.buffer) < size:
-                try:
-                    chunk = self.q.get_nowait()
-                    if chunk is None:
-                        self.eof = True
-                        break
-                    self.buffer += chunk
-                except queue.Empty:
-                    break
+            if self.buffer_size == 0:
+                return 0  # EOF
 
-        if not self.buffer:
-            return 0  # EOF
-
-        num_bytes = min(size, len(self.buffer))
-        b[:num_bytes] = self.buffer[:num_bytes]
-        self.buffer = self.buffer[num_bytes:]
-        return num_bytes
+            # 3. Copy from self.buffer to b
+            bytes_to_copy = min(size, self.buffer_size)
+            copied = 0
+            
+            while copied < bytes_to_copy:
+                chunk = self.buffer.popleft()
+                chunk_len = len(chunk)
+                remaining = bytes_to_copy - copied
+                
+                if chunk_len <= remaining:
+                    b[copied:copied+chunk_len] = chunk
+                    copied += chunk_len
+                    self.buffer_size -= chunk_len
+                else:
+                    b[copied:copied+remaining] = chunk[:remaining]
+                    self.buffer.appendleft(chunk[remaining:])
+                    self.buffer_size -= remaining
+                    copied += remaining
+                    
+            return copied
 
     def read(self, size=-1):
         if size is None or size < 0:
-            res = []
-            while not self.eof:
-                chunk = self.read(65536)
-                if not chunk:
-                    break
-                res.append(chunk)
-            return b"".join(res)
-
-        # 1. If buffer is empty, block until we get at least one chunk or hit EOF
-        if not self.buffer and not self.eof:
-            while not self.eof:
-                try:
-                    chunk = self.q.get(timeout=1.0)
-                    if chunk is None:
-                        self.eof = True
-                        break
-                    self.buffer = chunk
-                    break
-                except queue.Empty:
-                    if self.stop_event.is_set():
-                        self.eof = True
-                        break
-
-        # 2. Drain any already-available chunks without blocking to accumulate up to 'size'
-        if self.buffer and len(self.buffer) < size and not self.eof:
-            while len(self.buffer) < size:
-                try:
-                    chunk = self.q.get_nowait()
-                    if chunk is None:
-                        self.eof = True
-                        break
-                    self.buffer += chunk
-                except queue.Empty:
-                    break
-
-        if not self.buffer:
+            raise ValueError("Reading the entire stream without a size limit is not supported to prevent OOM errors.")
+        b = bytearray(size)
+        n = self.readinto(b)
+        if n == 0:
             return b""
-
-        num_bytes = min(size, len(self.buffer))
-        chunk = self.buffer[:num_bytes]
-        self.buffer = self.buffer[num_bytes:]
-        return chunk
+        return bytes(b[:n])
 
 
 def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_size: int = 1024 * 1024):
@@ -244,13 +231,41 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
         q.put(None)
 
 
-def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, pipe_to_gzip: bool = False) -> str:
+def get_compressor_info(log_path: str = None) -> dict:
+    if shutil.which("zstd"):
+        if log_path:
+            write_log(log_path, "INFO  Using Zstandard (zstd) for multi-threaded fast compression.")
+        return {
+            "cmd": ["zstd", "-1", "--threads=0"],
+            "ext": "zst",
+            "type": "zstd"
+        }
+    elif shutil.which("pigz"):
+        if log_path:
+            write_log(log_path, "INFO  Using pigz (parallel gzip) for multi-threaded compression.")
+        return {
+            "cmd": ["pigz", "-1"],
+            "ext": "gz",
+            "type": "pigz"
+        }
+    elif shutil.which("gzip"):
+        if log_path:
+            write_log(log_path, "INFO  Using system gzip for fast compression level 1.")
+        return {
+            "cmd": ["gzip", "-1"],
+            "ext": "gz",
+            "type": "gzip"
+        }
+    return None
+
+
+def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, compression_cmd: list = None) -> str:
     write_log(log_path, f"INFO  Starting streaming backup to {storage['type']}: {remote_name}")
     
     processes = []
     with open(log_path, "a") as err_file:
         try:
-            if pipe_to_gzip:
+            if compression_cmd:
                 p_dump = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -259,16 +274,16 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 )
                 processes.append(p_dump)
                 
-                p_gzip = subprocess.Popen(
-                    ["gzip", "-1"],
+                p_comp = subprocess.Popen(
+                    compression_cmd,
                     stdin=p_dump.stdout,
                     stdout=subprocess.PIPE,
                     stderr=err_file
                 )
-                processes.append(p_gzip)
+                processes.append(p_comp)
                 
                 p_dump.stdout.close()
-                stdout_stream = p_gzip.stdout
+                stdout_stream = p_comp.stdout
             else:
                 p_dump = subprocess.Popen(
                     cmd,
@@ -287,12 +302,13 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                     pass
             raise RuntimeError(f"Failed to start subprocesses: {e}")
 
-        q = queue.Queue(maxsize=64)
+        # Scale chunk size and queue capacity for higher throughput (1MB chunk, 32 capacity = 32MB buffer)
+        q = queue.Queue(maxsize=32)
         stop_event = threading.Event()
         
         reader_thread = threading.Thread(
             target=reader_thread_fn,
-            args=(stdout_stream, q, stop_event, 256 * 1024)
+            args=(stdout_stream, q, stop_event, 1024 * 1024)  # 1MB chunks
         )
         reader_thread.daemon = True
         reader_thread.start()
@@ -358,17 +374,47 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
         return remote_path
 
 
-def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str):
+def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, decompression_cmd: list = None):
     write_log(log_path, f"INFO  Starting streaming restore from {storage['type']}: {remote_name}")
     
+    processes = []
     with open(log_path, "a") as err_file:
-        process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=err_file,
-            stderr=err_file,
-            env=env
-        )
+        try:
+            if decompression_cmd:
+                p_dec = subprocess.Popen(
+                    decompression_cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=err_file
+                )
+                processes.append(p_dec)
+                
+                p_restore = subprocess.Popen(
+                    cmd,
+                    stdin=p_dec.stdout,
+                    stdout=err_file,
+                    stderr=err_file,
+                    env=env
+                )
+                processes.append(p_restore)
+                p_dec.stdout.close()
+                stdin_stream = p_dec.stdin
+            else:
+                p_restore = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=err_file,
+                    stderr=err_file,
+                    env=env
+                )
+                processes.append(p_restore)
+                stdin_stream = p_restore.stdin
+                
+        except Exception as e:
+            for p in processes:
+                try: p.kill()
+                except Exception: pass
+            raise RuntimeError(f"Failed to start restore processes: {e}")
 
         try:
             if storage["type"] == "azure":
@@ -383,8 +429,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 container = client.get_container_client(storage["azure_container"])
                 stream = container.download_blob(remote_name, max_concurrency=4)
                 for chunk in stream.chunks():
-                    process.stdin.write(chunk)
-                process.stdin.close()
+                    stdin_stream.write(chunk)
+                stdin_stream.close()
                 
             elif storage["type"] == "gcs":
                 import json
@@ -395,18 +441,21 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 client = gcs.Client(credentials=creds)
                 bucket = client.bucket(storage["gcs_bucket"])
                 blob = bucket.blob(remote_name)
-                blob.download_to_file(process.stdin)
-                process.stdin.close()
+                blob.download_to_file(stdin_stream)
+                stdin_stream.close()
             else:
                 raise ValueError(f"Unknown storage type: {storage['type']}")
                 
         except Exception as e:
-            process.kill()
+            for p in processes:
+                try: p.kill()
+                except Exception: pass
             raise RuntimeError(f"Streaming download failed: {e}")
 
-        process.wait()
-        if process.returncode != 0:
-            raise RuntimeError(f"Restore command failed with exit code {process.returncode}. Check logs.")
+        for p in processes:
+            p.wait()
+            if p.returncode != 0:
+                raise RuntimeError(f"Restore command failed with exit code {p.returncode}. Check logs.")
             
         write_log(log_path, f"INFO  Streaming restore successful.")
 
@@ -421,8 +470,6 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     collection = backup_info.get("collection", "full")
     backup_method = backup_info.get("backup_method", "full")
     incremental_field = backup_info.get("incremental_field", "")
-    
-    gzip_path = shutil.which("gzip")
     
     cmd = ["mongodump"] + mongo_cmd_args(m) + [
         f"--db={dbname}",
@@ -449,26 +496,25 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         else:
             write_log(log_path, f"INFO  No previous successful backup found. Falling back to Full Backup.")
             
-    pipe_to_gzip = False
-    if gzip_path:
-        pipe_to_gzip = True
-        write_log(log_path, "INFO  Using system gzip for fast compression level 1.")
+    comp_info = get_compressor_info(log_path)
+    compression_cmd = None
+    if comp_info:
+        compression_cmd = comp_info["cmd"]
     else:
         cmd.append("--gzip")
-        write_log(log_path, "INFO  gzip utility not found in PATH. Using native mongodump compression.")
+        write_log(log_path, "INFO  No fast compressor found in PATH. Using native mongodump compression.")
         
-    return stream_backup_to_storage(cmd, os.environ.copy(), storage, remote_name, log_path, pipe_to_gzip=pipe_to_gzip)
+    return stream_backup_to_storage(cmd, os.environ.copy(), storage, remote_name, log_path, compression_cmd=compression_cmd)
 
 
 # ─── MONGODB RESTORE ─────────────────────────────────────────────────────────
 
-def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True):
+def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None):
     m = parse_mongo_uri(db)
     dbname = m["dbname"]
     if not dbname: raise ValueError("Database name is required for restore.")
     
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
-        "--gzip",
         "--archive",
         "--numParallelCollections=1",
         f"--db={dbname}",
@@ -478,7 +524,19 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     if collection and collection != "full":
         cmd += [f"--collection={collection}"]
         
-    stream_restore_from_storage(cmd, os.environ.copy(), storage, remote_name, log_path)
+    decompression_cmd = None
+    if compression == "zstd":
+        decompression_cmd = ["zstd", "-d", "-c"]
+    elif compression in ("pigz", "gzip"):
+        if shutil.which("pigz"):
+            decompression_cmd = ["pigz", "-d", "-c"]
+        elif shutil.which("gzip"):
+            decompression_cmd = ["gzip", "-d", "-c"]
+    else:
+        # Native or old backup: let mongorestore handle it using --gzip
+        cmd.append("--gzip")
+        
+    stream_restore_from_storage(cmd, os.environ.copy(), storage, remote_name, log_path, decompression_cmd=decompression_cmd)
 
 
 # ─── POSTGRESQL BACKUP ───────────────────────────────────────────────────────
@@ -497,18 +555,29 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
         f"--host={db['host']}", f"--port={db['port']}",
         f"--username={db['username']}", f"--dbname={dbname}",
         "--no-password", "--format=custom",
-        "--compress=1",
+        "--compress=0",
         "--no-acl", "--no-owner",
     ]
     if collection and collection != "full":
         cmd += [f"--table={collection}"]
         
-    return stream_backup_to_storage(cmd, pg_env(db), storage, remote_name, log_path)
+    comp_info = get_compressor_info(log_path)
+    compression_cmd = None
+    if comp_info:
+        compression_cmd = comp_info["cmd"]
+    else:
+        cmd[7] = "--compress=1"
+        write_log(log_path, "INFO  No fast compressor found in PATH. Using single-threaded native pg_dump compression.")
+        
+    env = pg_env(db)
+    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=128MB"
+        
+    return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd)
 
 
 # ─── POSTGRESQL RESTORE ──────────────────────────────────────────────────────
 
-def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False):
+def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None):
     dbname = db.get("database_name", "").strip()
     if new_database:
         create_cmd = [
@@ -527,7 +596,19 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
     if not new_database:
         cmd += ["--clean", "--if-exists"]
         
-    stream_restore_from_storage(cmd, pg_env(db), storage, remote_name, log_path)
+    decompression_cmd = None
+    if compression == "zstd":
+        decompression_cmd = ["zstd", "-d", "-c"]
+    elif compression in ("pigz", "gzip"):
+        if shutil.which("pigz"):
+            decompression_cmd = ["pigz", "-d", "-c"]
+        elif shutil.which("gzip"):
+            decompression_cmd = ["gzip", "-d", "-c"]
+            
+    env = pg_env(db)
+    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=128MB"
+        
+    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd)
 
 
 # ─── STATE HELPERS ───────────────────────────────────────────────────────────
@@ -589,7 +670,11 @@ def do_backup(backup_id: str):
         if not db or not storage:
             return fail("Database or storage not found")
 
-        remote_name = f"{backup_id}/backup.archive.gz"
+        comp_info = get_compressor_info(log_path)
+        ext = comp_info["ext"] if comp_info else "gz"
+        compression = comp_info["type"] if comp_info else "native"
+        remote_name = f"{backup_id}/backup.archive.{ext}"
+
         if db["type"] == "mongodb":
             remote_path = run_mongo_backup(db, backup, storage, remote_name, log_path)
         elif db["type"] == "postgresql":
@@ -607,6 +692,7 @@ def do_backup(backup_id: str):
         update_backup(backup_id,
             status="completed", size_mb=size_mb,
             remote_path=remote_path, remote_name=remote_name,
+            compression=compression,
             logs=logs, error=None,
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=duration
@@ -676,10 +762,12 @@ def do_restore(restore_id: str):
             log.info(f"Restoring to NEW database: {new_dbname}")
             target_db = {**target_db, "database_name": new_dbname}
 
+        compression = backup.get("compression")
+
         if target_db["type"] == "mongodb":
-            run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False))
+            run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression)
         elif target_db["type"] == "postgresql":
-            run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False))
+            run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression)
         else:
             return fail(f"Unsupported DB type: {target_db['type']}")
 
