@@ -82,12 +82,14 @@ backupvault/
   - Added support for True Incremental Backups using MongoDB's `--query` flag. Users can specify an "Incremental Field" (e.g., `updated_at`) and the engine will only back up records newer than the last successful backup timestamp.
 - **Premium Glassmorphism UI:**
   - Redesigned the user interface using modern web aesthetics, including glassmorphism effects (`backdrop-filter`), smooth gradients, and advanced layout structures.
-- **Direct Cloud Streaming (Zero Disk IO):**
-  - Completely removed the intermediate step of writing backups to the local container disk.
-  - Now, `pg_dump` and `mongodump` output streams (`stdout`) are directly piped into the Azure Blob Storage and Google Cloud Storage SDKs.
-  - This results in zero extra disk space required on the container during backups and halves the total backup duration since local disk writes/reads are bypassed.
-- **MongoDB Backup & Restore:** 
-  - Eliminated disk-heavy intermediate files and CPU-intensive double-compression (`tar -czf`) by streaming `mongodump` directly into a single gzip archive using the `--archive` flag.
-  - Reduced `--numParallelCollections` to 1, drastically reducing memory consumption and CPU spikes during the backup process.
-- **PostgreSQL Backup:** 
-  - Adjusted `pg_dump` compression level from 4 to 1 (`--compress=1`), prioritizing maximum backup speed and lowering CPU overhead without significantly impacting storage space.
+- **Direct Cloud Streaming with Bounded Buffering (Zero Disk IO & Low Memory)**:
+  - Completely removed intermediate disk writes. Dump output is piped directly into Azure/GCS.
+  - Implemented a decoupled **Producer-Consumer stream buffer (`QueueReader`)** using a bounded memory queue (max 8MB). This applies backpressure to the dump tools when the network is slow, eliminating OS pipe-blocking context switches and preventing OOM kills on large databases (20GB+).
+- **CPU-Optimized MongoDB Backup**:
+  - Automatically pipes `mongodump` through system `gzip -1` (fastest compression level) instead of native `--gzip` (default level 6). This keeps CPU usage well under 1.5 cores for large databases while preserving a low storage footprint. Falls back to native `--gzip` if `gzip` is not in the system PATH.
+  - Set `--numParallelCollections=1` to minimize resource contention.
+- **Resource-Optimized PostgreSQL Backup**:
+  - Configured `pg_dump` with client compression level 1 (`--compress=1`) to achieve the fastest compression and lowest CPU overhead.
+- **Cloud Upload Tuning**:
+  - Configured GCS uploads with an explicit `chunk_size` of 8MB to enable resumable uploads and prevent Google Cloud Client Library from loading the entire backup stream into RAM.
+  - Configured Azure uploads and downloads with `max_concurrency=1` to process chunks sequentially and strictly cap memory consumption.

@@ -124,16 +124,152 @@ def read_log(log_path: str) -> str:
 
 # ─── STORAGE STREAMING ───────────────────────────────────────────────────────
 
-def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str) -> str:
+import io
+import queue
+import threading
+import shutil
+
+class QueueReader(io.RawIOBase):
+    def __init__(self, q: queue.Queue, stop_event: threading.Event):
+        self.q = q
+        self.stop_event = stop_event
+        self.buffer = b""
+        self.eof = False
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return False
+
+    def readinto(self, b):
+        if not self.buffer and not self.eof:
+            while not self.eof:
+                try:
+                    chunk = self.q.get(timeout=1.0)
+                    if chunk is None:  # EOF sentinel
+                        self.eof = True
+                        break
+                    self.buffer = chunk
+                    break
+                except queue.Empty:
+                    if self.stop_event.is_set():
+                        self.eof = True
+                        break
+
+        if not self.buffer:
+            return 0  # EOF
+
+        num_bytes = min(len(b), len(self.buffer))
+        b[:num_bytes] = self.buffer[:num_bytes]
+        self.buffer = self.buffer[num_bytes:]
+        return num_bytes
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            res = []
+            while not self.eof:
+                chunk = self.read(4096)
+                if not chunk:
+                    break
+                res.append(chunk)
+            return b"".join(res)
+
+        if not self.buffer and not self.eof:
+            while not self.eof:
+                try:
+                    chunk = self.q.get(timeout=1.0)
+                    if chunk is None:
+                        self.eof = True
+                        break
+                    self.buffer = chunk
+                    break
+                except queue.Empty:
+                    if self.stop_event.is_set():
+                        self.eof = True
+                        break
+
+        if not self.buffer:
+            return b""
+
+        num_bytes = min(size, len(self.buffer))
+        chunk = self.buffer[:num_bytes]
+        self.buffer = self.buffer[num_bytes:]
+        return chunk
+
+
+def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_size: int = 1024 * 1024):
+    try:
+        while not stop_event.is_set():
+            data = stream.read(chunk_size)
+            if not data:
+                break
+            while not stop_event.is_set():
+                try:
+                    q.put(data, timeout=1.0)
+                    break
+                except queue.Full:
+                    continue
+    except Exception as e:
+        print(f"Error in reader thread: {e}")
+    finally:
+        q.put(None)
+
+
+def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, pipe_to_gzip: bool = False) -> str:
     write_log(log_path, f"INFO  Starting streaming backup to {storage['type']}: {remote_name}")
     
+    processes = []
     with open(log_path, "a") as err_file:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=err_file,
-            env=env
+        try:
+            if pipe_to_gzip:
+                p_dump = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=err_file,
+                    env=env
+                )
+                processes.append(p_dump)
+                
+                p_gzip = subprocess.Popen(
+                    ["gzip", "-1"],
+                    stdin=p_dump.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=err_file
+                )
+                processes.append(p_gzip)
+                
+                p_dump.stdout.close()
+                stdout_stream = p_gzip.stdout
+            else:
+                p_dump = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=err_file,
+                    env=env
+                )
+                processes.append(p_dump)
+                stdout_stream = p_dump.stdout
+                
+        except Exception as e:
+            for p in processes:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+            raise RuntimeError(f"Failed to start subprocesses: {e}")
+
+        q = queue.Queue(maxsize=8)
+        stop_event = threading.Event()
+        
+        reader_thread = threading.Thread(
+            target=reader_thread_fn,
+            args=(stdout_stream, q, stop_event, 1024 * 1024)
         )
+        reader_thread.daemon = True
+        reader_thread.start()
+        
+        queue_reader = QueueReader(q, stop_event)
 
         try:
             if storage["type"] == "azure":
@@ -148,9 +284,9 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 container = client.get_container_client(storage["azure_container"])
                 container.upload_blob(
                     name=remote_name, 
-                    data=process.stdout, 
+                    data=queue_reader, 
                     overwrite=True,
-                    max_concurrency=4 
+                    max_concurrency=1
                 )
                 remote_path = f"azure://{storage['azure_container']}/{remote_name}"
             
@@ -163,18 +299,31 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 client = gcs.Client(credentials=creds)
                 bucket = client.bucket(storage["gcs_bucket"])
                 blob = bucket.blob(remote_name)
-                blob.upload_from_file(process.stdout, num_retries=3)
+                blob.chunk_size = 8 * 1024 * 1024  # 8MB chunk size to force resumable upload
+                blob.upload_from_file(queue_reader, num_retries=3)
                 remote_path = f"gcs://{storage['gcs_bucket']}/{remote_name}"
             else:
                 raise ValueError(f"Unknown storage type: {storage['type']}")
                 
         except Exception as e:
-            process.kill()
+            stop_event.set()
+            for p in processes:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
             raise RuntimeError(f"Streaming upload failed: {e}")
+        finally:
+            stop_event.set()
+            for p in processes:
+                try:
+                    p.wait()
+                except Exception:
+                    pass
 
-        process.wait()
-        if process.returncode != 0:
-            raise RuntimeError(f"Backup command failed with exit code {process.returncode}. Check logs.")
+        for p in processes:
+            if p.returncode != 0:
+                raise RuntimeError(f"Backup process failed with exit code {p.returncode}. Check logs.")
             
         write_log(log_path, f"INFO  Streaming upload successful.")
         return remote_path
@@ -203,7 +352,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 )
                 client = BlobServiceClient.from_connection_string(conn_str)
                 container = client.get_container_client(storage["azure_container"])
-                stream = container.download_blob(remote_name, max_concurrency=4)
+                stream = container.download_blob(remote_name, max_concurrency=1)
                 for chunk in stream.chunks():
                     process.stdin.write(chunk)
                 process.stdin.close()
@@ -232,6 +381,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
             
         write_log(log_path, f"INFO  Streaming restore successful.")
 
+
 # ─── MONGODB BACKUP ──────────────────────────────────────────────────────────
 
 def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str) -> str:
@@ -243,10 +393,11 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     backup_method = backup_info.get("backup_method", "full")
     incremental_field = backup_info.get("incremental_field", "")
     
+    gzip_path = shutil.which("gzip")
+    
     cmd = ["mongodump"] + mongo_cmd_args(m) + [
         f"--db={dbname}",
         "--archive",
-        "--gzip",
         "--numParallelCollections=1",
     ]
     if collection and collection != "full":
@@ -269,7 +420,15 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         else:
             write_log(log_path, f"INFO  No previous successful backup found. Falling back to Full Backup.")
             
-    return stream_backup_to_storage(cmd, os.environ.copy(), storage, remote_name, log_path)
+    pipe_to_gzip = False
+    if gzip_path:
+        pipe_to_gzip = True
+        write_log(log_path, "INFO  Using system gzip for fast compression level 1.")
+    else:
+        cmd.append("--gzip")
+        write_log(log_path, "INFO  gzip utility not found in PATH. Using native mongodump compression.")
+        
+    return stream_backup_to_storage(cmd, os.environ.copy(), storage, remote_name, log_path, pipe_to_gzip=pipe_to_gzip)
 
 
 # ─── MONGODB RESTORE ─────────────────────────────────────────────────────────
