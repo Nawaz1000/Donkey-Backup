@@ -527,16 +527,23 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     m = parse_mongo_uri(db)
     dbname = m["dbname"]
     if not dbname: raise ValueError("Database name is required for restore.")
-    
+
+    # backup_dbname is stored in remote_name path: backupid/backup.archive.ext
+    # We must use --nsInclude + --nsFrom/--nsTo to remap any source dbname → target dbname
+    # Without this, if backup was made from a db with different name, mongorestore silently restores 0 docs
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
         "--archive",
         "--numParallelCollections=4",
-        f"--db={dbname}",
+        # Remap ALL namespaces from any source db → target dbname
+        "--nsFrom=*.*",
+        f"--nsTo={dbname}.*",
+        "--verbose=1",  # Log document counts per collection
     ]
     if drop_existing:
         cmd.append("--drop")
     if collection and collection != "full":
-        cmd += [f"--collection={collection}"]
+        # Only restore specific collection
+        cmd += [f"--nsInclude=*.{collection}"]
         
     decompression_cmd = None
     if compression == "zstd":
@@ -551,6 +558,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         cmd.append("--gzip")
     # else: unknown compression — attempt restore without flag (best-effort)
         
+    write_log(log_path, f"INFO  mongorestore cmd: {' '.join(cmd)}")
     stream_restore_from_storage(cmd, os.environ.copy(), storage, remote_name, log_path, decompression_cmd=decompression_cmd)
 
 
