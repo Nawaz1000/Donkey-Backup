@@ -147,38 +147,40 @@ class QueueReader(io.RawIOBase):
         return False
 
     def readinto(self, b):
+        size = len(b)
+        
+        # 1. Block and wait for at least some data if buffer is empty (NO lock held while waiting)
+        if self.buffer_size == 0 and not self.eof:
+            while not self.eof:
+                try:
+                    chunk = self.q.get(timeout=1.0)
+                    with self.lock:
+                        if chunk is None:
+                            self.eof = True
+                        else:
+                            self.buffer.append(chunk)
+                            self.buffer_size += len(chunk)
+                    break
+                except queue.Empty:
+                    if self.stop_event.is_set():
+                        with self.lock:
+                            self.eof = True
+                        break
+
+        # 2. Drain any available chunks without blocking to fill up to size (no lock needed for q.get_nowait loop)
+        while self.buffer_size < size and not self.eof:
+            try:
+                chunk = self.q.get_nowait()
+                with self.lock:
+                    if chunk is None:
+                        self.eof = True
+                    else:
+                        self.buffer.append(chunk)
+                        self.buffer_size += len(chunk)
+            except queue.Empty:
+                break
+
         with self.lock:
-            size = len(b)
-            
-            # 1. Block and wait for at least some data if buffer is empty
-            if self.buffer_size == 0 and not self.eof:
-                while not self.eof:
-                    try:
-                        chunk = self.q.get(timeout=1.0)
-                        if chunk is None:
-                            self.eof = True
-                            break
-                        self.buffer.append(chunk)
-                        self.buffer_size += len(chunk)
-                        break
-                    except queue.Empty:
-                        if self.stop_event.is_set():
-                            self.eof = True
-                            break
-
-            # 2. Drain any available chunks without blocking to fill up to size
-            if self.buffer_size > 0 and self.buffer_size < size and not self.eof:
-                while self.buffer_size < size:
-                    try:
-                        chunk = self.q.get_nowait()
-                        if chunk is None:
-                            self.eof = True
-                            break
-                        self.buffer.append(chunk)
-                        self.buffer_size += len(chunk)
-                    except queue.Empty:
-                        break
-
             if self.buffer_size == 0:
                 return 0  # EOF
 
@@ -430,7 +432,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     f"AccountKey={storage['azure_account_key']};"
                     f"EndpointSuffix=core.windows.net"
                 )
-                client = BlobServiceClient.from_connection_string(conn_str)
+                client = BlobServiceClient.from_connection_string(conn_str, max_single_get_size=16 * 1024 * 1024, max_chunk_get_size=16 * 1024 * 1024)
                 container = client.get_container_client(storage["azure_container"])
                 stream = container.download_blob(remote_name, max_concurrency=4)
                 for chunk in stream.chunks():
@@ -446,6 +448,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 client = gcs.Client(credentials=creds)
                 bucket = client.bucket(storage["gcs_bucket"])
                 blob = bucket.blob(remote_name)
+                blob.chunk_size = 16 * 1024 * 1024  # 16MB chunks for fast resumable download
                 blob.download_to_file(stdin_stream)
                 stdin_stream.close()
             else:
@@ -527,7 +530,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
         "--archive",
-        "--numParallelCollections=1",
+        "--numParallelCollections=4",
         f"--db={dbname}",
     ]
     if drop_existing:
@@ -537,7 +540,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         
     decompression_cmd = None
     if compression == "zstd":
-        decompression_cmd = ["zstd", "-d", "-c"]
+        decompression_cmd = ["zstd", "-d", "-c", "--threads=0"]
     elif compression in ("pigz", "gzip"):
         if shutil.which("pigz"):
             decompression_cmd = ["pigz", "-d", "-c"]
@@ -610,7 +613,7 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
         
     decompression_cmd = None
     if compression == "zstd":
-        decompression_cmd = ["zstd", "-d", "-c"]
+        decompression_cmd = ["zstd", "-d", "-c", "--threads=0"]
     elif compression in ("pigz", "gzip"):
         if shutil.which("pigz"):
             decompression_cmd = ["pigz", "-d", "-c"]
