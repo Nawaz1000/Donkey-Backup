@@ -332,6 +332,9 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                     overwrite=True,
                     max_concurrency=4
                 )
+                # Fetch actual size after upload
+                blob_props = container.get_blob_client(remote_name).get_blob_properties()
+                stream_backup_to_storage.last_size_bytes = blob_props.size
                 remote_path = f"azure://{storage['azure_container']}/{remote_name}"
             
             elif storage["type"] == "gcs":
@@ -345,6 +348,9 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 blob = bucket.blob(remote_name)
                 blob.chunk_size = 16 * 1024 * 1024  # 16MB chunk size to force resumable upload and speed up uploads
                 blob.upload_from_file(queue_reader, num_retries=3)
+                # Fetch actual size after upload
+                blob.reload()
+                stream_backup_to_storage.last_size_bytes = blob.size
                 remote_path = f"gcs://{storage['gcs_bucket']}/{remote_name}"
             else:
                 raise ValueError(f"Unknown storage type: {storage['type']}")
@@ -451,10 +457,16 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 except Exception: pass
             raise RuntimeError(f"Streaming download failed: {e}")
 
-        for p in processes:
+        # Wait for processes in reverse order (restore first, then decompressor)
+        # This ensures the restore process can finish reading before we check decompressor
+        for p in reversed(processes):
             p.wait()
-            if p.returncode != 0:
-                raise RuntimeError(f"Restore command failed with exit code {p.returncode}. Check logs.")
+
+        # Check return codes — mongorestore exit code is the authoritative signal
+        # p_restore is always last in the processes list
+        p_restore = processes[-1]
+        if p_restore.returncode != 0:
+            raise RuntimeError(f"Restore command failed with exit code {p_restore.returncode}. Check logs.")
             
         write_log(log_path, f"INFO  Streaming restore successful.")
 
@@ -531,9 +543,10 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
             decompression_cmd = ["pigz", "-d", "-c"]
         elif shutil.which("gzip"):
             decompression_cmd = ["gzip", "-d", "-c"]
-    else:
-        # Native or old backup: let mongorestore handle it using --gzip
+    elif compression in ("native", None):
+        # Native mongodump --gzip was used, let mongorestore decompress itself
         cmd.append("--gzip")
+    # else: unknown compression — attempt restore without flag (best-effort)
         
     stream_restore_from_storage(cmd, os.environ.copy(), storage, remote_name, log_path, decompression_cmd=decompression_cmd)
 
@@ -681,7 +694,9 @@ def do_backup(backup_id: str):
         else:
             return fail(f"Unsupported DB type: {db['type']}")
 
-        size_mb = 0  # Unknown since we streamed it directly
+        # Fetch actual uploaded size from storage (set by stream_backup_to_storage)
+        raw_bytes = getattr(stream_backup_to_storage, "last_size_bytes", 0) or 0
+        size_mb = round(raw_bytes / (1024 * 1024), 2)
 
         duration = int((datetime.utcnow() - start).total_seconds())
         write_log(log_path, f"=== BACKUP COMPLETE | size={size_mb}MB | duration={duration}s ===")
