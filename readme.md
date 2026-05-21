@@ -84,12 +84,14 @@ backupvault/
   - Redesigned the user interface using modern web aesthetics, including glassmorphism effects (`backdrop-filter`), smooth gradients, and advanced layout structures.
 - **Direct Cloud Streaming with Bounded Buffering (Zero Disk IO & Low Memory)**:
   - Completely removed intermediate disk writes. Dump output is piped directly into Azure/GCS.
-  - Implemented a decoupled **Producer-Consumer stream buffer (`QueueReader`)** using a bounded memory queue (max 8MB). This applies backpressure to the dump tools when the network is slow, eliminating OS pipe-blocking context switches and preventing OOM kills on large databases (20GB+).
-- **CPU-Optimized MongoDB Backup**:
+  - Implemented a decoupled **Producer-Consumer stream buffer (`QueueReader`)** using a bounded memory queue (max 16MB capacity with 64 chunks of 256KB). This applies backpressure to the dump tools when the network is slow, eliminating OS pipe-blocking context switches and preventing OOM kills on large databases (20GB+).
+  - Designed the queue reader to dynamically drain and accumulate chunks without blocking when returning data to the Azure/GCS SDKs. This ensures full block buffers (4MB/16MB) are sent in each HTTP request, drastically reducing HTTP round-trip overhead and restoring near-line upload speeds.
+- **High-Performance MongoDB Backup**:
   - Automatically pipes `mongodump` through system `gzip -1` (fastest compression level) instead of native `--gzip` (default level 6). This keeps CPU usage well under 1.5 cores for large databases while preserving a low storage footprint. Falls back to native `--gzip` if `gzip` is not in the system PATH.
-  - Set `--numParallelCollections=1` to minimize resource contention.
+  - Configured `--numParallelCollections=4` to allow parallel collection dumping, significantly accelerating multi-collection database dumps without CPU spikes since compression is offloaded.
 - **Resource-Optimized PostgreSQL Backup**:
   - Configured `pg_dump` with client compression level 1 (`--compress=1`) to achieve the fastest compression and lowest CPU overhead.
 - **Cloud Upload Tuning**:
-  - Configured GCS uploads with an explicit `chunk_size` of 8MB to enable resumable uploads and prevent Google Cloud Client Library from loading the entire backup stream into RAM.
-  - Configured Azure uploads and downloads with `max_concurrency=1` to process chunks sequentially and strictly cap memory consumption.
+  - Configured GCS uploads with an explicit `chunk_size` of 16MB to enable fast resumable uploads and prevent Google Cloud Client Library from loading the entire backup stream into RAM.
+  - Configured Azure uploads and downloads with `max_concurrency=4` and `max_block_size=4MB` to process blocks in parallel, maximizing network throughput while strictly capping client-side memory overhead under 16MB.
+

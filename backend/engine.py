@@ -143,6 +143,9 @@ class QueueReader(io.RawIOBase):
         return False
 
     def readinto(self, b):
+        size = len(b)
+        
+        # 1. If buffer is empty, block until we get at least one chunk or hit EOF
         if not self.buffer and not self.eof:
             while not self.eof:
                 try:
@@ -157,10 +160,22 @@ class QueueReader(io.RawIOBase):
                         self.eof = True
                         break
 
+        # 2. Drain any already-available chunks without blocking to accumulate up to 'size'
+        if self.buffer and len(self.buffer) < size and not self.eof:
+            while len(self.buffer) < size:
+                try:
+                    chunk = self.q.get_nowait()
+                    if chunk is None:
+                        self.eof = True
+                        break
+                    self.buffer += chunk
+                except queue.Empty:
+                    break
+
         if not self.buffer:
             return 0  # EOF
 
-        num_bytes = min(len(b), len(self.buffer))
+        num_bytes = min(size, len(self.buffer))
         b[:num_bytes] = self.buffer[:num_bytes]
         self.buffer = self.buffer[num_bytes:]
         return num_bytes
@@ -169,12 +184,13 @@ class QueueReader(io.RawIOBase):
         if size is None or size < 0:
             res = []
             while not self.eof:
-                chunk = self.read(4096)
+                chunk = self.read(65536)
                 if not chunk:
                     break
                 res.append(chunk)
             return b"".join(res)
 
+        # 1. If buffer is empty, block until we get at least one chunk or hit EOF
         if not self.buffer and not self.eof:
             while not self.eof:
                 try:
@@ -188,6 +204,18 @@ class QueueReader(io.RawIOBase):
                     if self.stop_event.is_set():
                         self.eof = True
                         break
+
+        # 2. Drain any already-available chunks without blocking to accumulate up to 'size'
+        if self.buffer and len(self.buffer) < size and not self.eof:
+            while len(self.buffer) < size:
+                try:
+                    chunk = self.q.get_nowait()
+                    if chunk is None:
+                        self.eof = True
+                        break
+                    self.buffer += chunk
+                except queue.Empty:
+                    break
 
         if not self.buffer:
             return b""
@@ -259,12 +287,12 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                     pass
             raise RuntimeError(f"Failed to start subprocesses: {e}")
 
-        q = queue.Queue(maxsize=8)
+        q = queue.Queue(maxsize=64)
         stop_event = threading.Event()
         
         reader_thread = threading.Thread(
             target=reader_thread_fn,
-            args=(stdout_stream, q, stop_event, 1024 * 1024)
+            args=(stdout_stream, q, stop_event, 256 * 1024)
         )
         reader_thread.daemon = True
         reader_thread.start()
@@ -286,7 +314,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                     name=remote_name, 
                     data=queue_reader, 
                     overwrite=True,
-                    max_concurrency=1
+                    max_concurrency=4,
+                    max_block_size=4 * 1024 * 1024
                 )
                 remote_path = f"azure://{storage['azure_container']}/{remote_name}"
             
@@ -299,7 +328,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 client = gcs.Client(credentials=creds)
                 bucket = client.bucket(storage["gcs_bucket"])
                 blob = bucket.blob(remote_name)
-                blob.chunk_size = 8 * 1024 * 1024  # 8MB chunk size to force resumable upload
+                blob.chunk_size = 16 * 1024 * 1024  # 16MB chunk size to force resumable upload and speed up uploads
                 blob.upload_from_file(queue_reader, num_retries=3)
                 remote_path = f"gcs://{storage['gcs_bucket']}/{remote_name}"
             else:
@@ -352,7 +381,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 )
                 client = BlobServiceClient.from_connection_string(conn_str)
                 container = client.get_container_client(storage["azure_container"])
-                stream = container.download_blob(remote_name, max_concurrency=1)
+                stream = container.download_blob(remote_name, max_concurrency=4)
                 for chunk in stream.chunks():
                     process.stdin.write(chunk)
                 process.stdin.close()
@@ -398,7 +427,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     cmd = ["mongodump"] + mongo_cmd_args(m) + [
         f"--db={dbname}",
         "--archive",
-        "--numParallelCollections=1",
+        "--numParallelCollections=4",
     ]
     if collection and collection != "full":
         cmd += [f"--collection={collection}"]
