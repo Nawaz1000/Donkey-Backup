@@ -324,14 +324,13 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                     f"AccountKey={storage['azure_account_key']};"
                     f"EndpointSuffix=core.windows.net"
                 )
-                client = BlobServiceClient.from_connection_string(conn_str)
+                client = BlobServiceClient.from_connection_string(conn_str, max_block_size=4 * 1024 * 1024)
                 container = client.get_container_client(storage["azure_container"])
                 container.upload_blob(
                     name=remote_name, 
                     data=queue_reader, 
                     overwrite=True,
-                    max_concurrency=4,
-                    max_block_size=4 * 1024 * 1024
+                    max_concurrency=4
                 )
                 remote_path = f"azure://{storage['azure_container']}/{remote_name}"
             
