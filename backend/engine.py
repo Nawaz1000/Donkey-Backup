@@ -523,28 +523,35 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
 
 # ─── MONGODB RESTORE ─────────────────────────────────────────────────────────
 
-def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None):
+def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None, source_dbname: str = None):
     m = parse_mongo_uri(db)
     dbname = m["dbname"]
     if not dbname: raise ValueError("Database name is required for restore.")
 
-    # backup_dbname is stored in remote_name path: backupid/backup.archive.ext
-    # We must use --nsInclude + --nsFrom/--nsTo to remap any source dbname → target dbname
-    # Without this, if backup was made from a db with different name, mongorestore silently restores 0 docs
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
         "--archive",
         "--numParallelCollections=4",
-        # Remap ALL namespaces from any source db → target dbname
-        "--nsFrom=*.*",
-        f"--nsTo={dbname}.*",
-        "--verbose=1",  # Log document counts per collection
+        "--verbose=1",
     ]
+
+    # If source db name differs from target, use nsFrom/nsTo for remapping
+    # If same (or unknown), use simple --db flag
+    if source_dbname and source_dbname != dbname:
+        write_log(log_path, f"INFO  DB name mismatch: backup='{source_dbname}' target='{dbname}' — using namespace remapping")
+        cmd += [
+            f"--nsFrom={source_dbname}.*",
+            f"--nsTo={dbname}.*",
+        ]
+        if collection and collection != "full":
+            cmd += [f"--nsInclude={source_dbname}.{collection}"]
+    else:
+        cmd += [f"--db={dbname}"]
+        if collection and collection != "full":
+            cmd += [f"--collection={collection}"]
+
     if drop_existing:
         cmd.append("--drop")
-    if collection and collection != "full":
-        # Only restore specific collection
-        cmd += [f"--nsInclude=*.{collection}"]
-        
+
     decompression_cmd = None
     if compression == "zstd":
         decompression_cmd = ["zstd", "-d", "-c", "--threads=0"]
@@ -554,10 +561,8 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         elif shutil.which("gzip"):
             decompression_cmd = ["gzip", "-d", "-c"]
     elif compression in ("native", None):
-        # Native mongodump --gzip was used, let mongorestore decompress itself
         cmd.append("--gzip")
-    # else: unknown compression — attempt restore without flag (best-effort)
-        
+
     write_log(log_path, f"INFO  mongorestore cmd: {' '.join(cmd)}")
     stream_restore_from_storage(cmd, os.environ.copy(), storage, remote_name, log_path, decompression_cmd=decompression_cmd)
 
@@ -700,6 +705,9 @@ def do_backup(backup_id: str):
 
         if db["type"] == "mongodb":
             remote_path = run_mongo_backup(db, backup, storage, remote_name, log_path)
+            # Save source dbname so restore can correctly remap namespaces
+            m = parse_mongo_uri(db)
+            source_dbname = m["dbname"]
         elif db["type"] == "postgresql":
             remote_path = run_pg_backup(db, backup, storage, remote_name, log_path)
         else:
@@ -718,6 +726,7 @@ def do_backup(backup_id: str):
             status="completed", size_mb=size_mb,
             remote_path=remote_path, remote_name=remote_name,
             compression=compression,
+            source_dbname=source_dbname if db["type"] == "mongodb" else None,
             logs=logs, error=None,
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=duration
@@ -788,9 +797,10 @@ def do_restore(restore_id: str):
             target_db = {**target_db, "database_name": new_dbname}
 
         compression = backup.get("compression")
+        source_dbname = backup.get("source_dbname")  # saved at backup time
 
         if target_db["type"] == "mongodb":
-            run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression)
+            run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname)
         elif target_db["type"] == "postgresql":
             run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression)
         else:
