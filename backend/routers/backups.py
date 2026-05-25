@@ -16,12 +16,14 @@ class BackupCreate(BaseModel):
     collection: Optional[str] = ""
     backup_method: Literal["full", "incremental"] = "full"
     incremental_field: Optional[str] = None
+    indexing_mode: Literal["with_index", "without_index", "only_index"] = "with_index"
 
 class RestoreRequest(BaseModel):
     backup_id: str
     target_database_id: str
     new_database: bool = False
     new_database_name: Optional[str] = None
+    indexing_mode: Literal["with_index", "without_index", "only_index"] = "with_index"
 
 @router.get("/")
 def list_backups(user=Depends(get_current_user)):
@@ -62,6 +64,7 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
         "collection": req.collection or "full",
         "backup_method": req.backup_method,
         "incremental_field": req.incremental_field,
+        "indexing_mode": req.indexing_mode,
         "status": "running",
         "size_mb": None,
         "remote_path": None,
@@ -95,11 +98,45 @@ def get_backup_logs(backup_id: str, user=Depends(get_current_user)):
     }
 
 @router.delete("/{backup_id}")
-def delete_backup(backup_id: str, user=Depends(get_current_user)):
+def delete_backup(backup_id: str, delete_from_remote: bool = False, user=Depends(get_current_user)):
     backups = read_json("data/backups.json")
     dbs = read_json("data/databases.json")
     user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
-    backups = [b for b in backups if not (b["id"] == backup_id and b["database_id"] in user_db_ids)]
+    
+    backup = next((b for b in backups if b["id"] == backup_id and b["database_id"] in user_db_ids), None)
+    if not backup:
+        raise HTTPException(404, "Backup not found")
+        
+    if delete_from_remote and backup.get("remote_name"):
+        try:
+            storages = read_json("data/storages.json")
+            storage = next((s for s in storages if s["id"] == backup["storage_id"]), None)
+            if storage:
+                if storage["type"] == "azure":
+                    from azure.storage.blob import BlobServiceClient
+                    conn_str = (
+                        f"DefaultEndpointsProtocol=https;"
+                        f"AccountName={storage['azure_account_name']};"
+                        f"AccountKey={storage['azure_account_key']};"
+                        f"EndpointSuffix=core.windows.net"
+                    )
+                    client = BlobServiceClient.from_connection_string(conn_str)
+                    container = client.get_container_client(storage["azure_container"])
+                    container.delete_blob(backup["remote_name"])
+                elif storage["type"] == "gcs":
+                    import json
+                    from google.cloud import storage as gcs
+                    from google.oauth2 import service_account
+                    creds_dict = json.loads(storage["gcs_credentials_json"])
+                    creds = service_account.Credentials.from_service_account_info(creds_dict)
+                    client = gcs.Client(credentials=creds)
+                    bucket = client.bucket(storage["gcs_bucket"])
+                    blob = bucket.blob(backup["remote_name"])
+                    blob.delete()
+        except Exception as e:
+            print(f"Failed to delete remote backup: {e}")
+
+    backups = [b for b in backups if b["id"] != backup_id]
     write_json("data/backups.json", backups)
     return {"message": "Deleted"}
 
@@ -123,10 +160,14 @@ def delete_restore(restore_id: str, user=Depends(get_current_user)):
 def backup_stats(user=Depends(get_current_user)):
     backups = read_json("data/backups.json")
     dbs = read_json("data/databases.json")
+    if not os.path.exists("data/restores.json"):
+        write_json("data/restores.json", [])
+    restores = read_json("data/restores.json")
     user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
     user_backups = [b for b in backups if b["database_id"] in user_db_ids]
     completed = [b for b in user_backups if b["status"] == "completed"]
     total_size = sum(b.get("size_mb", 0) or 0 for b in completed)
+    user_restores = [r for r in restores if r["target_database_id"] in user_db_ids]
     return {
         "total": len(user_backups),
         "completed": len(completed),
@@ -134,6 +175,7 @@ def backup_stats(user=Depends(get_current_user)):
         "failed": len([b for b in user_backups if b["status"] == "failed"]),
         "total_size_mb": round(total_size, 2),
         "databases": len(user_db_ids),
+        "total_restores": len(user_restores),
     }
 
 @router.get("/restores")
@@ -205,6 +247,7 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
         "target_database_id": req.target_database_id,
         "new_database": req.new_database,
         "new_database_name": req.new_database_name if req.new_database else None,
+        "indexing_mode": req.indexing_mode,
         "status": "running",
         "error": None,
         "started_at": datetime.utcnow().isoformat(),

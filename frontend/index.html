@@ -377,6 +377,11 @@ tr:hover td{background:rgba(255,255,255,0.015)}
             <div class="stat-label">Databases</div>
             <div class="stat-value" id="stat-dbs">—</div>
           </div>
+          <div class="stat-card orange">
+            <div class="stat-icon"><i data-lucide="rotate-ccw"></i></div>
+            <div class="stat-label">Total Restores</div>
+            <div class="stat-value" id="stat-restores">—</div>
+          </div>
         </div>
         <div class="card">
           <div class="card-header">
@@ -667,6 +672,14 @@ tr:hover td{background:rgba(255,255,255,0.015)}
         <option value="incremental">Incremental Backup</option>
       </select>
     </div>
+    <div class="form-group">
+      <label>Indexing Mode</label>
+      <select id="bk-indexing-mode">
+        <option value="with_index">Include Indexes (Default)</option>
+        <option value="without_index">Exclude Indexes (Data Only)</option>
+        <option value="only_index">Only Indexes (Schema Only)</option>
+      </select>
+    </div>
     <div class="form-group" id="bk-incremental-group" style="display:none">
       <label>Incremental Field Name</label>
       <input type="text" id="bk-incremental-field" placeholder="e.g. updated_at"/>
@@ -784,6 +797,15 @@ tr:hover td{background:rgba(255,255,255,0.015)}
     </div>
 
     <!-- Existing DB select -->
+    <div class="form-group">
+      <label>Indexing Mode</label>
+      <select id="rs-indexing-mode">
+        <option value="with_index">Include Indexes (Default)</option>
+        <option value="without_index">Exclude Indexes (Data Only - FAST)</option>
+        <option value="only_index">Only Indexes (Schema Only)</option>
+      </select>
+    </div>
+
     <div id="rs-existing-fields" class="form-group">
       <label>Target Database Name <span style="color:var(--muted);font-size:11px">(fetched from server)</span></label>
       <select id="rs-target-dbname">
@@ -900,6 +922,7 @@ async function loadDashboard() {
     document.getElementById('stat-running').textContent = stats.running;
     document.getElementById('stat-size').textContent = stats.total_size_mb;
     document.getElementById('stat-dbs').textContent = stats.databases;
+    document.getElementById('stat-restores').textContent = stats.total_restores || 0;
     const backups = await apiFetch('/backups/');
     const tbody = document.getElementById('recent-backups-table');
     tbody.innerHTML = backups.slice(0,8).map(b=>`
@@ -1142,6 +1165,12 @@ async function loadBackups() {
         </div></td>
       </tr>`).join('')||emptyRow(8,'No backups yet. Click "Run Backup" to start.');
     lucide.createIcons();
+    
+    // Auto-resume live progress tracking for running backups
+    const runningBackup = backups.find(b => b.status === 'running');
+    if (runningBackup) {
+      simulateProgress(runningBackup.id, runningBackup.label);
+    }
   } catch(e) { toast(e.message,'error'); }
   finally { if(btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="refresh-cw" style="width:14px;height:14px"></i> Refresh'; lucide.createIcons(); } }
 }
@@ -1211,15 +1240,16 @@ async function runBackup() {
   if(!dbId){ toast('Select a database connection','error'); return; }
   if(!dbname){ toast('Select a database name','error'); return; }
   if(type === 'collection' && !collection){ toast('Select a collection','error'); return; }
+  const indexingMode = v('bk-indexing-mode');
   try { await apiFetch(`/databases/${dbId}`, {method:'PATCH', body: JSON.stringify({database_name: dbname})}); } catch(e){}
-  await startBackupNow(dbId, v('bk-storage'), label, collection);
+  await startBackupNow(dbId, v('bk-storage'), label, collection, indexingMode);
   closeModal('backup-modal');
 }
 
-async function startBackupNow(dbId, storageId, label, collection='') {
+async function startBackupNow(dbId, storageId, label, collection='', indexingMode='with_index') {
   try {
     const b = await apiFetch('/backups/',{method:'POST',body:JSON.stringify({
-      database_id:dbId, storage_id:storageId, label, collection
+      database_id:dbId, storage_id:storageId, label, collection, indexing_mode: indexingMode
     })});
     toast('Backup started!','info');
     showPage('backups');
@@ -1295,7 +1325,9 @@ function simulateProgress(backupId, label) {
 }
 
 async function deleteBackup(id) {
-  await apiFetch(`/backups/${id}`,{method:'DELETE'});
+  if(!confirm('Delete this backup history?')) return;
+  const deleteFromRemote = confirm('Do you also want to delete the backup file from remote storage?');
+  await apiFetch(`/backups/${id}?delete_from_remote=${deleteFromRemote}`,{method:'DELETE'});
   toast('Deleted','success'); loadBackups();
 }
 
@@ -1383,6 +1415,12 @@ async function loadRestores() {
         </div></td>
       </tr>`).join('')||emptyRow(7,'No restores yet. Click "New Restore" to restore a backup.');
     lucide.createIcons();
+    
+    // Auto-resume live tracking for running restores
+    const runningRestore = restores.find(r => r.status === 'running');
+    if (runningRestore) {
+      trackRestoreProgress(runningRestore.id);
+    }
   } catch(e) { toast(e.message,'error'); }
   finally { if(btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="refresh-cw" style="width:14px;height:14px"></i> Refresh'; lucide.createIcons(); } }
 }
@@ -1490,6 +1528,7 @@ async function runRestore() {
       target_database_id: targetDbId,
       new_database: isNew,
       new_database_name: isNew ? targetDbname : null,
+      indexing_mode: v('rs-indexing-mode')
     })});
     closeModal('restore-modal');
     toast(isNew ? `Creating "${targetDbname}" and restoring...` : 'Restore started!', 'info');

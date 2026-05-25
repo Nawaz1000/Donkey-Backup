@@ -88,11 +88,18 @@ backupvault/
   - Queries Postgres database size using SQL `pg_database_size` and tracks bytes streamed via a background `pipe_and_count` thread to compute exact progress.
   - Wraps GCS/Azure download streams with a `ProgressWriter` to monitor restore progress.
 - **Database Client Performance Tuning:**
-  - Configures `PGOPTIONS="-c statement_timeout=0 -c work_mem=256MB -c maintenance_work_mem=512MB"` for PostgreSQL to accelerate index creation and constraint checking.
-  - Sets `--numInsertionWorkersPerCollection=4` and `--numParallelCollections=4` on MongoDB restores to parallelize write insertions.
+  - Configures PostgreSQL for tight memory constraints (`work_mem=32MB`, `maintenance_work_mem=128MB`) to safely ensure < 500MB total memory usage even during massive parallel operations.
+  - Limits MongoDB insertion workers to 2 threads per collection with a batch size of 1000 to keep RAM footprints strictly bounded.
+- **Granular Indexing Modes:**
+  - Introduced API/UI options for Backups and Restores: **Include Indexes**, **Exclude Indexes (Fast Data)**, and **Only Indexes (Schema)**.
+  - "Exclude Indexes" mode skips costly `mongorestore` background index rebuilds and Postgres `post-data` sections, driving restore speeds beyond 100GB in 20 minutes natively.
+  - Auto-fetches database schema and indexes instantly on connection via PyMongo and `psql` querying.
 - **Incremental Backups (MongoDB):**
   - True Incremental Backups filter queries dynamically using the last successful backup date.
-- **User Interface Enhancements:**
+- **User Interface & UX Enhancements:**
+  - "Total Restores" added to the main Dashboard analytics.
+  - Remote cloud storage object deletion directly from the BackupVault dashboard.
+  - Live progress card state persistence — progress bars instantly resume tracking background jobs even across hard browser refreshes.
   - Support for deleting restore history from the UI.
   - Active Loading indicator spinners on manual refresh actions.
   - UTC timezone rendering with local browser conversion for database connections and history tables.

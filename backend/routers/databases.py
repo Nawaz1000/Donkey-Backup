@@ -226,7 +226,21 @@ def test_connection(db_id: str, user=Depends(get_current_user)):
             info = client.server_info()
             version = info.get("version", "?")
             db_list = [d for d in client.list_database_names() if d not in ("local","config")]
+            # Auto-fetch indexes
+            indexes = {}
+            for db_name in db_list[:10]: # Limit to avoid timeouts
+                try:
+                    for coll in client[db_name].list_collection_names():
+                        idx = client[db_name][coll].index_information()
+                        if idx: indexes[f"{db_name}.{coll}"] = idx
+                except:
+                    pass
             client.close()
+            
+            # Save indexes to db record
+            d["indexes"] = indexes
+            write_json("data/databases.json", dbs)
+            
             return {"success": True, "message": f"Connected to {db['name']} — MongoDB v{version} | {len(db_list)} databases found"}
         except Exception as e:
             raise HTTPException(400, f"Connection failed: {str(e)}")
@@ -245,6 +259,18 @@ def test_connection(db_id: str, user=Depends(get_current_user)):
             if result.returncode == 0:
                 lines = [l.strip() for l in result.stdout.strip().split('\n') if l.strip()]
                 version = lines[2] if len(lines) > 2 else "connected"
+                
+                # Auto-fetch indexes
+                idx_res = subprocess.run(
+                    ["psql", f"--host={db['host']}", f"--port={db['port']}",
+                     f"--username={db['username']}", f"--dbname={db['database_name']}",
+                     "--no-password", "--tuples-only", "-c", "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname='public';"],
+                    capture_output=True, text=True, env=env, timeout=10
+                )
+                if idx_res.returncode == 0:
+                    d["indexes"] = [i.strip() for i in idx_res.stdout.strip().split('\n') if i.strip()]
+                    write_json("data/databases.json", dbs)
+                
                 return {"success": True, "message": f"Connected to {db['name']} — {version[:80]}"}
             raise HTTPException(400, f"Connection failed: {result.stderr.strip()}")
         except Exception as e:
