@@ -691,7 +691,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     cmd = ["mongodump"] + mongo_cmd_args(m) + [
         f"--db={dbname}",
         "--archive",
-        "--numParallelCollections=8",
+        "--numParallelCollections=4",
     ]
     if collection and collection != "full":
         cmd += [f"--collection={collection}"]
@@ -719,7 +719,10 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         cmd.append("--gzip")
         write_log(log_path, "INFO  No fast compressor found in PATH. Using native mongodump compression.")
         
-    return stream_backup_to_storage(cmd, os.environ.copy(), storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
+    env = os.environ.copy()
+    env["GOGC"] = "20"
+    env["GOMAXPROCS"] = "1"
+    return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
 
 
 # ─── MONGODB RESTORE ─────────────────────────────────────────────────────────
@@ -750,8 +753,8 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
         "--archive",
         "--numParallelCollections=4",
-        "--numInsertionWorkersPerCollection=4",
-        "--batchSize=1000",
+        "--numInsertionWorkersPerCollection=1",
+        "--batchSize=100",
         "--verbose=1",
     ]
 
@@ -786,7 +789,10 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         cmd.append("--gzip")
 
     write_log(log_path, f"INFO  mongorestore cmd: {' '.join(cmd)}")
-    stream_restore_from_storage(cmd, os.environ.copy(), storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
+    env = os.environ.copy()
+    env["GOGC"] = "20"
+    env["GOMAXPROCS"] = "1"
+    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
 
 
 # ─── POSTGRESQL BACKUP ───────────────────────────────────────────────────────
@@ -857,7 +863,7 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
         write_log(log_path, "INFO  No fast compressor found in PATH. Using single-threaded native pg_dump compression.")
         
     env = pg_env(db)
-    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB"
+    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB"
         
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
 
@@ -899,7 +905,7 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
             decompression_cmd = ["gzip", "-d", "-c"]
             
     env = pg_env(db)
-    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB"
+    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB"
         
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
 

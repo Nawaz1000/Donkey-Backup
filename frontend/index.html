@@ -307,12 +307,9 @@ tr:hover td{background:rgba(255,255,255,0.015)}
 <body>
 
 <!-- APP -->
-<div id="hamburger-wrapper" style="position:fixed; top:20px; left:20px; z-index:50;">
-  <button class="btn btn-secondary btn-sm btn-icon" onclick="toggleSidebar()" style="border-color:transparent;background:transparent;box-shadow:none;color:var(--text)"><i data-lucide="menu"></i></button>
-</div>
 <div id="app">
   <div class="sidebar">
-    <div class="sidebar-logo" style="padding-top:60px;">
+    <div class="sidebar-logo">
       <div class="icon"><i data-lucide="database" style="width:20px;height:20px;color:#000"></i></div>
       <h1>Backup<span>Vault</span></h1>
     </div>
@@ -345,7 +342,7 @@ tr:hover td{background:rgba(255,255,255,0.015)}
   </div>
 
   <div class="main">
-    <div class="topbar" style="padding-left:70px;">
+    <div class="topbar">
       <h2 id="page-title" style="display:flex;align-items:center;gap:12px">
         <span><i data-lucide="layout-dashboard"></i> Dashboard</span>
       </h2>
@@ -1773,9 +1770,6 @@ function formatDuration(sec) {
   const h = Math.floor(m / 60);
   if (h > 0) return `${h}h ${m % 60}m ${s}s`;
   return `${m}m ${s}s`;
-}
-function toggleSidebar() {
-  document.querySelector('.sidebar').classList.toggle('collapsed');
 }
 
 function toast(msg, type='info') {
