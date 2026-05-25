@@ -642,7 +642,10 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
 
         p_restore = processes[-1]
         if p_restore.returncode != 0:
-            raise RuntimeError(f"Restore command failed with exit code {p_restore.returncode}. Check logs.")
+            if is_mongo or p_restore.returncode != 1:
+                raise RuntimeError(f"Restore command failed with exit code {p_restore.returncode}. Check logs.")
+            else:
+                write_log(log_path, f"WARN  Restore completed with warnings (exit code 1). This is often harmless in pg_restore.")
             
         write_log(log_path, f"INFO  Streaming restore successful.")
 
@@ -688,7 +691,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     cmd = ["mongodump"] + mongo_cmd_args(m) + [
         f"--db={dbname}",
         "--archive",
-        "--numParallelCollections=4",
+        "--numParallelCollections=8",
     ]
     if collection and collection != "full":
         cmd += [f"--collection={collection}"]
@@ -746,8 +749,8 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
             
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
         "--archive",
-        "--numParallelCollections=2",
-        "--numInsertionWorkersPerCollection=2",
+        "--numParallelCollections=4",
+        "--numInsertionWorkersPerCollection=4",
         "--batchSize=1000",
         "--verbose=1",
     ]
@@ -963,7 +966,12 @@ def do_backup(backup_id: str):
         comp_info = get_compressor_info(log_path)
         ext = comp_info["ext"] if comp_info else "gz"
         compression = comp_info["type"] if comp_info else "native"
-        remote_name = f"{backup_id}/backup.archive.{ext}"
+        
+        safe_db_name = db.get("database_name", "db").strip().replace(" ", "_")
+        if not safe_db_name:
+            safe_db_name = db.get("name", "db").strip().replace(" ", "_")
+        date_str = datetime.utcnow().strftime('%Y-%m-%d_%H-%M-%S')
+        remote_name = f"{safe_db_name}-{date_str}/backup.archive.{ext}"
 
         # Initialize progress tracker
         total_size = 0

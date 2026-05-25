@@ -307,9 +307,12 @@ tr:hover td{background:rgba(255,255,255,0.015)}
 <body>
 
 <!-- APP -->
+<div id="hamburger-wrapper" style="position:fixed; top:20px; left:20px; z-index:50;">
+  <button class="btn btn-secondary btn-sm btn-icon" onclick="toggleSidebar()" style="border-color:transparent;background:transparent;box-shadow:none;color:var(--text)"><i data-lucide="menu"></i></button>
+</div>
 <div id="app">
   <div class="sidebar">
-    <div class="sidebar-logo">
+    <div class="sidebar-logo" style="padding-top:60px;">
       <div class="icon"><i data-lucide="database" style="width:20px;height:20px;color:#000"></i></div>
       <h1>Backup<span>Vault</span></h1>
     </div>
@@ -344,9 +347,8 @@ tr:hover td{background:rgba(255,255,255,0.015)}
   </div>
 
   <div class="main">
-    <div class="topbar">
+    <div class="topbar" style="padding-left:70px;">
       <h2 id="page-title" style="display:flex;align-items:center;gap:12px">
-        <button class="btn btn-secondary btn-sm btn-icon" onclick="toggleSidebar()" style="border-color:transparent;background:transparent;box-shadow:none;color:var(--text)"><i data-lucide="menu"></i></button>
         <span><i data-lucide="layout-dashboard"></i> Dashboard</span>
       </h2>
       <div class="topbar-actions" id="topbar-action"></div>
@@ -751,8 +753,19 @@ tr:hover td{background:rgba(255,255,255,0.015)}
         </select>
       </div>
       <div class="form-group">
-        <label>Time (HH:MM)</label>
-        <input type="time" id="sc-time" value="02:00"/>
+        <label>Time</label>
+        <div style="display:flex;gap:4px">
+          <select id="sc-time-hr" style="flex:1">
+            <option value="01">01</option><option value="02" selected>02</option><option value="03">03</option><option value="04">04</option><option value="05">05</option><option value="06">06</option><option value="07">07</option><option value="08">08</option><option value="09">09</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
+          </select>
+          <select id="sc-time-min" style="flex:1">
+            <option value="00">00</option><option value="15">15</option><option value="30">30</option><option value="45">45</option>
+          </select>
+          <select id="sc-time-ampm" style="flex:1">
+            <option value="AM">AM</option>
+            <option value="PM">PM</option>
+          </select>
+        </div>
       </div>
     </div>
     <div id="sc-mixed-info" style="display:none">
@@ -894,7 +907,6 @@ function showPage(name) {
   });
   if(pageTitles[name]){
     document.getElementById('page-title').innerHTML = `
-      <button class="btn btn-secondary btn-sm btn-icon" onclick="toggleSidebar()" style="border-color:transparent;background:transparent;box-shadow:none;color:var(--text)"><i data-lucide="menu"></i></button>
       <span><i data-lucide="${pageIcons[name]}"></i> ${pageTitles[name]}</span>
     `;
   }
@@ -1381,10 +1393,18 @@ async function loadSchedules() {
 async function addSchedule() {
   const freq = v('sc-freq');
   const method = v('sc-method');
+
+  let hr = parseInt(v('sc-time-hr'));
+  const min = v('sc-time-min');
+  const ampm = v('sc-time-ampm');
+  if (ampm === 'PM' && hr < 12) hr += 12;
+  if (ampm === 'AM' && hr === 12) hr = 0;
+  const timeStr = String(hr).padStart(2, '0') + ':' + min;
+
   try {
     await apiFetch('/schedules/',{method:'POST',body:JSON.stringify({
       name:v('sc-name'),database_id:v('sc-db'),storage_id:v('sc-storage'),
-      frequency:freq,time:v('sc-time'),enabled:true,
+      frequency:freq,time:timeStr,enabled:true,
       backup_method: freq === 'weekly_mixed' ? 'full' : method,
       incremental_field: v('sc-incremental-field') || null
     })});
