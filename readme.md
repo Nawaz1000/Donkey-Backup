@@ -97,8 +97,11 @@ backupvault/
 - **Incremental Backups (MongoDB):**
   - True Incremental Backups filter queries dynamically using the last successful backup date.
 - **User Interface & UX Enhancements:**
+  - **Collapsible Sidebar:** Hamburger menu toggle to open/close the sidebar for a wider workspace view.
+  - **Smart Duration Formatting:** Durations auto-format to `7m 54s`, `1h 23m 45s`, or raw seconds (if under 60s) instead of always showing raw seconds.
+  - **Detailed Database Info in History Tables:** Backup and Restore tables now display the connection name, actual database name, and collection/table name for full visibility into what was backed up or restored.
   - "Total Restores" added to the main Dashboard analytics.
-  - Remote cloud storage object deletion directly from the BackupVault dashboard.
+  - Remote cloud storage object deletion directly from the BackupVault dashboard with a dedicated "Delete from Bucket" button.
   - Live progress card state persistence — progress bars instantly resume tracking background jobs even across hard browser refreshes.
   - Support for deleting restore history from the UI.
   - Active Loading indicator spinners on manual refresh actions.

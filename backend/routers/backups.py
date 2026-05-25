@@ -37,6 +37,8 @@ def list_backups(user=Depends(get_current_user)):
             db = next((d for d in dbs if d["id"] == b["database_id"]), {})
             st = next((s for s in storages if s["id"] == b["storage_id"]), {})
             result.append({**b,
+                "connection_name": db.get("name",""),
+                "actual_db_name": db.get("database_name",""),
                 "database_name": db.get("name",""),
                 "database_type": db.get("type",""),
                 "storage_name": st.get("name",""),
@@ -192,6 +194,8 @@ def list_restores(user=Depends(get_current_user)):
             db = next((d for d in dbs if d["id"] == r["target_database_id"]), {})
             bk = next((b for b in backups if b["id"] == r["backup_id"]), {})
             result.append({**r,
+                "target_connection_name": db.get("name",""),
+                "target_actual_db_name": db.get("database_name",""),
                 "target_database_name": db.get("name",""),
                 "backup_label": bk.get("label",""),
                 "backup_collection": bk.get("collection","full"),
