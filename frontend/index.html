@@ -3,207 +3,385 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>BackupVault</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet"/>
+<title>BackupVault — Enterprise Database Backup</title>
+<meta name="description" content="BackupVault: Enterprise-grade database backup and restore for MongoDB and PostgreSQL with cloud storage integration."/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<link href="https://unpkg.com/lucide-static@0.344.0/font/lucide.css" rel="stylesheet"/>
+<script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#0a0c10;
-  --surface:#111318;
-  --surface2:#181c24;
-  --border:#1f2633;
-  --accent:#00e5a0;
-  --accent2:#0066ff;
-  --azure:#0089d6;
-  --gcs:#ea4335;
-  --pg:#336791;
-  --mongo:#47a248;
-  --text:#e8eaf0;
-  --muted:#6b7280;
-  --danger:#ff4757;
-  --warn:#ffa502;
-  --success:#00e5a0;
-  --radius:12px;
+  --bg:#06080d;
+  --bg2:#0c0f18;
+  --surface:rgba(14,17,28,0.75);
+  --surface-solid:#0e111c;
+  --surface2:rgba(20,25,40,0.7);
+  --surface3:rgba(28,35,55,0.5);
+  --border:rgba(255,255,255,0.06);
+  --border-hover:rgba(255,255,255,0.12);
+  --accent:#00d4aa;
+  --accent-light:#00ffcc;
+  --accent-dim:rgba(0,212,170,0.12);
+  --accent-glow:rgba(0,212,170,0.25);
+  --accent2:#6366f1;
+  --accent2-dim:rgba(99,102,241,0.12);
+  --azure:#3b82f6;
+  --gcs:#f97316;
+  --pg:#6366f1;
+  --mongo:#22c55e;
+  --text:#e8ecf4;
+  --text2:#c0c8d8;
+  --muted:#5b6380;
+  --danger:#ef4444;
+  --danger-dim:rgba(239,68,68,0.12);
+  --warn:#f59e0b;
+  --warn-dim:rgba(245,158,11,0.12);
+  --success:#00d4aa;
+  --success-dim:rgba(0,212,170,0.12);
+  --radius:14px;
+  --radius-sm:10px;
+  --radius-xs:8px;
+  --shadow-sm:0 2px 8px rgba(0,0,0,0.2);
+  --shadow-md:0 8px 32px rgba(0,0,0,0.3);
+  --shadow-lg:0 16px 64px rgba(0,0,0,0.4);
+  --transition:all 0.2s cubic-bezier(0.4,0,0.2,1);
 }
-body{background: linear-gradient(135deg, #0a0c10 0%, #1a1f2c 100%);font-family:'Syne',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
-.mono{font-family:'DM Mono',monospace}
 
+body{
+  background:var(--bg);
+  font-family:'Inter',system-ui,-apple-system,sans-serif;
+  color:var(--text);
+  min-height:100vh;
+  overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+}
 
-.form-group{margin-bottom:20px}
-.form-group label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}
-.form-group input,.form-group select,.form-group textarea{background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1);width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 16px;color:var(--text);font-family:'Syne',sans-serif;font-size:14px;outline:none;transition:.2s}
-.form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,229,160,.1)}
-.form-group select option{background:var(--surface2)}
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.2)}
+
+/* ── Form Elements ── */
+.form-group{margin-bottom:18px}
+.form-group label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.8px}
+.form-group input,.form-group select,.form-group textarea{
+  width:100%;background:rgba(255,255,255,0.03);
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:12px 16px;color:var(--text);font-family:'Inter',sans-serif;font-size:14px;
+  outline:none;transition:var(--transition);backdrop-filter:blur(8px);
+}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{
+  border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim),0 0 20px rgba(0,212,170,0.08);
+}
+.form-group input::placeholder{color:var(--muted);opacity:0.6}
+.form-group select option{background:var(--surface-solid);color:var(--text)}
 .form-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 24px;border-radius:10px;font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;border:none;transition:.2s;text-decoration:none}
-.btn-primary{background: linear-gradient(135deg, var(--accent), #00ffb3); color:#000; box-shadow: 0 4px 12px rgba(0,229,160,0.3); border:1px solid rgba(255,255,255,0.2);background:var(--accent);color:#000;width:100%;justify-content:center}
-.btn-primary:hover{transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,229,160,0.4);background:#00ffb3;transform:translateY(-1px)}
-.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
-.btn-secondary:hover{border-color:var(--accent);color:var(--accent)}
-.btn-danger{background:rgba(255,71,87,.15);color:var(--danger);border:1px solid rgba(255,71,87,.3)}
-.btn-danger:hover{background:rgba(255,71,87,.25)}
-.btn-sm{padding:8px 16px;font-size:13px}
-.btn-icon{padding:8px;border-radius:8px}
+
+/* ── Buttons ── */
+.btn{
+  display:inline-flex;align-items:center;gap:8px;padding:11px 22px;
+  border-radius:var(--radius-sm);font-family:'Inter',sans-serif;font-size:13px;
+  font-weight:600;cursor:pointer;border:none;transition:var(--transition);
+  text-decoration:none;position:relative;overflow:hidden;
+}
+.btn-primary{
+  background:linear-gradient(135deg,var(--accent),#00b894);color:#000;
+  box-shadow:0 2px 12px rgba(0,212,170,0.25);
+}
+.btn-primary:hover{
+  transform:translateY(-1px);box-shadow:0 4px 20px rgba(0,212,170,0.4);
+  background:linear-gradient(135deg,var(--accent-light),var(--accent));
+}
+.btn-primary:active{transform:translateY(0)}
+.btn-secondary{background:var(--surface3);color:var(--text2);border:1px solid var(--border)}
+.btn-secondary:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+.btn-danger{background:var(--danger-dim);color:var(--danger);border:1px solid rgba(239,68,68,0.2)}
+.btn-danger:hover{background:rgba(239,68,68,0.2);border-color:rgba(239,68,68,0.4)}
+.btn-sm{padding:8px 16px;font-size:12px}
+.btn-icon{padding:8px;border-radius:var(--radius-xs);width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center}
+.btn-full{width:100%;justify-content:center}
 .error-msg{color:var(--danger);font-size:13px;margin-top:8px;display:none}
 
-/* LAYOUT */
+/* ── Layout ── */
 #app{display:none;height:100vh;flex-direction:row}
-.sidebar{background: rgba(17,19,24,0.65); backdrop-filter: blur(20px); border-right: 1px solid rgba(255,255,255,0.05);width:240px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
-.sidebar-logo{padding:24px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
-.sidebar-logo .icon{width:36px;height:36px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px}
-.sidebar-logo h1{font-size:18px;font-weight:800}
-.sidebar-logo span{color:var(--accent)}
-nav{padding:16px 12px;flex:1}
-.nav-section{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;padding:0 8px;margin:16px 0 8px}
-.nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;cursor:pointer;color:var(--muted);font-size:14px;font-weight:600;transition:.15s;margin-bottom:2px}
-.nav-item:hover{background:var(--surface2);color:var(--text)}
-.nav-item.active{background:rgba(0,229,160,.1);color:var(--accent)}
-.nav-item .nav-icon{font-size:16px;width:20px;text-align:center}
+
+/* ── Sidebar ── */
+.sidebar{
+  width:260px;background:var(--surface);backdrop-filter:blur(24px);
+  border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;
+  position:relative;z-index:10;
+}
+.sidebar::after{
+  content:'';position:absolute;top:0;right:0;bottom:0;width:1px;
+  background:linear-gradient(180deg,var(--accent-dim),transparent 30%,transparent 70%,var(--accent2-dim));
+}
+.sidebar-logo{
+  padding:28px 24px;display:flex;align-items:center;gap:14px;
+  border-bottom:1px solid var(--border);
+}
+.sidebar-logo .icon{
+  width:40px;height:40px;background:linear-gradient(135deg,var(--accent),var(--accent2));
+  border-radius:12px;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 16px rgba(0,212,170,0.2);
+}
+.sidebar-logo .icon i{color:#000;width:20px;height:20px}
+.sidebar-logo h1{font-size:20px;font-weight:800;letter-spacing:-0.5px}
+.sidebar-logo span{background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+
+nav{padding:20px 16px;flex:1}
+.nav-section{
+  font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;
+  letter-spacing:1.5px;padding:0 12px;margin:20px 0 10px;
+}
+.nav-item{
+  display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:var(--radius-sm);
+  cursor:pointer;color:var(--muted);font-size:14px;font-weight:500;transition:var(--transition);
+  margin-bottom:2px;position:relative;
+}
+.nav-item:hover{background:rgba(255,255,255,0.04);color:var(--text2)}
+.nav-item.active{background:var(--accent-dim);color:var(--accent)}
+.nav-item.active::before{
+  content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);
+  width:3px;height:24px;background:var(--accent);border-radius:0 3px 3px 0;
+}
+.nav-item i{width:20px;height:20px;flex-shrink:0}
+
 .sidebar-footer{padding:16px;border-top:1px solid var(--border)}
-.user-info{display:flex;align-items:center;gap:10px;padding:10px;border-radius:10px;background:var(--surface2)}
-.avatar{width:32px;height:32px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#000;flex-shrink:0}
-.user-details{flex:1;min-width:0}
-.user-name{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.user-email{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.logout-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:4px;border-radius:6px;transition:.2s}
-.logout-btn:hover{color:var(--danger)}
+.version-info{
+  display:flex;align-items:center;gap:10px;padding:12px 14px;
+  border-radius:var(--radius-sm);background:rgba(255,255,255,0.02);
+  font-size:12px;color:var(--muted);
+}
+.version-info i{width:16px;height:16px;color:var(--accent)}
 
-.main{flex:1;overflow-y:auto;display:flex;flex-direction:column}
-.topbar{background: rgba(17,19,24,0.65); backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255,255,255,0.05);padding:20px 32px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--surface)}
-.topbar h2{font-size:20px;font-weight:800}
-.content{padding:32px;flex:1}
+/* ── Main Area ── */
+.main{flex:1;overflow-y:auto;display:flex;flex-direction:column;background:var(--bg2)}
+.topbar{
+  padding:20px 36px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+  background:var(--surface);backdrop-filter:blur(24px);
+  position:sticky;top:0;z-index:5;
+}
+.topbar h2{font-size:22px;font-weight:800;letter-spacing:-0.5px;display:flex;align-items:center;gap:12px}
+.topbar h2 i{width:24px;height:24px;color:var(--accent)}
+.topbar-actions{display:flex;align-items:center;gap:10px}
+.content{padding:28px 36px;flex:1}
 
-/* PAGES */
-.page{display:none}
-.page.active{display:block}
+/* ── Pages ── */
+.page{display:none}.page.active{display:block}
 
-/* STATS */
-.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:32px}
-.stat-card{background: rgba(17,19,24,0.65); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 4px 16px rgba(0,0,0,0.1);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;position:relative;overflow:hidden}
+/* ── Stats ── */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:28px}
+.stat-card{
+  background:var(--surface);backdrop-filter:blur(16px);border:1px solid var(--border);
+  border-radius:var(--radius);padding:22px;position:relative;overflow:hidden;
+  transition:var(--transition);cursor:default;
+}
+.stat-card:hover{border-color:var(--border-hover);transform:translateY(-2px);box-shadow:var(--shadow-md)}
 .stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
-.stat-card.green::before{background:var(--accent)}
-.stat-card.blue::before{background:var(--accent2)}
-.stat-card.orange::before{background:var(--warn)}
-.stat-card.red::before{background:var(--danger)}
-.stat-label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
-.stat-value{font-size:32px;font-weight:800}
-.stat-sub{font-size:12px;color:var(--muted);margin-top:4px}
+.stat-card.green::before{background:linear-gradient(90deg,var(--accent),transparent)}
+.stat-card.blue::before{background:linear-gradient(90deg,var(--accent2),transparent)}
+.stat-card.orange::before{background:linear-gradient(90deg,var(--warn),transparent)}
+.stat-card.red::before{background:linear-gradient(90deg,var(--danger),transparent)}
+.stat-card .stat-icon{
+  width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+  margin-bottom:16px;
+}
+.stat-card.green .stat-icon{background:var(--accent-dim)}
+.stat-card.green .stat-icon i{color:var(--accent)}
+.stat-card.blue .stat-icon{background:var(--accent2-dim)}
+.stat-card.blue .stat-icon i{color:var(--accent2)}
+.stat-card.orange .stat-icon{background:var(--warn-dim)}
+.stat-card.orange .stat-icon i{color:var(--warn)}
+.stat-card.red .stat-icon{background:var(--danger-dim)}
+.stat-card.red .stat-icon i{color:var(--danger)}
+.stat-label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px}
+.stat-value{font-size:32px;font-weight:800;letter-spacing:-1px;line-height:1}
+.stat-sub{font-size:12px;color:var(--muted);margin-top:6px}
 
-/* TABLES */
-.card{background: rgba(17,19,24,0.65); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 8px 32px rgba(0,0,0,0.2);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-.card-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
-.card-title{font-size:15px;font-weight:700}
+/* ── Cards & Tables ── */
+.card{
+  background:var(--surface);backdrop-filter:blur(16px);border:1px solid var(--border);
+  border-radius:var(--radius);overflow:hidden;transition:var(--transition);
+}
+.card:hover{border-color:var(--border-hover)}
+.card-header{
+  padding:18px 24px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.card-title{font-size:15px;font-weight:700;display:flex;align-items:center;gap:10px}
+.card-title i{width:18px;height:18px;color:var(--accent)}
 table{width:100%;border-collapse:collapse}
-th{padding:12px 16px;text-align:left;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)}
-td{padding:14px 16px;font-size:14px;border-bottom:1px solid var(--border)}
+th{padding:12px 20px;text-align:left;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border)}
+td{padding:14px 20px;font-size:14px;border-bottom:1px solid var(--border)}
 tr:last-child td{border-bottom:none}
-tr:hover td{background:rgba(255,255,255,.02)}
-.empty-row td{text-align:center;color:var(--muted);padding:40px}
+tr{transition:var(--transition)}
+tr:hover td{background:rgba(255,255,255,0.015)}
+.empty-row td{text-align:center;color:var(--muted);padding:48px 20px}
 
-/* BADGES */
-.badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600}
-.badge-green{background:rgba(0,229,160,.1);color:var(--accent)}
-.badge-blue{background:rgba(0,102,255,.1);color:#5599ff}
-.badge-orange{background:rgba(255,165,2,.1);color:var(--warn)}
-.badge-red{background:rgba(255,71,87,.1);color:var(--danger)}
-.badge-pg{background:rgba(51,103,145,.15);color:#6fa3d0}
-.badge-mongo{background:rgba(71,162,72,.15);color:#74c375}
-.badge-azure{background:rgba(0,137,214,.15);color:#4db8f0}
-.badge-gcs{background:rgba(234,67,53,.15);color:#f57c6e}
-.dot{width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block}
+/* ── Badges ── */
+.badge{
+  display:inline-flex;align-items:center;gap:6px;padding:5px 12px;
+  border-radius:20px;font-size:12px;font-weight:600;
+}
+.badge-green{background:var(--success-dim);color:var(--accent)}
+.badge-blue{background:var(--accent2-dim);color:#818cf8}
+.badge-orange{background:var(--warn-dim);color:var(--warn)}
+.badge-red{background:var(--danger-dim);color:var(--danger)}
+.badge-pg{background:rgba(99,102,241,0.12);color:#818cf8}
+.badge-mongo{background:rgba(34,197,94,0.12);color:#4ade80}
+.badge-azure{background:rgba(59,130,246,0.12);color:#60a5fa}
+.badge-gcs{background:rgba(249,115,22,0.12);color:#fb923c}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block}
+.dot-pulse{animation:dotPulse 1.5s ease-in-out infinite}
+@keyframes dotPulse{0%,100%{opacity:1}50%{opacity:0.3}}
 
-/* MODAL */
-.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);z-index:100;display:none;align-items:center;justify-content:center}
+/* ── Modal ── */
+.modal-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,0.65);backdrop-filter:blur(8px);
+  z-index:100;display:none;align-items:center;justify-content:center;
+}
 .modal-overlay.open{display:flex}
-.modal{background: rgba(17,19,24,0.85); backdrop-filter: blur(24px); border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 24px 64px rgba(0,0,0,0.5);background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:32px;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto}
-.modal-title{font-size:18px;font-weight:800;margin-bottom:24px}
-.modal-actions{display:flex;gap:12px;justify-content:flex-end;margin-top:24px}
+.modal{
+  background:var(--surface-solid);border:1px solid var(--border);border-radius:20px;
+  padding:32px;width:560px;max-width:95vw;max-height:90vh;overflow-y:auto;
+  box-shadow:var(--shadow-lg);animation:modalIn 0.25s ease;
+}
+@keyframes modalIn{from{transform:scale(0.95) translateY(10px);opacity:0}to{transform:scale(1) translateY(0);opacity:1}}
+.modal-title{font-size:20px;font-weight:800;margin-bottom:24px;display:flex;align-items:center;gap:12px;letter-spacing:-0.3px}
+.modal-title i{width:24px;height:24px;color:var(--accent)}
+.modal-actions{display:flex;gap:12px;justify-content:flex-end;margin-top:28px}
 
-/* TOAST */
-.toast-container{position:fixed;bottom:24px;right:24px;z-index:200;display:flex;flex-direction:column;gap:8px}
-.toast{padding:14px 20px;border-radius:12px;font-size:14px;font-weight:600;animation:slideIn .3s ease;display:flex;align-items:center;gap:10px;min-width:280px}
-.toast-success{background:rgba(0,229,160,.15);border:1px solid rgba(0,229,160,.3);color:var(--accent)}
-.toast-error{background:rgba(255,71,87,.15);border:1px solid rgba(255,71,87,.3);color:var(--danger)}
-.toast-info{background:rgba(0,102,255,.15);border:1px solid rgba(0,102,255,.3);color:#5599ff}
-@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+/* ── Toast ── */
+.toast-container{position:fixed;bottom:24px;right:24px;z-index:200;display:flex;flex-direction:column;gap:10px}
+.toast{
+  padding:14px 20px;border-radius:var(--radius-sm);font-size:14px;font-weight:600;
+  animation:toastIn 0.35s cubic-bezier(0.4,0,0.2,1);display:flex;align-items:center;gap:10px;
+  min-width:300px;backdrop-filter:blur(16px);
+}
+.toast-success{background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.25);color:var(--accent)}
+.toast-error{background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.25);color:var(--danger)}
+.toast-info{background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.25);color:#818cf8}
+@keyframes toastIn{from{transform:translateX(100%) scale(0.95);opacity:0}to{transform:translateX(0) scale(1);opacity:1}}
 
-/* MISC */
-.actions{display:flex;gap:8px}
-.flex{display:flex}
-.items-center{align-items:center}
-.gap-2{gap:8px}
-.gap-3{gap:12px}
-.justify-between{justify-content:space-between}
-.mb-4{margin-bottom:16px}
-.mb-6{margin-bottom:24px}
-.text-muted{color:var(--muted)}
-.text-sm{font-size:13px}
-.spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;display:inline-block}
+/* ── Progress ── */
+.progress-wrap{background:rgba(255,255,255,0.04);border-radius:20px;height:8px;overflow:hidden;margin-top:8px}
+.progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:20px;transition:width 0.5s ease}
+.progress-label{font-size:12px;color:var(--accent);font-weight:700;margin-top:6px}
+.backup-live{
+  background:var(--surface);backdrop-filter:blur(16px);border:1px solid var(--accent-dim);
+  border-radius:var(--radius);padding:22px;margin-bottom:24px;display:none;
+  box-shadow:0 0 40px rgba(0,212,170,0.05);
+}
+.backup-live.active{display:block;animation:fadeIn 0.3s ease}
+
+/* ── Helper classes ── */
+.actions{display:flex;gap:8px;align-items:center}
+.flex{display:flex}.items-center{align-items:center}.gap-2{gap:8px}.gap-3{gap:12px}
+.justify-between{justify-content:space-between}.mb-4{margin-bottom:16px}.mb-6{margin-bottom:24px}
+.text-muted{color:var(--muted)}.text-sm{font-size:13px}
+.mono{font-family:'SF Mono','Cascadia Code','Fira Code',monospace;font-size:13px}
+.spinner{width:18px;height:18px;border:2px solid rgba(255,255,255,0.1);border-top-color:var(--accent);border-radius:50%;animation:spin 0.6s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
-.size-bar{height:4px;background:var(--surface2);border-radius:2px;margin-top:6px;overflow:hidden}
-.size-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width .5s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 .conditional{display:none}
-.progress-wrap{background:var(--surface2);border-radius:20px;height:8px;overflow:hidden;margin-top:6px}
-.progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:20px;transition:width .4s ease}
-.progress-label{font-size:12px;color:var(--accent);font-weight:700;margin-top:4px}
-.backup-live{background:var(--surface);border:1px solid rgba(0,229,160,.25);border-radius:var(--radius);padding:20px;margin-bottom:24px;display:none}
-.backup-live.active{display:block}
+.size-bar{height:4px;background:rgba(255,255,255,0.04);border-radius:2px;margin-top:6px;overflow:hidden}
+.size-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width .5s ease}
+
+/* ── Schedule info banner ── */
+.info-banner{
+  background:var(--accent-dim);border:1px solid rgba(0,212,170,0.15);
+  border-radius:var(--radius-sm);padding:12px 16px;font-size:13px;
+  color:var(--accent);margin-bottom:16px;display:flex;align-items:center;gap:10px;
+}
+.info-banner i{width:18px;height:18px;flex-shrink:0}
+.info-banner.warn{background:var(--warn-dim);border-color:rgba(245,158,11,0.15);color:var(--warn)}
+
+/* ── Frequency badge styles ── */
+.freq-mixed{background:linear-gradient(135deg,var(--accent-dim),var(--accent2-dim));color:var(--accent);border:1px solid rgba(0,212,170,0.15)}
 </style>
 </head>
 <body>
-
-
 
 <!-- APP -->
 <div id="app">
   <div class="sidebar">
     <div class="sidebar-logo">
-      <div class="icon">🗄️</div>
+      <div class="icon"><i data-lucide="database" style="width:20px;height:20px;color:#000"></i></div>
       <h1>Backup<span>Vault</span></h1>
     </div>
     <nav>
       <div class="nav-section">Overview</div>
       <div class="nav-item active" onclick="showPage('dashboard')">
-        <span class="nav-icon">📊</span> Dashboard
+        <i data-lucide="layout-dashboard"></i> Dashboard
       </div>
-      <div class="nav-section">Manage</div>
+      <div class="nav-section">Management</div>
       <div class="nav-item" onclick="showPage('databases')">
-        <span class="nav-icon">🗃️</span> Databases
+        <i data-lucide="server"></i> Databases
       </div>
       <div class="nav-item" onclick="showPage('storage')">
-        <span class="nav-icon">☁️</span> Storage
+        <i data-lucide="cloud"></i> Storage
       </div>
       <div class="nav-item" onclick="showPage('backups')">
-        <span class="nav-icon">💾</span> Backups
+        <i data-lucide="hard-drive-download"></i> Backups
       </div>
       <div class="nav-item" onclick="showPage('schedules')">
-        <span class="nav-icon">⏰</span> Schedules
+        <i data-lucide="calendar-clock"></i> Schedules
       </div>
       <div class="nav-item" onclick="showPage('restores')">
-        <span class="nav-icon">♻️</span> Restores
+        <i data-lucide="rotate-ccw"></i> Restores
       </div>
     </nav>
-    <!-- Admin profile display removed -->
+    <div class="sidebar-footer">
+      <div class="version-info">
+        <i data-lucide="shield-check"></i>
+        <span>BackupVault v2.0</span>
+      </div>
+    </div>
   </div>
 
   <div class="main">
     <div class="topbar">
-      <h2 id="page-title">Dashboard</h2>
-      <div id="topbar-action"></div>
+      <h2 id="page-title"><i data-lucide="layout-dashboard"></i> Dashboard</h2>
+      <div class="topbar-actions" id="topbar-action"></div>
     </div>
     <div class="content">
 
       <!-- DASHBOARD -->
       <div class="page active" id="page-dashboard">
         <div class="stats-grid" id="stats-grid">
-          <div class="stat-card green"><div class="stat-label">Total Backups</div><div class="stat-value" id="stat-total">—</div></div>
-          <div class="stat-card blue"><div class="stat-label">Completed</div><div class="stat-value" id="stat-completed">—</div></div>
-          <div class="stat-card orange"><div class="stat-label">Running</div><div class="stat-value" id="stat-running">—</div></div>
-          <div class="stat-card green"><div class="stat-label">Storage Used</div><div class="stat-value" id="stat-size">—</div><div class="stat-sub">MB across all backups</div></div>
-          <div class="stat-card blue"><div class="stat-label">Databases</div><div class="stat-value" id="stat-dbs">—</div></div>
+          <div class="stat-card green">
+            <div class="stat-icon"><i data-lucide="archive"></i></div>
+            <div class="stat-label">Total Backups</div>
+            <div class="stat-value" id="stat-total">—</div>
+          </div>
+          <div class="stat-card blue">
+            <div class="stat-icon"><i data-lucide="check-circle-2"></i></div>
+            <div class="stat-label">Completed</div>
+            <div class="stat-value" id="stat-completed">—</div>
+          </div>
+          <div class="stat-card orange">
+            <div class="stat-icon"><i data-lucide="loader-2"></i></div>
+            <div class="stat-label">Running</div>
+            <div class="stat-value" id="stat-running">—</div>
+          </div>
+          <div class="stat-card green">
+            <div class="stat-icon"><i data-lucide="hard-drive"></i></div>
+            <div class="stat-label">Storage Used</div>
+            <div class="stat-value" id="stat-size">—</div>
+            <div class="stat-sub">MB across all backups</div>
+          </div>
+          <div class="stat-card blue">
+            <div class="stat-icon"><i data-lucide="database"></i></div>
+            <div class="stat-label">Databases</div>
+            <div class="stat-value" id="stat-dbs">—</div>
+          </div>
         </div>
         <div class="card">
-          <div class="card-header"><div class="card-title">Recent Backups</div></div>
+          <div class="card-header">
+            <div class="card-title"><i data-lucide="clock"></i> Recent Backups</div>
+          </div>
           <table>
             <thead><tr><th>Label</th><th>Database</th><th>Storage</th><th>Status</th><th>Size</th><th>Date</th></tr></thead>
             <tbody id="recent-backups-table"></tbody>
@@ -215,8 +393,8 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <div class="page" id="page-databases">
         <div class="card">
           <div class="card-header">
-            <div class="card-title">Databases</div>
-            <button class="btn btn-primary btn-sm" onclick="openModal('db-modal')">+ Add Database</button>
+            <div class="card-title"><i data-lucide="server"></i> Databases</div>
+            <button class="btn btn-primary btn-sm" onclick="openModal('db-modal')"><i data-lucide="plus" style="width:15px;height:15px"></i> Add Database</button>
           </div>
           <table>
             <thead><tr><th>Name</th><th>Type</th><th>Host</th><th>Database</th><th>Added</th><th>Actions</th></tr></thead>
@@ -229,8 +407,8 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <div class="page" id="page-storage">
         <div class="card">
           <div class="card-header">
-            <div class="card-title">Storage Destinations</div>
-            <button class="btn btn-primary btn-sm" onclick="openModal('storage-modal')">+ Add Storage</button>
+            <div class="card-title"><i data-lucide="cloud"></i> Storage Destinations</div>
+            <button class="btn btn-primary btn-sm" onclick="openModal('storage-modal')"><i data-lucide="plus" style="width:15px;height:15px"></i> Add Storage</button>
           </div>
           <table>
             <thead><tr><th>Name</th><th>Type</th><th>Bucket / Container</th><th>Added</th><th>Actions</th></tr></thead>
@@ -243,21 +421,21 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <div class="page" id="page-backups">
         <!-- Live progress card -->
         <div class="backup-live" id="backup-live-card">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-            <div style="font-weight:700;font-size:15px">⚡ Backup In Progress</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+            <div style="font-weight:700;font-size:15px;display:flex;align-items:center;gap:10px"><i data-lucide="zap" style="width:18px;height:18px;color:var(--warn)"></i> Backup In Progress</div>
             <span class="badge badge-orange" id="live-pct-badge">0%</span>
           </div>
           <div style="font-size:13px;color:var(--muted);margin-bottom:10px" id="live-label">—</div>
           <div class="progress-wrap"><div class="progress-bar" id="live-bar" style="width:0%"></div></div>
           <div class="progress-label" id="live-pct">0%</div>
-          <div id="live-logs" style="margin-top:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;font-family:'DM Mono',monospace;font-size:12px;max-height:120px;overflow-y:auto;line-height:1.8"></div>
+          <div id="live-logs" style="margin-top:14px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-xs);padding:12px 14px;font-family:'SF Mono','Cascadia Code',monospace;font-size:12px;max-height:140px;overflow-y:auto;line-height:1.9"></div>
         </div>
         <div class="card">
           <div class="card-header">
-            <div class="card-title">Backup History</div>
+            <div class="card-title"><i data-lucide="history"></i> Backup History</div>
             <div style="display:flex;gap:8px">
-              <button class="btn btn-secondary btn-sm" onclick="loadBackups()">🔄 Refresh</button>
-              <button class="btn btn-primary btn-sm" onclick="openModal('backup-modal')">▶ Run Backup</button>
+              <button class="btn btn-secondary btn-sm" onclick="loadBackups()"><i data-lucide="refresh-cw" style="width:14px;height:14px"></i> Refresh</button>
+              <button class="btn btn-primary btn-sm" onclick="openModal('backup-modal')"><i data-lucide="play" style="width:14px;height:14px"></i> Run Backup</button>
             </div>
           </div>
           <table>
@@ -271,11 +449,11 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <div class="page" id="page-schedules">
         <div class="card">
           <div class="card-header">
-            <div class="card-title">Backup Schedules</div>
-            <button class="btn btn-primary btn-sm" onclick="openModal('schedule-modal')">+ Add Schedule</button>
+            <div class="card-title"><i data-lucide="calendar-clock"></i> Backup Schedules</div>
+            <button class="btn btn-primary btn-sm" onclick="openModal('schedule-modal')"><i data-lucide="plus" style="width:15px;height:15px"></i> Add Schedule</button>
           </div>
           <table>
-            <thead><tr><th>Name</th><th>Database</th><th>Storage</th><th>Frequency</th><th>Time</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Name</th><th>Database</th><th>Storage</th><th>Frequency</th><th>Method</th><th>Time</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="schedules-table"></tbody>
           </table>
         </div>
@@ -285,21 +463,21 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <div class="page" id="page-restores">
         <!-- Live restore progress card -->
         <div class="backup-live" id="restore-live-card">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-            <div style="font-weight:700;font-size:15px">♻️ Restore In Progress</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+            <div style="font-weight:700;font-size:15px;display:flex;align-items:center;gap:10px"><i data-lucide="rotate-ccw" style="width:18px;height:18px;color:var(--accent2)"></i> Restore In Progress</div>
             <span class="badge badge-orange" id="restore-pct-badge">0%</span>
           </div>
           <div style="font-size:13px;color:var(--muted);margin-bottom:10px" id="restore-live-label">—</div>
           <div class="progress-wrap"><div class="progress-bar" id="restore-bar" style="width:0%"></div></div>
           <div class="progress-label" id="restore-pct">0%</div>
-          <div id="restore-logs" style="margin-top:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;font-family:'DM Mono',monospace;font-size:12px;max-height:120px;overflow-y:auto;line-height:1.8"></div>
+          <div id="restore-logs" style="margin-top:14px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-xs);padding:12px 14px;font-family:'SF Mono','Cascadia Code',monospace;font-size:12px;max-height:140px;overflow-y:auto;line-height:1.9"></div>
         </div>
         <div class="card" style="margin-bottom:24px">
           <div class="card-header">
-            <div class="card-title">Restore History</div>
+            <div class="card-title"><i data-lucide="rotate-ccw"></i> Restore History</div>
             <div style="display:flex;gap:8px">
-              <button class="btn btn-secondary btn-sm" onclick="loadRestores()">🔄 Refresh</button>
-              <button class="btn btn-primary btn-sm" onclick="openModal('restore-modal')">♻️ New Restore</button>
+              <button class="btn btn-secondary btn-sm" onclick="loadRestores()"><i data-lucide="refresh-cw" style="width:14px;height:14px"></i> Refresh</button>
+              <button class="btn btn-primary btn-sm" onclick="openModal('restore-modal')"><i data-lucide="rotate-ccw" style="width:14px;height:14px"></i> New Restore</button>
             </div>
           </div>
           <table>
@@ -317,7 +495,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 <!-- Add Database -->
 <div class="modal-overlay" id="db-modal">
   <div class="modal">
-    <div class="modal-title">Add Database</div>
+    <div class="modal-title"><i data-lucide="server"></i> Add Database</div>
     <div class="form-group">
       <label>Name</label>
       <input type="text" id="db-name" placeholder="My Production DB"/>
@@ -367,8 +545,8 @@ tr:hover td{background:rgba(255,255,255,.02)}
           Supports: <code style="color:var(--accent)">mongodb://</code> and <code style="color:var(--accent)">mongodb+srv://</code>
         </div>
       </div>
-      <div id="db-test-result" style="display:none;padding:12px;border-radius:10px;font-size:13px;font-weight:600;margin-bottom:8px"></div>
-      <button class="btn btn-secondary" style="width:100%;margin-bottom:8px" onclick="testMongoUri()">🔌 Test Connection</button>
+      <div id="db-test-result" style="display:none;padding:12px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:8px"></div>
+      <button class="btn btn-secondary btn-full" style="margin-bottom:8px" onclick="testMongoUri()"><i data-lucide="plug" style="width:15px;height:15px"></i> Test Connection</button>
     </div>
 
     <div class="form-group">
@@ -377,7 +555,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('db-modal')">Cancel</button>
-      <button class="btn btn-primary" onclick="addDatabase()">Add Database</button>
+      <button class="btn btn-primary" onclick="addDatabase()"><i data-lucide="plus" style="width:15px;height:15px"></i> Add Database</button>
     </div>
   </div>
 </div>
@@ -385,7 +563,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 <!-- Add Storage -->
 <div class="modal-overlay" id="storage-modal">
   <div class="modal">
-    <div class="modal-title">Add Storage</div>
+    <div class="modal-title"><i data-lucide="cloud"></i> Add Storage</div>
     <div class="form-group">
       <label>Name</label>
       <input type="text" id="st-name" placeholder="My Azure Bucket"/>
@@ -423,7 +601,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('storage-modal')">Cancel</button>
-      <button class="btn btn-primary" onclick="addStorage()">Add Storage</button>
+      <button class="btn btn-primary" onclick="addStorage()"><i data-lucide="plus" style="width:15px;height:15px"></i> Add Storage</button>
     </div>
   </div>
 </div>
@@ -431,7 +609,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 <!-- Edit Database -->
 <div class="modal-overlay" id="edit-db-modal">
   <div class="modal">
-    <div class="modal-title">Edit Database</div>
+    <div class="modal-title"><i data-lucide="pencil"></i> Edit Database</div>
     <input type="hidden" id="edit-db-id"/>
     <div class="form-group">
       <label>Name</label>
@@ -456,7 +634,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div class="form-group"><label>Description</label><input type="text" id="edit-db-desc"/></div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('edit-db-modal')">Cancel</button>
-      <button class="btn btn-primary" onclick="saveEditDatabase()">Save Changes</button>
+      <button class="btn btn-primary" onclick="saveEditDatabase()"><i data-lucide="save" style="width:15px;height:15px"></i> Save Changes</button>
     </div>
   </div>
 </div>
@@ -464,7 +642,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 <!-- Run Backup -->
 <div class="modal-overlay" id="backup-modal">
   <div class="modal">
-    <div class="modal-title">Run Backup</div>
+    <div class="modal-title"><i data-lucide="hard-drive-download"></i> Run Backup</div>
     <div class="form-group">
       <label>Database Connection</label>
       <select id="bk-db" onchange="onBackupDbChange()"></select>
@@ -486,13 +664,13 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <label>Backup Method</label>
       <select id="bk-method" onchange="onBackupMethodChange('bk')">
         <option value="full">Full Backup</option>
-        <option value="incremental">Incremental Backup (MongoDB Only)</option>
+        <option value="incremental">Incremental Backup</option>
       </select>
     </div>
     <div class="form-group" id="bk-incremental-group" style="display:none">
       <label>Incremental Field Name</label>
       <input type="text" id="bk-incremental-field" placeholder="e.g. updated_at"/>
-      <div style="font-size:11px;color:var(--muted);margin-top:4px">Enter the timestamp/date field used to filter new records.</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">For MongoDB: enter the timestamp/date field. For PostgreSQL: automatic table-level detection.</div>
     </div>
     <div class="form-group" id="bk-collection-group" style="display:none">
       <label>Collection / Table <span style="color:var(--muted);font-size:11px">(fetched from server)</span></label>
@@ -510,7 +688,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('backup-modal')">Cancel</button>
-      <button class="btn btn-primary" onclick="runBackup()">▶ Start Backup</button>
+      <button class="btn btn-primary" onclick="runBackup()"><i data-lucide="play" style="width:15px;height:15px"></i> Start Backup</button>
     </div>
   </div>
 </div>
@@ -518,7 +696,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 <!-- Add Schedule -->
 <div class="modal-overlay" id="schedule-modal">
   <div class="modal">
-    <div class="modal-title">Add Schedule</div>
+    <div class="modal-title"><i data-lucide="calendar-clock"></i> Add Schedule</div>
     <div class="form-group">
       <label>Schedule Name</label>
       <input type="text" id="sc-name" placeholder="Nightly Production Backup"/>
@@ -535,21 +713,23 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <label>Backup Method</label>
       <select id="sc-method" onchange="onBackupMethodChange('sc')">
         <option value="full">Full Backup</option>
-        <option value="incremental">Incremental Backup (MongoDB Only)</option>
+        <option value="incremental">Incremental Backup</option>
       </select>
     </div>
     <div class="form-group" id="sc-incremental-group" style="display:none">
       <label>Incremental Field Name</label>
       <input type="text" id="sc-incremental-field" placeholder="e.g. updated_at"/>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">For MongoDB: timestamp field name. For PostgreSQL: uses automatic table-level detection.</div>
     </div>
     <div class="form-row">
       <div class="form-group">
         <label>Frequency</label>
-        <select id="sc-freq">
+        <select id="sc-freq" onchange="onFreqChange()">
           <option value="hourly">Hourly</option>
           <option value="daily" selected>Daily</option>
-          <option value="weekly">Weekly</option>
-          <option value="monthly">Monthly</option>
+          <option value="weekly">Weekly (Monday)</option>
+          <option value="monthly">Monthly (1st)</option>
+          <option value="weekly_mixed">Weekly Mixed (Sun=Full, Mon-Sat=Incremental)</option>
         </select>
       </div>
       <div class="form-group">
@@ -557,9 +737,15 @@ tr:hover td{background:rgba(255,255,255,.02)}
         <input type="time" id="sc-time" value="02:00"/>
       </div>
     </div>
+    <div id="sc-mixed-info" style="display:none">
+      <div class="info-banner">
+        <i data-lucide="info"></i>
+        <span><strong>Weekly Mixed Mode:</strong> Full backup every Sunday, incremental backup Monday through Saturday — all at the scheduled time.</span>
+      </div>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('schedule-modal')">Cancel</button>
-      <button class="btn btn-primary" onclick="addSchedule()">Create Schedule</button>
+      <button class="btn btn-primary" onclick="addSchedule()"><i data-lucide="plus" style="width:15px;height:15px"></i> Create Schedule</button>
     </div>
   </div>
 </div>
@@ -567,13 +753,13 @@ tr:hover td{background:rgba(255,255,255,.02)}
 <!-- Restore Modal -->
 <div class="modal-overlay" id="restore-modal">
   <div class="modal">
-    <div class="modal-title">♻️ Restore Backup</div>
+    <div class="modal-title"><i data-lucide="rotate-ccw"></i> Restore Backup</div>
 
     <div class="form-group">
       <label>Select Backup to Restore</label>
       <select id="rs-backup" onchange="onRestoreBackupChange()"></select>
     </div>
-    <div id="rs-info" style="background:var(--surface2);border-radius:10px;padding:12px;font-size:13px;color:var(--muted);margin-bottom:16px;display:none">
+    <div id="rs-info" style="background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;font-size:13px;color:var(--text2);margin-bottom:16px;display:none">
       <span id="rs-info-text"></span>
     </div>
 
@@ -585,14 +771,14 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <!-- Restore Mode Toggle -->
     <div class="form-group">
       <label>Restore Mode</label>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:10px">
         <div id="rs-mode-existing" onclick="setRestoreMode('existing')"
-          style="flex:1;padding:12px;border-radius:10px;border:2px solid var(--accent);background:rgba(0,229,160,.08);cursor:pointer;text-align:center;font-size:13px;font-weight:700;color:var(--accent)">
-          📂 Existing Database
+          style="flex:1;padding:14px;border-radius:var(--radius-sm);border:2px solid var(--accent);background:var(--accent-dim);cursor:pointer;text-align:center;font-size:13px;font-weight:700;color:var(--accent);display:flex;align-items:center;justify-content:center;gap:8px;transition:var(--transition)">
+          <i data-lucide="folder-open" style="width:16px;height:16px"></i> Existing Database
         </div>
         <div id="rs-mode-new" onclick="setRestoreMode('new')"
-          style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);cursor:pointer;text-align:center;font-size:13px;font-weight:600;color:var(--muted)">
-          ✨ Create New Database
+          style="flex:1;padding:14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:rgba(255,255,255,0.02);cursor:pointer;text-align:center;font-size:13px;font-weight:600;color:var(--muted);display:flex;align-items:center;justify-content:center;gap:8px;transition:var(--transition)">
+          <i data-lucide="sparkles" style="width:16px;height:16px"></i> Create New Database
         </div>
       </div>
     </div>
@@ -603,7 +789,10 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <select id="rs-target-dbname">
         <option value="">— select connection first —</option>
       </select>
-      <div style="font-size:12px;color:var(--warn);margin-top:6px">⚠️ Existing data will be overwritten</div>
+      <div class="info-banner warn" style="margin-top:8px;margin-bottom:0">
+        <i data-lucide="alert-triangle"></i>
+        <span>Existing data will be overwritten</span>
+      </div>
     </div>
 
     <!-- New DB fields -->
@@ -612,14 +801,15 @@ tr:hover td{background:rgba(255,255,255,.02)}
         <label>New Database Name</label>
         <input type="text" id="rs-new-dbname" placeholder="e.g. HotelStaticData_restored"/>
       </div>
-      <div style="background:rgba(0,229,160,.06);border:1px solid rgba(0,229,160,.2);border-radius:10px;padding:12px;font-size:13px;color:var(--accent);margin-bottom:16px">
-        ✅ A fresh database will be created — no existing data will be affected
+      <div class="info-banner">
+        <i data-lucide="check-circle-2"></i>
+        <span>A fresh database will be created — no existing data will be affected</span>
       </div>
     </div>
 
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('restore-modal')">Cancel</button>
-      <button class="btn btn-danger" style="width:auto" onclick="runRestore()">♻️ Start Restore</button>
+      <button class="btn btn-danger" style="width:auto" onclick="runRestore()"><i data-lucide="rotate-ccw" style="width:15px;height:15px"></i> Start Restore</button>
     </div>
   </div>
 </div>
@@ -637,29 +827,47 @@ function onBackupMethodChange(prefix) {
   }
 }
 
+function onFreqChange() {
+  const freq = v('sc-freq');
+  const mixedInfo = document.getElementById('sc-mixed-info');
+  if(mixedInfo) mixedInfo.style.display = freq === 'weekly_mixed' ? 'block' : 'none';
+  // Auto-set method for weekly_mixed
+  if(freq === 'weekly_mixed') {
+    const methodEl = document.getElementById('sc-method');
+    if(methodEl) methodEl.value = 'full'; // Will be overridden by scheduler
+  }
+}
+
 let token = 'no-auth';
 let currentUser = {id:'local',name:'Admin',email:'admin@local'};
 
 // ---- APP INIT ----
 function initApp() {
   document.getElementById('app').style.display='flex';
-  const nameEl = document.getElementById('user-name-display');
-  if(nameEl) nameEl.textContent = currentUser.name;
-  const emailEl = document.getElementById('user-email-display');
-  if(emailEl) emailEl.textContent = currentUser.email;
-  const avatarEl = document.getElementById('user-avatar');
-  if(avatarEl) avatarEl.textContent = 'A';
   showPage('dashboard');
+  lucide.createIcons();
 }
 
 // ---- NAVIGATION ----
+const pageIcons = {
+  dashboard:'layout-dashboard',databases:'server',storage:'cloud',
+  backups:'hard-drive-download',schedules:'calendar-clock',restores:'rotate-ccw'
+};
+const pageTitles = {
+  dashboard:'Dashboard',databases:'Databases',storage:'Storage Destinations',
+  backups:'Backup History',schedules:'Schedules',restores:'Restore History'
+};
+
 function showPage(name) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById(`page-${name}`).classList.add('active');
-  document.querySelectorAll('.nav-item').forEach(n=>{if(n.textContent.trim().toLowerCase().includes(name))n.classList.add('active')});
-  const titles = {dashboard:'Dashboard',databases:'Databases',storage:'Storage Destinations',backups:'Backup History',schedules:'Schedules'};
-  document.getElementById('page-title').textContent = titles[name]||name;
+  document.querySelectorAll('.nav-item').forEach(n=>{
+    if(n.textContent.trim().toLowerCase().includes(name))n.classList.add('active');
+  });
+  const icon = pageIcons[name]||'layout-dashboard';
+  document.getElementById('page-title').innerHTML = `<i data-lucide="${icon}"></i> ${pageTitles[name]||name}`;
+  lucide.createIcons();
   loadPage(name);
 }
 
@@ -719,12 +927,13 @@ async function loadDatabases() {
         <td class="mono text-sm">${d.database_name}</td>
         <td class="text-muted text-sm">${fmtDate(d.created_at)}</td>
         <td><div class="actions">
-          <button class="btn btn-secondary btn-sm btn-icon" onclick="testConn('${d.id}')" title="Test Connection">🔌</button>
-          <button class="btn btn-secondary btn-sm btn-icon" onclick="openEditDb('${d.id}')" title="Edit">✏️</button>
-          <button class="btn btn-primary btn-sm" onclick="quickBackup('${d.id}','${d.name}')" title="Quick Backup">▶ Backup</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteDatabase('${d.id}')">Delete</button>
+          <button class="btn btn-secondary btn-sm btn-icon" onclick="testConn('${d.id}')" title="Test Connection"><i data-lucide="plug" style="width:14px;height:14px"></i></button>
+          <button class="btn btn-secondary btn-sm btn-icon" onclick="openEditDb('${d.id}')" title="Edit"><i data-lucide="pencil" style="width:14px;height:14px"></i></button>
+          <button class="btn btn-primary btn-sm" onclick="quickBackup('${d.id}','${d.name}')"><i data-lucide="play" style="width:13px;height:13px"></i> Backup</button>
+          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteDatabase('${d.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
         </div></td>
       </tr>`).join('')||emptyRow(6,'No databases added yet. Click "+ Add Database" to get started.');
+    lucide.createIcons();
   } catch(e) { toast(e.message,'error'); }
 }
 
@@ -742,24 +951,24 @@ async function testMongoUri() {
   const resultBox = document.getElementById('db-test-result');
   if(!uri){ toast('Please enter a MongoDB URI first','error'); return; }
   resultBox.style.display='block';
-  resultBox.style.background='rgba(0,102,255,.1)';
-  resultBox.style.border='1px solid rgba(0,102,255,.3)';
-  resultBox.style.color='#5599ff';
-  resultBox.textContent='🔄 Testing connection...';
+  resultBox.style.background='rgba(99,102,241,.1)';
+  resultBox.style.border='1px solid rgba(99,102,241,.3)';
+  resultBox.style.color='#818cf8';
+  resultBox.textContent='Testing connection...';
   try {
     const r = await apiFetch('/databases/test-uri', {
       method:'POST',
       body: JSON.stringify({uri, type:'mongodb'})
     });
-    resultBox.style.background='rgba(0,229,160,.1)';
-    resultBox.style.border='1px solid rgba(0,229,160,.3)';
+    resultBox.style.background='var(--success-dim)';
+    resultBox.style.border='1px solid rgba(0,212,170,.3)';
     resultBox.style.color='var(--accent)';
-    resultBox.textContent=`✅ ${r.message}`;
+    resultBox.textContent=`✓ ${r.message}`;
   } catch(e) {
-    resultBox.style.background='rgba(255,71,87,.1)';
-    resultBox.style.border='1px solid rgba(255,71,87,.3)';
+    resultBox.style.background='var(--danger-dim)';
+    resultBox.style.border='1px solid rgba(239,68,68,.3)';
     resultBox.style.color='var(--danger)';
-    resultBox.textContent=`❌ ${e.message}`;
+    resultBox.textContent=`✗ ${e.message}`;
   }
 }
 
@@ -773,7 +982,6 @@ async function addDatabase() {
     const uri = v('db-mongo-uri').trim();
     if(!uri){ toast('Please enter MongoDB URI','error'); return; }
     payload.mongo_uri = uri;
-    // Parse host/port/dbname from URI for display
     try {
       const url = new URL(uri.replace('mongodb+srv://', 'http://').replace('mongodb://', 'http://'));
       payload.host = url.hostname;
@@ -798,7 +1006,6 @@ async function addDatabase() {
   try {
     await apiFetch('/databases/',{method:'POST',body:JSON.stringify(payload)});
     closeModal('db-modal');
-    // Reset form
     document.getElementById('db-mongo-uri').value='';
     document.getElementById('db-test-result').style.display='none';
     toast('Database added!','success');
@@ -848,11 +1055,9 @@ async function saveEditDatabase() {
 async function quickBackup(dbId, dbName) {
   const sts = await apiFetch('/storage/');
   if(!sts.length){ toast('Please add a storage destination first','error'); return; }
-  // Use first available storage, or let user pick if multiple
   if(sts.length === 1) {
     await startBackupNow(dbId, sts[0].id, `quick-${dbName}-${Date.now()}`);
   } else {
-    // Populate backup modal and pre-select this DB
     await populateSelects();
     document.getElementById('bk-db').value = dbId;
     openModal('backup-modal');
@@ -883,8 +1088,9 @@ async function loadStorage() {
         <td>${storageBadge(s.type)}</td>
         <td class="mono text-sm">${s.azure_container||s.gcs_bucket||'—'}</td>
         <td class="text-muted text-sm">${fmtDate(s.created_at)}</td>
-        <td><button class="btn btn-danger btn-sm" onclick="deleteStorage('${s.id}')">Delete</button></td>
+        <td><button class="btn btn-danger btn-sm btn-icon" onclick="deleteStorage('${s.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button></td>
       </tr>`).join('')||emptyRow(5,'No storage configured yet.');
+    lucide.createIcons();
   } catch(e) { toast(e.message,'error'); }
 }
 
@@ -911,7 +1117,7 @@ async function deleteStorage(id) {
 // ---- BACKUPS ----
 async function loadBackups() {
   const btn = document.querySelector("#page-backups .btn-secondary");
-  if(btn) { btn.disabled = true; btn.textContent = "⏳ Loading..."; }
+  if(btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Loading'; }
   try {
     const backups = await apiFetch('/backups/');
     const tbody = document.getElementById('backups-table');
@@ -923,7 +1129,7 @@ async function loadBackups() {
         <td>
           ${statusBadge(b.status)}
           ${b.status==='failed'&&b.error?`
-            <div style="color:var(--danger);font-size:11px;margin-top:6px;background:rgba(255,71,87,.07);border:1px solid rgba(255,71,87,.2);border-radius:6px;padding:6px 8px;max-width:300px;word-break:break-word;white-space:pre-wrap;">
+            <div style="color:var(--danger);font-size:11px;margin-top:6px;background:var(--danger-dim);border:1px solid rgba(239,68,68,0.15);border-radius:var(--radius-xs);padding:6px 8px;max-width:300px;word-break:break-word;white-space:pre-wrap;">
               ${escHtml(b.error.split('\n').slice(0,3).join('\n'))}
             </div>` : ''}
         </td>
@@ -931,12 +1137,13 @@ async function loadBackups() {
         <td>${b.duration_seconds?b.duration_seconds+'s':'—'}</td>
         <td class="text-muted text-sm">${fmtDate(b.created_at)}</td>
         <td><div class="actions">
-          ${b.status==='completed'?`<button class="btn btn-secondary btn-sm" onclick="openRestoreFromBackup('${b.id}','${b.label.replace(/'/g,"\\'")}')">♻️ Restore</button>`:''}
-          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}')">🗑</button>
+          ${b.status==='completed'?`<button class="btn btn-secondary btn-sm" onclick="openRestoreFromBackup('${b.id}','${b.label.replace(/'/g,"\\'")}')"><i data-lucide="rotate-ccw" style="width:13px;height:13px"></i> Restore</button>`:''}
+          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
         </div></td>
       </tr>`).join('')||emptyRow(8,'No backups yet. Click "Run Backup" to start.');
+    lucide.createIcons();
   } catch(e) { toast(e.message,'error'); }
-  finally { if(btn) { btn.disabled = false; btn.textContent = "🔄 Refresh"; } }
+  finally { if(btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="refresh-cw" style="width:14px;height:14px"></i> Refresh'; lucide.createIcons(); } }
 }
 
 async function openBackupModal() {
@@ -964,7 +1171,7 @@ async function onBackupDbChange() {
   const dbnameEl = document.getElementById('bk-dbname');
   const collEl = document.getElementById('bk-collection-select');
   if(!dbnameEl) return;
-  dbnameEl.innerHTML = '<option>⏳ Loading databases...</option>';
+  dbnameEl.innerHTML = '<option>Loading databases...</option>';
   if(collEl) collEl.innerHTML = '<option>— select database name first —</option>';
   try {
     const r = await apiFetch(`/databases/${dbId}/databases`);
@@ -981,7 +1188,7 @@ async function onBackupDbnameChange() {
   if(!dbId || !dbname) return;
   const collEl = document.getElementById('bk-collection-select');
   if(!collEl) return;
-  collEl.innerHTML = '<option>⏳ Loading collections...</option>';
+  collEl.innerHTML = '<option>Loading collections...</option>';
   try {
     const r = await apiFetch(`/databases/${dbId}/collections?database=${encodeURIComponent(dbname)}`);
     collEl.innerHTML = r.collections.map(c=>`<option value="${c}">${c}</option>`).join('');
@@ -1004,7 +1211,6 @@ async function runBackup() {
   if(!dbId){ toast('Select a database connection','error'); return; }
   if(!dbname){ toast('Select a database name','error'); return; }
   if(type === 'collection' && !collection){ toast('Select a collection','error'); return; }
-  // Save selected db name back to db record
   try { await apiFetch(`/databases/${dbId}`, {method:'PATCH', body: JSON.stringify({database_name: dbname})}); } catch(e){}
   await startBackupNow(dbId, v('bk-storage'), label, collection);
   closeModal('backup-modal');
@@ -1032,21 +1238,19 @@ function simulateProgress(backupId, label) {
 
   card.classList.add('active');
   lbl.textContent = label;
-  logsEl.innerHTML = '<div style="color:var(--muted)">⏳ Starting backup...</div>';
+  logsEl.innerHTML = '<div style="color:var(--muted)">Starting backup...</div>';
   let lastLogLen = 0;
 
   if(progressInterval) clearInterval(progressInterval);
 
   progressInterval = setInterval(async () => {
     try {
-      // Fetch status + live logs together
       const [backups, logData] = await Promise.all([
         apiFetch('/backups/'),
         apiFetch(`/backups/${backupId}/logs`).catch(()=>null)
       ]);
       const b = backups.find(x=>x.id===backupId);
 
-      // Update live logs from log file
       if(logData && logData.logs && logData.logs.length !== lastLogLen) {
         lastLogLen = logData.logs.length;
         const lines = logData.logs.split('\n').filter(Boolean);
@@ -1064,7 +1268,7 @@ function simulateProgress(backupId, label) {
         bar.style.width = '100%'; pct.textContent = '100%';
         badge.textContent = '100%'; badge.className = 'badge badge-green';
         badge.style.color = 'var(--accent)';
-        logsEl.innerHTML += `<div style="color:var(--accent)">✅ Backup completed! Size: ${b.size_mb} MB | Duration: ${b.duration_seconds}s</div>`;
+        logsEl.innerHTML += `<div style="color:var(--accent)">✓ Backup completed! Size: ${b.size_mb} MB | Duration: ${b.duration_seconds}s</div>`;
         logsEl.scrollTop = logsEl.scrollHeight;
         setTimeout(()=>{ card.classList.remove('active'); loadBackups(); }, 3000);
         return;
@@ -1074,14 +1278,13 @@ function simulateProgress(backupId, label) {
         clearInterval(progressInterval);
         card.classList.remove('active');
         const errMsg = b.error || 'Backup failed';
-        logsEl.innerHTML += `<div style="color:var(--danger)">❌ ${escHtml(errMsg)}</div>`;
+        logsEl.innerHTML += `<div style="color:var(--danger)">✗ ${escHtml(errMsg)}</div>`;
         logsEl.scrollTop = logsEl.scrollHeight;
         toast(errMsg.split('\n')[0].substring(0, 120), 'error');
         loadBackups();
         return;
       }
 
-      // Still running — get actual progress from backend
       const actualPct = logData && logData.progress_percentage !== undefined ? logData.progress_percentage : (b && b.progress_percentage !== undefined ? b.progress_percentage : 0);
       bar.style.width = actualPct + '%';
       pct.textContent = actualPct + '%';
@@ -1089,11 +1292,6 @@ function simulateProgress(backupId, label) {
 
     } catch(e) { /* keep polling on network error */ }
   }, 1500);
-}
-
-function onBackupTypeChange() {
-  const isCollection = document.getElementById('bk-type').value === 'collection';
-  document.getElementById('bk-collection-group').style.display = isCollection ? 'block' : 'none';
 }
 
 async function deleteBackup(id) {
@@ -1106,27 +1304,41 @@ async function loadSchedules() {
   try {
     const schedules = await apiFetch('/schedules/');
     const tbody = document.getElementById('schedules-table');
-    tbody.innerHTML = schedules.map(s=>`
+    tbody.innerHTML = schedules.map(s=>{
+      const freqDisplay = s.frequency === 'weekly_mixed'
+        ? '<span class="badge freq-mixed"><span class="dot"></span>Mixed Weekly</span>'
+        : `<span class="badge badge-blue">${s.frequency}</span>`;
+      const methodDisplay = s.frequency === 'weekly_mixed'
+        ? '<span class="text-sm text-muted">Sun=Full / Mon-Sat=Incr.</span>'
+        : `<span class="badge ${s.backup_method==='incremental'?'badge-orange':'badge-green'}">${s.backup_method||'full'}</span>`;
+      return `
       <tr>
         <td><strong>${s.name}</strong></td>
         <td>${s.database_name}</td>
         <td>${s.storage_name}</td>
-        <td><span class="badge badge-blue">${s.frequency}</span></td>
+        <td>${freqDisplay}</td>
+        <td>${methodDisplay}</td>
         <td class="mono text-sm">${s.time}</td>
-        <td>${s.enabled?'<span class="badge badge-green"><span class="dot"></span>Active</span>':'<span class="badge badge-red"><span class="dot"></span>Paused</span>'}</td>
+        <td>${s.enabled?'<span class="badge badge-green"><span class="dot dot-pulse"></span>Active</span>':'<span class="badge badge-red"><span class="dot"></span>Paused</span>'}</td>
         <td><div class="actions">
           <button class="btn btn-secondary btn-sm" onclick="toggleSchedule('${s.id}')">${s.enabled?'Pause':'Resume'}</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteSchedule('${s.id}')">Delete</button>
+          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteSchedule('${s.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
         </div></td>
-      </tr>`).join('')||emptyRow(7,'No schedules yet. Automate your backups!');
+      </tr>`;
+    }).join('')||emptyRow(8,'No schedules yet. Automate your backups!');
+    lucide.createIcons();
   } catch(e) { toast(e.message,'error'); }
 }
 
 async function addSchedule() {
+  const freq = v('sc-freq');
+  const method = v('sc-method');
   try {
     await apiFetch('/schedules/',{method:'POST',body:JSON.stringify({
       name:v('sc-name'),database_id:v('sc-db'),storage_id:v('sc-storage'),
-      frequency:v('sc-freq'),time:v('sc-time'),enabled:true
+      frequency:freq,time:v('sc-time'),enabled:true,
+      backup_method: freq === 'weekly_mixed' ? 'full' : method,
+      incremental_field: v('sc-incremental-field') || null
     })});
     closeModal('schedule-modal');
     toast('Schedule created!','success');
@@ -1148,7 +1360,7 @@ async function deleteSchedule(id) {
 // ---- RESTORES ----
 async function loadRestores() {
   const btn = document.querySelector("#page-restores .btn-secondary");
-  if(btn) { btn.disabled = true; btn.textContent = "⏳ Loading..."; }
+  if(btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Loading'; }
   try {
     const restores = await apiFetch('/backups/restores');
     const tbody = document.getElementById('restores-table');
@@ -1160,18 +1372,19 @@ async function loadRestores() {
         <td>
           ${statusBadge(r.status)}
           ${r.status==='failed'&&r.error?`
-            <div style="color:var(--danger);font-size:11px;margin-top:6px;background:rgba(255,71,87,.07);border:1px solid rgba(255,71,87,.2);border-radius:6px;padding:6px 8px;max-width:300px;word-break:break-word;white-space:pre-wrap;">
+            <div style="color:var(--danger);font-size:11px;margin-top:6px;background:var(--danger-dim);border:1px solid rgba(239,68,68,0.15);border-radius:var(--radius-xs);padding:6px 8px;max-width:300px;word-break:break-word;white-space:pre-wrap;">
               ${escHtml(r.error.split('\n').slice(0,3).join('\n'))}
             </div>` : ''}
         </td>
         <td>${r.duration_seconds?r.duration_seconds+'s':'—'}</td>
         <td class="text-muted text-sm">${fmtDate(r.started_at)}</td>
         <td><div class="actions">
-          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteRestore('${r.id}')">🗑</button>
+          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteRestore('${r.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
         </div></td>
       </tr>`).join('')||emptyRow(7,'No restores yet. Click "New Restore" to restore a backup.');
+    lucide.createIcons();
   } catch(e) { toast(e.message,'error'); }
-  finally { if(btn) { btn.disabled = false; btn.textContent = "🔄 Refresh"; } }
+  finally { if(btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="refresh-cw" style="width:14px;height:14px"></i> Refresh'; lucide.createIcons(); } }
 }
 
 async function deleteRestore(id) {
@@ -1209,7 +1422,7 @@ function onRestoreBackupChange() {
   const infoText = document.getElementById('rs-info-text');
   if(opt && opt.value) {
     info.style.display='block';
-    infoText.innerHTML = `📦 <strong>${opt.text.split(' — ')[0]}</strong> &nbsp;|&nbsp; Collection: <strong>${opt.dataset.collection||'full'}</strong> &nbsp;|&nbsp; Size: <strong>${opt.dataset.size||'?'} MB</strong> &nbsp;|&nbsp; Source DB: <strong>${opt.dataset.dbname||'?'}</strong>`;
+    infoText.innerHTML = `<strong>${opt.text.split(' — ')[0]}</strong> &nbsp;|&nbsp; Collection: <strong>${opt.dataset.collection||'full'}</strong> &nbsp;|&nbsp; Size: <strong>${opt.dataset.size||'?'} MB</strong> &nbsp;|&nbsp; Source DB: <strong>${opt.dataset.dbname||'?'}</strong>`;
   } else {
     info.style.display='none';
   }
@@ -1219,7 +1432,7 @@ async function onRestoreTargetDbChange() {
   const dbId = v('rs-target-db');
   if(!dbId) return;
   const el = document.getElementById('rs-target-dbname');
-  el.innerHTML = '<option>⏳ Loading databases...</option>';
+  el.innerHTML = '<option>Loading databases...</option>';
   try {
     const r = await apiFetch(`/databases/${dbId}/databases`);
     el.innerHTML = r.databases.map(d=>`<option value="${d}">${d}</option>`).join('');
@@ -1232,22 +1445,21 @@ function setRestoreMode(mode) {
   const isNew = mode === 'new';
   document.getElementById('rs-existing-fields').style.display = isNew ? 'none' : 'block';
   document.getElementById('rs-new-fields').style.display = isNew ? 'block' : 'none';
-  // Toggle button styles
   const btnExisting = document.getElementById('rs-mode-existing');
   const btnNew = document.getElementById('rs-mode-new');
   if(isNew) {
     btnNew.style.border = '2px solid var(--accent)';
-    btnNew.style.background = 'rgba(0,229,160,.08)';
+    btnNew.style.background = 'var(--accent-dim)';
     btnNew.style.color = 'var(--accent)';
     btnExisting.style.border = '1px solid var(--border)';
-    btnExisting.style.background = 'var(--surface2)';
+    btnExisting.style.background = 'rgba(255,255,255,0.02)';
     btnExisting.style.color = 'var(--muted)';
   } else {
     btnExisting.style.border = '2px solid var(--accent)';
-    btnExisting.style.background = 'rgba(0,229,160,.08)';
+    btnExisting.style.background = 'var(--accent-dim)';
     btnExisting.style.color = 'var(--accent)';
     btnNew.style.border = '1px solid var(--border)';
-    btnNew.style.background = 'var(--surface2)';
+    btnNew.style.background = 'rgba(255,255,255,0.02)';
     btnNew.style.color = 'var(--muted)';
   }
 }
@@ -1265,7 +1477,6 @@ async function runRestore() {
   if(!isNew && !confirm(`Restore to "${targetDbname}"? Existing data will be overwritten.`)) return;
   if(isNew && !confirm(`Create new database "${targetDbname}" and restore into it?`)) return;
 
-  // Save selected dbname to db record so engine uses it
   try {
     await apiFetch(`/databases/${targetDbId}`, {
       method:'PATCH',
@@ -1298,7 +1509,7 @@ function trackRestoreProgress(restoreId) {
 
   card.classList.add('active');
   lbl.textContent = `Restore ID: ${restoreId.substring(0,8)}...`;
-  logsEl.innerHTML = '<div style="color:var(--muted)">⏳ Starting restore...</div>';
+  logsEl.innerHTML = '<div style="color:var(--muted)">Starting restore...</div>';
   let lastLogLen = 0;
 
   if(restoreInterval) clearInterval(restoreInterval);
@@ -1311,7 +1522,6 @@ function trackRestoreProgress(restoreId) {
       ]);
       const r = restores.find(x=>x.id===restoreId);
 
-      // Update live logs
       if(logData && logData.logs && logData.logs.length !== lastLogLen) {
         lastLogLen = logData.logs.length;
         const lines = logData.logs.split('\n').filter(Boolean);
@@ -1329,9 +1539,9 @@ function trackRestoreProgress(restoreId) {
         bar.style.width='100%'; pct.textContent='100%';
         badge.textContent='100%'; badge.className='badge badge-green';
         lbl.textContent = `Restore completed in ${r.duration_seconds}s`;
-        logsEl.innerHTML += `<div style="color:var(--accent)">✅ Restore completed! Duration: ${r.duration_seconds}s</div>`;
+        logsEl.innerHTML += `<div style="color:var(--accent)">✓ Restore completed! Duration: ${r.duration_seconds}s</div>`;
         logsEl.scrollTop = logsEl.scrollHeight;
-        toast('✅ Restore completed successfully!','success');
+        toast('Restore completed successfully!','success');
         setTimeout(()=>{ card.classList.remove('active'); loadRestores(); }, 3000);
         return;
       }
@@ -1340,14 +1550,13 @@ function trackRestoreProgress(restoreId) {
         clearInterval(restoreInterval);
         card.classList.remove('active');
         const errMsg = r.error || 'Restore failed';
-        logsEl.innerHTML += `<div style="color:var(--danger)">❌ ${escHtml(errMsg)}</div>`;
+        logsEl.innerHTML += `<div style="color:var(--danger)">✗ ${escHtml(errMsg)}</div>`;
         logsEl.scrollTop = logsEl.scrollHeight;
         toast(errMsg.split('\n')[0].substring(0,120), 'error');
         loadRestores();
         return;
       }
 
-      // Get actual progress percentage from backend
       const actualPct = logData && logData.progress_percentage !== undefined ? logData.progress_percentage : (r && r.progress_percentage !== undefined ? r.progress_percentage : 0);
       bar.style.width = actualPct + '%';
       pct.textContent = actualPct + '%';
@@ -1380,6 +1589,10 @@ async function openModal(id) {
     document.getElementById('db-test-result').style.display='none';
     onDbTypeChange('db');
   }
+  if(id==='schedule-modal') {
+    onFreqChange();
+  }
+  lucide.createIcons();
 }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open')}));
@@ -1397,16 +1610,30 @@ function fmtDate(iso){
   const d=new Date(dateStr);
   return d.toLocaleDateString()+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
 }
-function dbBadge(t){return t==='postgresql'?'<span class="badge badge-pg" style="margin-right:6px">🐘 PG</span>':'<span class="badge badge-mongo" style="margin-right:6px">🍃 Mongo</span>'}
-function storageBadge(t){return t==='azure'?'<span class="badge badge-azure" style="margin-right:6px">☁ Azure</span>':'<span class="badge badge-gcs" style="margin-right:6px">🌐 GCS</span>'}
-function statusBadge(s){const m={completed:'badge-green',running:'badge-orange',failed:'badge-red'};return `<span class="badge ${m[s]||'badge-blue'}"><span class="dot"></span>${s}</span>`}
+function dbBadge(t){
+  return t==='postgresql'
+    ?'<span class="badge badge-pg" style="margin-right:6px"><i data-lucide="database" style="width:12px;height:12px"></i> PG</span>'
+    :'<span class="badge badge-mongo" style="margin-right:6px"><i data-lucide="leaf" style="width:12px;height:12px"></i> Mongo</span>';
+}
+function storageBadge(t){
+  return t==='azure'
+    ?'<span class="badge badge-azure" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> Azure</span>'
+    :'<span class="badge badge-gcs" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> GCS</span>';
+}
+function statusBadge(s){
+  const m={completed:'badge-green',running:'badge-orange',failed:'badge-red'};
+  const icon = s==='running' ? '<span class="dot dot-pulse"></span>' : '<span class="dot"></span>';
+  return `<span class="badge ${m[s]||'badge-blue'}">${icon}${s}</span>`;
+}
 
 function toast(msg, type='info') {
   const c = document.getElementById('toasts');
+  const icons = {success:'check-circle-2',error:'x-circle',info:'info'};
   const t = document.createElement('div');
   t.className = `toast toast-${type}`;
-  t.innerHTML = `<span>${type==='success'?'✓':type==='error'?'✗':'ℹ'}</span> ${msg}`;
+  t.innerHTML = `<i data-lucide="${icons[type]||'info'}" style="width:18px;height:18px;flex-shrink:0"></i> ${msg}`;
   c.appendChild(t);
+  lucide.createIcons();
   setTimeout(()=>t.remove(), 4000);
 }
 

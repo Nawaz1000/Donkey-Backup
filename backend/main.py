@@ -36,6 +36,8 @@ async def scheduler_loop():
                 target_time = s.get("time")
 
                 is_due = False
+                backup_method_override = None
+                
                 if freq == "hourly":
                     last_run = s.get("last_run")
                     if not last_run:
@@ -44,6 +46,19 @@ async def scheduler_loop():
                         last_run_dt = datetime.fromisoformat(last_run)
                         if now - last_run_dt >= timedelta(hours=1):
                             is_due = True
+                elif freq == "weekly_mixed":
+                    # Weekly mixed: runs daily, full on Sunday, incremental Mon-Sat
+                    if current_time == target_time:
+                        last_run = s.get("last_run")
+                        if last_run:
+                            last_run_dt = datetime.fromisoformat(last_run)
+                            if now - last_run_dt < timedelta(minutes=2):
+                                continue
+                        is_due = True
+                        if day_of_week == 6:  # Sunday
+                            backup_method_override = "full"
+                        else:
+                            backup_method_override = "incremental"
                 else:
                     if current_time == target_time:
                         last_run = s.get("last_run")
@@ -60,7 +75,9 @@ async def scheduler_loop():
                             is_due = True
 
                 if is_due:
-                    print(f"Triggering scheduled backup: {s['name']}")
+                    method = backup_method_override or s.get("backup_method", "full")
+                    method_label = f" [{method.upper()}]" if freq == "weekly_mixed" else ""
+                    print(f"Triggering scheduled backup: {s['name']}{method_label}")
                     s["last_run"] = now.isoformat()
                     modified = True
                     
@@ -69,9 +86,9 @@ async def scheduler_loop():
                         "id": str(uuid.uuid4()),
                         "database_id": s["database_id"],
                         "storage_id": s["storage_id"],
-                        "label": f"{s['name']}-{now.strftime('%Y%m%d-%H%M%S')}",
+                        "label": f"{s['name']}-{method}-{now.strftime('%Y%m%d-%H%M%S')}",
                         "collection": "full",
-                        "backup_method": s.get("backup_method", "full"),
+                        "backup_method": method,
                         "incremental_field": s.get("incremental_field", None),
                         "status": "running",
                         "size_mb": None,

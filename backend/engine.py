@@ -234,6 +234,34 @@ def get_pg_db_size(db: dict, dbname: str) -> int:
     return 0
 
 
+def get_pg_modified_tables(db: dict, dbname: str, since_timestamp: str, log_path: str = None) -> list:
+    """Query pg_stat_user_tables to find tables modified since the last backup.
+    Returns a list of 'schema.table' strings, or None if detection fails."""
+    try:
+        query = (
+            "SELECT schemaname || '.' || relname FROM pg_stat_user_tables "
+            "WHERE (n_tup_ins + n_tup_upd + n_tup_del) > 0 "
+            f"AND greatest(last_vacuum, last_autovacuum, last_analyze, last_autoanalyze) >= '{since_timestamp}' "
+            "ORDER BY (n_tup_ins + n_tup_upd + n_tup_del) DESC;"
+        )
+        cmd = [
+            "psql", f"--host={db['host']}", f"--port={db['port']}",
+            f"--username={db['username']}", "--no-password", f"--dbname={dbname}",
+            "-t", "-A", "-c", query
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, env=pg_env(db), timeout=15)
+        if res.returncode == 0:
+            tables = [t.strip() for t in res.stdout.strip().split('\n') if t.strip()]
+            if log_path:
+                write_log(log_path, f"INFO  pg_stat detected {len(tables)} modified tables")
+            return tables
+    except Exception as e:
+        if log_path:
+            write_log(log_path, f"WARN  Failed to detect modified tables: {e}")
+        print(f"Error detecting PG modified tables: {e}")
+    return None
+
+
 class QueueReader(io.RawIOBase):
     def __init__(self, q: queue.Queue, stop_event: threading.Event):
         self.q = q
@@ -716,9 +744,28 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
     collection = backup_info.get("collection", "full")
     backup_method = backup_info.get("backup_method", "full")
     
+    incremental_tables = None
     if backup_method == "incremental":
-        write_log(log_path, "ERROR Incremental backups via pg_dump are not supported. Only Full backups are allowed for PostgreSQL.")
-        raise ValueError("Incremental backups are not supported for PostgreSQL via pg_dump.")
+        # Find last successful backup for this database
+        backups = read_json("data/backups.json")
+        last_success = None
+        for b in sorted(backups, key=lambda x: x.get("created_at", ""), reverse=True):
+            if (b.get("status") == "completed" and 
+                b.get("database_id") == backup_info.get("database_id") and
+                b.get("id") != backup_info.get("id")):
+                last_success = b.get("completed_at") or b.get("created_at")
+                break
+        
+        if last_success:
+            write_log(log_path, f"INFO  PostgreSQL incremental mode: detecting tables modified since {last_success}")
+            incremental_tables = get_pg_modified_tables(db, dbname, last_success, log_path)
+            if incremental_tables is not None and len(incremental_tables) == 0:
+                write_log(log_path, "INFO  No tables modified since last backup. Creating minimal archive.")
+                # Still create a backup record but with 0 tables — very fast
+            elif incremental_tables is None:
+                write_log(log_path, "WARN  Could not detect modified tables. Falling back to full backup.")
+        else:
+            write_log(log_path, "INFO  No previous successful backup found. Performing full backup.")
         
     cmd = [
         "pg_dump",
@@ -729,7 +776,13 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
         "--no-acl", "--no-owner",
         "--verbose"
     ]
-    if collection and collection != "full":
+    
+    if incremental_tables is not None and len(incremental_tables) > 0:
+        # Incremental: dump only modified tables
+        for tbl in incremental_tables:
+            cmd += [f"--table={tbl}"]
+        write_log(log_path, f"INFO  Incremental: dumping {len(incremental_tables)} modified tables: {', '.join(incremental_tables[:10])}{'...' if len(incremental_tables)>10 else ''}")
+    elif collection and collection != "full":
         cmd += [f"--table={collection}"]
         
     comp_info = get_compressor_info(log_path)
@@ -737,7 +790,11 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
     if comp_info:
         compression_cmd = comp_info["cmd"]
     else:
-        cmd[7] = "--compress=1"
+        # Find the --compress=0 index dynamically
+        for i, c in enumerate(cmd):
+            if c == "--compress=0":
+                cmd[i] = "--compress=1"
+                break
         write_log(log_path, "INFO  No fast compressor found in PATH. Using single-threaded native pg_dump compression.")
         
     env = pg_env(db)
