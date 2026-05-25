@@ -183,16 +183,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
         <span class="nav-icon">♻️</span> Restores
       </div>
     </nav>
-    <div class="sidebar-footer">
-      <div class="user-info">
-        <div class="avatar" id="user-avatar">?</div>
-        <div class="user-details">
-          <div class="user-name" id="user-name-display">—</div>
-          <div class="user-email" id="user-email-display">—</div>
-        </div>
-        <button class="logout-btn" style="display:none">↩</button>
-      </div>
-    </div>
+    <!-- Admin profile display removed -->
   </div>
 
   <div class="main">
@@ -312,7 +303,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
             </div>
           </div>
           <table>
-            <thead><tr><th>Backup Label</th><th>Collection</th><th>Target Database</th><th>Status</th><th>Duration</th><th>Date</th></tr></thead>
+            <thead><tr><th>Backup Label</th><th>Collection</th><th>Target Database</th><th>Status</th><th>Duration</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody id="restores-table"></tbody>
           </table>
         </div>
@@ -652,9 +643,12 @@ let currentUser = {id:'local',name:'Admin',email:'admin@local'};
 // ---- APP INIT ----
 function initApp() {
   document.getElementById('app').style.display='flex';
-  document.getElementById('user-name-display').textContent = currentUser.name;
-  document.getElementById('user-email-display').textContent = currentUser.email;
-  document.getElementById('user-avatar').textContent = 'A';
+  const nameEl = document.getElementById('user-name-display');
+  if(nameEl) nameEl.textContent = currentUser.name;
+  const emailEl = document.getElementById('user-email-display');
+  if(emailEl) emailEl.textContent = currentUser.email;
+  const avatarEl = document.getElementById('user-avatar');
+  if(avatarEl) avatarEl.textContent = 'A';
   showPage('dashboard');
 }
 
@@ -916,6 +910,8 @@ async function deleteStorage(id) {
 
 // ---- BACKUPS ----
 async function loadBackups() {
+  const btn = document.querySelector("#page-backups .btn-secondary");
+  if(btn) { btn.disabled = true; btn.textContent = "⏳ Loading..."; }
   try {
     const backups = await apiFetch('/backups/');
     const tbody = document.getElementById('backups-table');
@@ -940,6 +936,7 @@ async function loadBackups() {
         </div></td>
       </tr>`).join('')||emptyRow(8,'No backups yet. Click "Run Backup" to start.');
   } catch(e) { toast(e.message,'error'); }
+  finally { if(btn) { btn.disabled = false; btn.textContent = "🔄 Refresh"; } }
 }
 
 async function openBackupModal() {
@@ -1036,7 +1033,6 @@ function simulateProgress(backupId, label) {
   card.classList.add('active');
   lbl.textContent = label;
   logsEl.innerHTML = '<div style="color:var(--muted)">⏳ Starting backup...</div>';
-  let progress = 0;
   let lastLogLen = 0;
 
   if(progressInterval) clearInterval(progressInterval);
@@ -1085,11 +1081,11 @@ function simulateProgress(backupId, label) {
         return;
       }
 
-      // Still running — animate progress bar slowly up to 90%
-      progress = Math.min(progress + Math.random() * 5, 90);
-      bar.style.width = progress.toFixed(0) + '%';
-      pct.textContent = progress.toFixed(0) + '%';
-      badge.textContent = progress.toFixed(0) + '%';
+      // Still running — get actual progress from backend
+      const actualPct = logData && logData.progress_percentage !== undefined ? logData.progress_percentage : (b && b.progress_percentage !== undefined ? b.progress_percentage : 0);
+      bar.style.width = actualPct + '%';
+      pct.textContent = actualPct + '%';
+      badge.textContent = actualPct + '%';
 
     } catch(e) { /* keep polling on network error */ }
   }, 1500);
@@ -1151,6 +1147,8 @@ async function deleteSchedule(id) {
 
 // ---- RESTORES ----
 async function loadRestores() {
+  const btn = document.querySelector("#page-restores .btn-secondary");
+  if(btn) { btn.disabled = true; btn.textContent = "⏳ Loading..."; }
   try {
     const restores = await apiFetch('/backups/restores');
     const tbody = document.getElementById('restores-table');
@@ -1168,7 +1166,20 @@ async function loadRestores() {
         </td>
         <td>${r.duration_seconds?r.duration_seconds+'s':'—'}</td>
         <td class="text-muted text-sm">${fmtDate(r.started_at)}</td>
-      </tr>`).join('')||emptyRow(6,'No restores yet. Click "New Restore" to restore a backup.');
+        <td><div class="actions">
+          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteRestore('${r.id}')">🗑</button>
+        </div></td>
+      </tr>`).join('')||emptyRow(7,'No restores yet. Click "New Restore" to restore a backup.');
+  } catch(e) { toast(e.message,'error'); }
+  finally { if(btn) { btn.disabled = false; btn.textContent = "🔄 Refresh"; } }
+}
+
+async function deleteRestore(id) {
+  if(!confirm('Delete this restore history?')) return;
+  try {
+    await apiFetch(`/backups/restores/${id}`, {method:'DELETE'});
+    toast('Deleted','success');
+    loadRestores();
   } catch(e) { toast(e.message,'error'); }
 }
 
@@ -1288,7 +1299,6 @@ function trackRestoreProgress(restoreId) {
   card.classList.add('active');
   lbl.textContent = `Restore ID: ${restoreId.substring(0,8)}...`;
   logsEl.innerHTML = '<div style="color:var(--muted)">⏳ Starting restore...</div>';
-  let progress = 0;
   let lastLogLen = 0;
 
   if(restoreInterval) clearInterval(restoreInterval);
@@ -1337,10 +1347,11 @@ function trackRestoreProgress(restoreId) {
         return;
       }
 
-      progress = Math.min(progress + Math.random() * 5, 90);
-      bar.style.width = progress.toFixed(0)+'%';
-      pct.textContent = progress.toFixed(0)+'%';
-      badge.textContent = progress.toFixed(0)+'%';
+      // Get actual progress percentage from backend
+      const actualPct = logData && logData.progress_percentage !== undefined ? logData.progress_percentage : (r && r.progress_percentage !== undefined ? r.progress_percentage : 0);
+      bar.style.width = actualPct + '%';
+      pct.textContent = actualPct + '%';
+      badge.textContent = actualPct + '%';
 
     } catch(e){}
   }, 1500);
@@ -1377,7 +1388,15 @@ document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click
 function v(id){return document.getElementById(id)?.value||''}
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function emptyRow(cols,msg){return `<tr class="empty-row"><td colspan="${cols}">${msg}</td></tr>`}
-function fmtDate(iso){if(!iso)return'—';const d=new Date(iso);return d.toLocaleDateString()+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}
+function fmtDate(iso){
+  if(!iso)return'—';
+  let dateStr = iso;
+  if (!iso.endsWith('Z') && !iso.includes('+') && !iso.slice(10).includes('-')) {
+    dateStr = iso + 'Z';
+  }
+  const d=new Date(dateStr);
+  return d.toLocaleDateString()+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
+}
 function dbBadge(t){return t==='postgresql'?'<span class="badge badge-pg" style="margin-right:6px">🐘 PG</span>':'<span class="badge badge-mongo" style="margin-right:6px">🍃 Mongo</span>'}
 function storageBadge(t){return t==='azure'?'<span class="badge badge-azure" style="margin-right:6px">☁ Azure</span>':'<span class="badge badge-gcs" style="margin-right:6px">🌐 GCS</span>'}
 function statusBadge(s){const m={completed:'badge-green',running:'badge-orange',failed:'badge-red'};return `<span class="badge ${m[s]||'badge-blue'}"><span class="dot"></span>${s}</span>`}

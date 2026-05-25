@@ -87,7 +87,12 @@ def get_backup_logs(backup_id: str, user=Depends(get_current_user)):
     from engine import get_log_path, read_log
     live_logs = read_log(get_log_path(backup_id))
     logs = live_logs or backup.get("logs", "")
-    return {"logs": logs, "status": backup["status"], "error": backup.get("error")}
+    return {
+        "logs": logs,
+        "status": backup["status"],
+        "error": backup.get("error"),
+        "progress_percentage": backup.get("progress_percentage", 0)
+    }
 
 @router.delete("/{backup_id}")
 def delete_backup(backup_id: str, user=Depends(get_current_user)):
@@ -96,6 +101,22 @@ def delete_backup(backup_id: str, user=Depends(get_current_user)):
     user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
     backups = [b for b in backups if not (b["id"] == backup_id and b["database_id"] in user_db_ids)]
     write_json("data/backups.json", backups)
+    return {"message": "Deleted"}
+
+@router.delete("/restores/{restore_id}")
+def delete_restore(restore_id: str, user=Depends(get_current_user)):
+    if not os.path.exists("data/restores.json"):
+        raise HTTPException(404, "No restores found")
+    restores = read_json("data/restores.json")
+    dbs = read_json("data/databases.json")
+    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
+    restore = next((r for r in restores if r["id"] == restore_id), None)
+    if not restore:
+        raise HTTPException(404, "Restore not found")
+    if restore["target_database_id"] not in user_db_ids:
+        raise HTTPException(403, "Access denied")
+    restores = [r for r in restores if r["id"] != restore_id]
+    write_json("data/restores.json", restores)
     return {"message": "Deleted"}
 
 @router.get("/stats")
@@ -149,7 +170,12 @@ def get_restore_logs(restore_id: str, user=Depends(get_current_user)):
     from engine import get_log_path, read_log
     live_logs = read_log(get_log_path(f"restore_{restore_id}"))
     logs = live_logs or restore.get("logs", "")
-    return {"logs": logs, "status": restore["status"], "error": restore.get("error")}
+    return {
+        "logs": logs,
+        "status": restore["status"],
+        "error": restore.get("error"),
+        "progress_percentage": restore.get("progress_percentage", 0)
+    }
 
 @router.post("/restore")
 def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
