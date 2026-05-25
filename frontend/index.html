@@ -577,14 +577,18 @@ tr:hover td{background:rgba(255,255,255,0.015)}
 
     <!-- Solr fields -->
     <div id="db-solr-fields" style="display:none">
+      <div class="form-group">
+        <label>Solr Base URL</label>
+        <input type="text" id="db-solr-url" placeholder="http://localhost:8983"/>
+      </div>
       <div class="form-row">
         <div class="form-group">
-          <label>Host</label>
-          <input type="text" id="db-solr-host" placeholder="localhost"/>
+          <label>Username (Optional)</label>
+          <input type="text" id="db-solr-user" placeholder="solr_admin"/>
         </div>
         <div class="form-group">
-          <label>Port</label>
-          <input type="number" id="db-solr-port" placeholder="8983"/>
+          <label>Password (Optional)</label>
+          <input type="password" id="db-solr-pass" placeholder="••••••••"/>
         </div>
       </div>
       <div class="info-banner">
@@ -1086,9 +1090,16 @@ async function addDatabase() {
       payload.database_name = 'admin';
     }
   } else if(type === 'solr') {
-    const port = parseInt(v('db-solr-port')) || 8983;
-    if(!v('db-solr-host')) { toast('Please enter Solr host','error'); return; }
-    payload = {...payload, host:v('db-solr-host'), port, database_name: 'default'};
+    const url = v('db-solr-url');
+    if(!url) { toast('Please enter Solr URL','error'); return; }
+    payload = {
+      ...payload, 
+      host: url, 
+      username: v('db-solr-user'), 
+      password: v('db-solr-pass'),
+      database_name: 'default',
+      port: 8983 // default fallback
+    };
   } else {
     const port = parseInt(v('db-port'));
     if(!v('db-host')||!v('db-port')||isNaN(port)||port<1||port>65535){
