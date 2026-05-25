@@ -1161,7 +1161,8 @@ async function loadBackups() {
         <td class="text-muted text-sm">${fmtDate(b.created_at)}</td>
         <td><div class="actions">
           ${b.status==='completed'?`<button class="btn btn-secondary btn-sm" onclick="openRestoreFromBackup('${b.id}','${b.label.replace(/'/g,"\\'")}')"><i data-lucide="rotate-ccw" style="width:13px;height:13px"></i> Restore</button>`:''}
-          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
+          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}', false)" title="Delete History"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
+          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}', true)" title="Delete from Cloud Storage"><i data-lucide="cloud-off" style="width:14px;height:14px"></i></button>
         </div></td>
       </tr>`).join('')||emptyRow(8,'No backups yet. Click "Run Backup" to start.');
     lucide.createIcons();
@@ -1324,9 +1325,11 @@ function simulateProgress(backupId, label) {
   }, 1500);
 }
 
-async function deleteBackup(id) {
-  if(!confirm('Delete this backup history?')) return;
-  const deleteFromRemote = confirm('Do you also want to delete the backup file from remote storage?');
+async function deleteBackup(id, deleteFromRemote = false) {
+  const msg = deleteFromRemote 
+    ? 'Delete this backup history AND remove the file from remote cloud storage?' 
+    : 'Delete this backup history record? (Remote file will be kept)';
+  if(!confirm(msg)) return;
   await apiFetch(`/backups/${id}?delete_from_remote=${deleteFromRemote}`,{method:'DELETE'});
   toast('Deleted','success'); loadBackups();
 }
