@@ -44,3 +44,33 @@ def read_json(path: str):
 def write_json(path: str, data):
     with open(path, "w") as f:
         json.dump(data, f, indent=2, default=str)
+
+import urllib.request
+import urllib.parse
+
+def send_notification(title: str, message: str, is_error: bool = False):
+    try:
+        if not os.path.exists("data/settings.json"):
+            return
+        settings = read_json("data/settings.json")
+        
+        text = f"*{title}*\n{message}"
+        color = "EF4444" if is_error else "10B981"
+        
+        # Slack
+        if settings.get("slack_webhook"):
+            req = urllib.request.Request(settings["slack_webhook"], json.dumps({"text": text}).encode('utf-8'), {"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=5)
+            
+        # Teams
+        if settings.get("teams_webhook"):
+            payload = {"title": title, "text": message, "themeColor": color}
+            req = urllib.request.Request(settings["teams_webhook"], json.dumps(payload).encode('utf-8'), {"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=5)
+            
+        # Telegram
+        if settings.get("telegram_webhook"):
+            url = settings["telegram_webhook"] + "&text=" + urllib.parse.quote(text)
+            urllib.request.urlopen(url, timeout=5)
+    except Exception as e:
+        print(f"Failed to send notification: {e}")

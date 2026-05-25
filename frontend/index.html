@@ -337,6 +337,10 @@ tr:hover td{background:rgba(255,255,255,0.015)}
       <div class="nav-item" onclick="showPage('restores')">
         <i data-lucide="rotate-ccw"></i> Restores
       </div>
+      <div class="nav-section">Configuration</div>
+      <div class="nav-item" onclick="showPage('settings')">
+        <i data-lucide="settings"></i> Settings
+      </div>
     </nav>
     <div class="sidebar-footer">
       <div class="version-info">
@@ -499,6 +503,34 @@ tr:hover td{background:rgba(255,255,255,0.015)}
         </div>
       </div>
 
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="page" id="page-settings">
+        <div class="card" style="max-width:600px; margin: 0 auto;">
+          <div class="card-header">
+            <div class="card-title"><i data-lucide="bell"></i> Notification Webhooks</div>
+          </div>
+          <div style="padding: 24px;">
+            <div class="form-group">
+              <label>Slack Webhook URL</label>
+              <input type="text" id="set-slack" placeholder="https://hooks.slack.com/services/..." />
+            </div>
+            <div class="form-group">
+              <label>Microsoft Teams Webhook URL</label>
+              <input type="text" id="set-teams" placeholder="https://...webhook.office.com/..." />
+            </div>
+            <div class="form-group">
+              <label>Telegram Bot & Chat URL</label>
+              <input type="text" id="set-telegram" placeholder="https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>" />
+            </div>
+            <div style="text-align: right; margin-top: 24px;">
+              <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>
@@ -517,6 +549,7 @@ tr:hover td{background:rgba(255,255,255,0.015)}
       <select id="db-type" onchange="onDbTypeChange('db')">
         <option value="mongodb">MongoDB</option>
         <option value="postgresql">PostgreSQL</option>
+        <option value="solr">Apache Solr</option>
       </select>
     </div>
 
@@ -545,6 +578,24 @@ tr:hover td{background:rgba(255,255,255,0.015)}
       <div class="form-group">
         <label>Database Name</label>
         <input type="text" id="db-dbname" placeholder="myapp"/>
+      </div>
+    </div>
+
+    <!-- Solr fields -->
+    <div id="db-solr-fields" style="display:none">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Host</label>
+          <input type="text" id="db-solr-host" placeholder="localhost"/>
+        </div>
+        <div class="form-group">
+          <label>Port</label>
+          <input type="number" id="db-solr-port" placeholder="8983"/>
+        </div>
+      </div>
+      <div class="info-banner">
+        <i data-lucide="info"></i>
+        <span>Solr backups require Solr to run on the same server, or share a mount with BackupVault at /tmp/backupvault</span>
       </div>
     </div>
 
@@ -891,11 +942,11 @@ function initApp() {
 // ---- NAVIGATION ----
 const pageIcons = {
   dashboard:'layout-dashboard',databases:'server',storage:'cloud',
-  backups:'hard-drive-download',schedules:'calendar-clock',restores:'rotate-ccw'
+  backups:'hard-drive-download',schedules:'calendar-clock',restores:'rotate-ccw',settings:'settings'
 };
 const pageTitles = {
   dashboard:'Dashboard',databases:'Databases',storage:'Storage Destinations',
-  backups:'Backup History',schedules:'Schedules',restores:'Restore History'
+  backups:'Backup History',schedules:'Schedules',restores:'Restore History',settings:'Settings'
 };
 
 function showPage(name) {
@@ -921,6 +972,7 @@ async function loadPage(name) {
   else if(name==='backups') await loadBackups();
   else if(name==='schedules') await loadSchedules();
   else if(name==='restores') await loadRestores();
+  else if(name==='settings') await loadSettings();
 }
 
 // ---- API HELPERS ----
@@ -983,11 +1035,12 @@ async function loadDatabases() {
 
 function onDbTypeChange(prefix) {
   const type = document.getElementById(`${prefix}-type`).value;
-  const isMongo = type === 'mongodb';
   const pgFields = document.getElementById(`${prefix}-pg-fields`);
   const mongoFields = document.getElementById(`${prefix}-mongo-fields`);
-  if(pgFields) pgFields.style.display = isMongo ? 'none' : 'block';
-  if(mongoFields) mongoFields.style.display = isMongo ? 'block' : 'none';
+  const solrFields = document.getElementById(`${prefix}-solr-fields`);
+  if(pgFields) pgFields.style.display = type === 'postgresql' ? 'block' : 'none';
+  if(mongoFields) mongoFields.style.display = type === 'mongodb' ? 'block' : 'none';
+  if(solrFields) solrFields.style.display = type === 'solr' ? 'block' : 'none';
 }
 
 async function testMongoUri() {
@@ -1038,6 +1091,10 @@ async function addDatabase() {
       payload.username = ''; payload.password = '';
       payload.database_name = 'admin';
     }
+  } else if(type === 'solr') {
+    const port = parseInt(v('db-solr-port')) || 8983;
+    if(!v('db-solr-host')) { toast('Please enter Solr host','error'); return; }
+    payload = {...payload, host:v('db-solr-host'), port, database_name: 'default'};
   } else {
     const port = parseInt(v('db-port'));
     if(!v('db-host')||!v('db-port')||isNaN(port)||port<1||port>65535){
@@ -1725,6 +1782,30 @@ function toast(msg, type='info') {
   c.appendChild(t);
   lucide.createIcons();
   setTimeout(()=>t.remove(), 4000);
+}
+
+// ---- SETTINGS ----
+async function loadSettings() {
+  try {
+    const settings = await apiFetch('/settings/');
+    document.getElementById('set-slack').value = settings.slack_webhook || '';
+    document.getElementById('set-teams').value = settings.teams_webhook || '';
+    document.getElementById('set-telegram').value = settings.telegram_webhook || '';
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function saveSettings() {
+  try {
+    await apiFetch('/settings/', {
+      method: 'POST',
+      body: JSON.stringify({
+        slack_webhook: v('set-slack'),
+        teams_webhook: v('set-teams'),
+        telegram_webhook: v('set-telegram')
+      })
+    });
+    toast('Settings saved successfully!', 'success');
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 // ---- BOOT ----

@@ -14,7 +14,7 @@ import logging
 import tempfile
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, quote, urlparse
-from utils import read_json, write_json
+from utils import read_json, write_json, send_notification
 
 BACKUP_TMP = "/tmp/backupvault"
 os.makedirs(BACKUP_TMP, exist_ok=True)
@@ -903,6 +903,82 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
         
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
 
+# ─── SOLR BACKUP & RESTORE ───────────────────────────────────────────────────
+
+def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None):
+    import urllib.request
+    import json
+    
+    solr_host = db["host"]
+    solr_port = db["port"]
+    collection = backup.get("collection")
+    if collection == "full" or not collection:
+        collection = "default"
+        
+    backup_name = f"backup_{backup['id']}"
+    location = BACKUP_TMP
+    url = f"http://{solr_host}:{solr_port}/solr/admin/collections?action=BACKUP&name={backup_name}&collection={collection}&location={location}&wt=json"
+    
+    write_log(log_path, f"INFO  Triggering Solr Backup: {url}")
+    req = urllib.request.Request(url)
+    try:
+        with urllib.request.urlopen(req, timeout=300) as response:
+            res = json.loads(response.read().decode())
+            if "responseHeader" in res and res["responseHeader"].get("status") != 0:
+                raise RuntimeError(f"Solr backup failed: {res}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to communicate with Solr for backup: {e}")
+            
+    backup_dir = os.path.join(BACKUP_TMP, backup_name)
+    if not os.path.exists(backup_dir):
+        raise RuntimeError(f"Solr backup directory not found at {backup_dir}. Is Solr running on the same host?")
+        
+    cmd = ["tar", "-czf", "-", "-C", BACKUP_TMP, backup_name]
+    stream_backup_to_storage(cmd, {}, storage, remote_name, log_path, compression_cmd=None, tracker=tracker)
+    
+    shutil.rmtree(backup_dir, ignore_errors=True)
+    return f"{storage['type']}://{remote_name}"
+
+
+def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = False, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None):
+    import urllib.request
+    import json
+    
+    solr_host = db["host"]
+    solr_port = db["port"]
+    
+    backup_name = f"restore_{remote_name.split('/')[-1].replace('.', '_')}"
+    location = BACKUP_TMP
+    
+    cmd = ["tar", "-xzf", "-", "-C", BACKUP_TMP]
+    decompression_cmd = None
+        
+    stream_restore_from_storage(cmd, {}, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
+    
+    # We must rename the extracted dir to backup_name because the tar might have a different original folder name.
+    # The original folder name from backup is "backup_<id>". We don't know the exact ID here cleanly.
+    # So we look for any "backup_*" directory in BACKUP_TMP that was just extracted and rename it.
+    extracted = [d for d in os.listdir(BACKUP_TMP) if d.startswith("backup_")]
+    if extracted:
+        original_name = extracted[-1]
+        os.rename(os.path.join(BACKUP_TMP, original_name), os.path.join(BACKUP_TMP, backup_name))
+    
+    if collection == "full" or not collection:
+        collection = "default"
+        
+    url = f"http://{solr_host}:{solr_port}/solr/admin/collections?action=RESTORE&name={backup_name}&collection={collection}&location={location}&wt=json"
+    write_log(log_path, f"INFO  Triggering Solr Restore: {url}")
+    req = urllib.request.Request(url)
+    try:
+        with urllib.request.urlopen(req, timeout=300) as response:
+            res = json.loads(response.read().decode())
+            if "responseHeader" in res and res["responseHeader"].get("status") != 0:
+                raise RuntimeError(f"Solr restore failed: {res}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to communicate with Solr for restore: {e}")
+            
+    backup_dir = os.path.join(BACKUP_TMP, backup_name)
+    shutil.rmtree(backup_dir, ignore_errors=True)
 
 # ─── STATE HELPERS ───────────────────────────────────────────────────────────
 
@@ -957,6 +1033,7 @@ def do_backup(backup_id: str):
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
+        send_notification("Backup Failed \u274c", f"Job ID: {backup_id}\nDatabase: {db and db.get('name')}\nError: {msg}", is_error=True)
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     try:
@@ -989,6 +1066,8 @@ def do_backup(backup_id: str):
             source_dbname = m["dbname"]
         elif db["type"] == "postgresql":
             remote_path = run_pg_backup(db, backup, storage, remote_name, log_path, indexing_mode=indexing_mode, tracker=tracker)
+        elif db["type"] == "solr":
+            remote_path = run_solr_backup(db, backup, storage, remote_name, log_path, indexing_mode=indexing_mode, tracker=tracker)
         else:
             return fail(f"Unsupported DB type: {db['type']}")
 
@@ -1012,6 +1091,7 @@ def do_backup(backup_id: str):
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=duration
         )
+        send_notification("Backup Successful \u2705", f"Job ID: {backup_id}\nDatabase: {db and db.get('name')}\nSize: {size_mb}MB\nDuration: {duration}s", is_error=False)
 
     except Exception as e:
         fail(str(e))
@@ -1054,6 +1134,7 @@ def do_restore(restore_id: str):
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
+        send_notification("Restore Failed \u274c", f"Job ID: {restore_id}\nTarget: {target_db and target_db.get('name')}\nError: {msg}", is_error=True)
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     try:
@@ -1089,6 +1170,8 @@ def do_restore(restore_id: str):
             run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker)
         elif target_db["type"] == "postgresql":
             run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker)
+        elif target_db["type"] == "solr":
+            run_solr_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker)
         else:
             return fail(f"Unsupported DB type: {target_db['type']}")
 
@@ -1104,6 +1187,7 @@ def do_restore(restore_id: str):
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=duration
         )
+        send_notification("Restore Successful \u2705", f"Job ID: {restore_id}\nTarget: {target_db and target_db.get('name')}\nDuration: {duration}s", is_error=False)
 
     except Exception as e:
         fail(str(e))

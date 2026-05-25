@@ -12,7 +12,7 @@ import uuid
 from utils import read_json, write_json
 from engine import do_backup
 
-from routers import auth, databases, backups, storage, schedules
+from routers import auth, databases, backups, storage, schedules, settings
 
 async def scheduler_loop():
     while True:
@@ -145,6 +145,7 @@ app.include_router(databases.router, prefix="/api/databases", tags=["databases"]
 app.include_router(backups.router, prefix="/api/backups", tags=["backups"])
 app.include_router(storage.router, prefix="/api/storage", tags=["storage"])
 app.include_router(schedules.router, prefix="/api/schedules", tags=["schedules"])
+app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 
 @app.get("/api/health")
 def health():

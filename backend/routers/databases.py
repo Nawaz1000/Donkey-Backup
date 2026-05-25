@@ -62,7 +62,7 @@ def connect_mongo(uri: str):
 
 class DatabaseCreate(BaseModel):
     name: str
-    type: Literal["postgresql", "mongodb"]
+    type: Literal["postgresql", "mongodb", "solr"]
     host: Optional[str] = ""
     port: Optional[int] = 27017
     username: Optional[str] = ""
@@ -166,6 +166,10 @@ def list_db_names(db_id: str, user=Depends(get_current_user)):
             return {"databases": names}
         except Exception as e:
             raise HTTPException(400, f"Failed to fetch databases: {str(e)}")
+            
+    elif db["type"] == "solr":
+        # Solr doesn't have "databases", only "collections"
+        return {"databases": ["default"]}
 
 
 @router.get("/{db_id}/collections")
@@ -208,6 +212,19 @@ def list_collections(db_id: str, database: str = "", user=Depends(get_current_us
             return {"collections": tables}
         except Exception as e:
             raise HTTPException(400, f"Failed to fetch tables: {str(e)}")
+            
+    elif db["type"] == "solr":
+        try:
+            import urllib.request
+            import json
+            url = f"http://{db['host']}:{db['port']}/solr/admin/collections?action=LIST&wt=json"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode())
+                collections = data.get("collections", [])
+                return {"collections": collections}
+        except Exception as e:
+            raise HTTPException(400, f"Failed to fetch Solr collections: {str(e)}")
 
 
 @router.get("/{db_id}/test")
@@ -273,6 +290,19 @@ def test_connection(db_id: str, user=Depends(get_current_user)):
                 
                 return {"success": True, "message": f"Connected to {db['name']} — {version[:80]}"}
             raise HTTPException(400, f"Connection failed: {result.stderr.strip()}")
+        except Exception as e:
+            raise HTTPException(400, f"Connection failed: {str(e)}")
+            
+    elif db["type"] == "solr":
+        try:
+            import urllib.request
+            import json
+            url = f"http://{db['host']}:{db['port']}/solr/admin/info/system?wt=json"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode())
+                version = data.get("lucene", {}).get("solr-spec-version", "unknown")
+                return {"success": True, "message": f"Connected to {db['name']} — Apache Solr v{version}"}
         except Exception as e:
             raise HTTPException(400, f"Connection failed: {str(e)}")
 

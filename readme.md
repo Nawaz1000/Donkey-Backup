@@ -71,6 +71,7 @@ backupvault/
 
 ## Tech Stack
 - **Backend:** Python, FastAPI, JWT, bcrypt
+- **Databases Supported:** MongoDB, PostgreSQL, Apache Solr
 - **Frontend:** Vanilla JS, CSS (no framework needed)
 - **Storage:** Azure Blob Storage SDK, Google Cloud Storage SDK
 - **Auth:** JWT tokens, bcrypt password hashing
@@ -106,4 +107,10 @@ backupvault/
   - Support for deleting restore history from the UI.
   - Active Loading indicator spinners on manual refresh actions.
   - UTC timezone rendering with local browser conversion for database connections and history tables.
+- **Apache Solr Support:**
+  - Backup and Restore capabilities using native Apache Solr Collections API.
+- **Webhook Notifications:**
+  - Configurable alerts for backup/restore success and failures directly to Slack, Microsoft Teams, and Telegram.
+- **Dynamic Scheduling:**
+  - Easy-to-use visual time picker with hour, minute, and AM/PM options.
 
