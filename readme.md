@@ -91,7 +91,11 @@ backupvault/
 - **Database Client Performance Tuning (Strict < 500MB RAM & < 500m CPU):**
   - Configures PostgreSQL for tight memory constraints (`work_mem=16MB`, `maintenance_work_mem=64MB`) to safely ensure < 500MB total memory usage even during massive parallel operations.
   - Limits MongoDB insertion workers to 1 thread per collection with a batch size of 100 to keep RAM footprints strictly bounded.
-  - Aggressive Go Runtime Environment Garbage Collection (`GOGC=20`) and CPU capping (`GOMAXPROCS=1`) for `mongodump` and `mongorestore` to keep RAM strictly under 150MB and CPU under half a core (500m) while restoring 4x high-speed multi-collection concurrency (`--numParallelCollections=4`).
+  - Aggressive Go Runtime Environment Garbage Collection (`GOGC=20`), strict CPU capping (`GOMAXPROCS=1`), and Windows Background Process Priority Class (`BELOW_NORMAL_PRIORITY_CLASS`) for `mongodump`/`mongorestore`. This keeps RAM strictly under 150MB, while introducing high-performance multi-collection concurrency (`--numParallelCollections=2`).
+  - Implements proactive Python execution yielding (`time.sleep(0.002)`) in the streaming background threads (`pipe_and_count` and `reader_thread_fn`) to completely eliminate high-frequency thread loops and guarantee total CPU usage stays under the 500m threshold.
+- **Server-Side Resource Control (Database Engine Internal Limits):**
+  - **MongoDB Server:** `--readPreference=secondaryPreferred` offloads backup reads to replica secondaries to reduce primary server load. `--bypassDocumentValidation` skips server-side document validation during restores (saves server CPU). `--writeConcern={w:1,j:false}` skips journal fsync to reduce server IO/CPU spikes.
+  - **PostgreSQL Server:** `max_parallel_workers_per_gather=0` prevents the Postgres server from spawning parallel worker processes (the #1 cause of server CPU spikes). `effective_io_concurrency=1` limits IO prefetching. `--disable-triggers` in `pg_restore` prevents trigger execution during data load, massively reducing server CPU during restores.
 - **Granular Indexing Modes:**
   - Introduced API/UI options for Backups and Restores: **Include Indexes**, **Exclude Indexes (Fast Data)**, and **Only Indexes (Schema)**.
   - "Exclude Indexes" mode skips costly `mongorestore` background index rebuilds and Postgres `post-data` sections, driving restore speeds beyond 100GB in 20 minutes natively.

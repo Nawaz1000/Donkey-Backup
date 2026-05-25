@@ -192,6 +192,7 @@ def pipe_and_count(src, dest, tracker: ProgressTracker = None):
             if tracker:
                 tracker.update_bytes(len(chunk))
             dest.write(chunk)
+            time.sleep(0.002)  # Tiny 2ms sleep to yield CPU and prevent high-utilization spikes
     except Exception as e:
         print(f"Error in pipe_and_count: {e}")
     finally:
@@ -364,6 +365,7 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
                     break
                 except queue.Full:
                     continue
+            time.sleep(0.002)  # Tiny 2ms sleep to yield CPU and prevent high-utilization spikes
     except Exception as e:
         print(f"Error in reader thread: {e}")
     finally:
@@ -408,13 +410,16 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     is_mongo = "mongodump" in cmd[0]
     p_dump_stderr = subprocess.PIPE if is_mongo else open(log_path, "a")
     
+    creationflags = 0x00004000 if os.name == 'nt' else 0
+    
     try:
         if compression_cmd:
             p_dump = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=p_dump_stderr,
-                env=env
+                env=env,
+                creationflags=creationflags
             )
             processes.append(p_dump)
             
@@ -422,7 +427,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 compression_cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=open(log_path, "a")
+                stderr=open(log_path, "a"),
+                creationflags=creationflags
             )
             processes.append(p_comp)
             
@@ -440,7 +446,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=p_dump_stderr,
-                env=env
+                env=env,
+                creationflags=creationflags
             )
             processes.append(p_dump)
             stdout_stream = p_dump.stdout
@@ -547,6 +554,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
     stderr_thread = None
     
     is_mongo = "mongorestore" in cmd[0]
+    creationflags = 0x00004000 if os.name == 'nt' else 0
     
     with open(log_path, "a") as err_file:
         try:
@@ -555,7 +563,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     decompression_cmd,
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
-                    stderr=err_file
+                    stderr=err_file,
+                    creationflags=creationflags
                 )
                 processes.append(p_dec)
                 
@@ -564,7 +573,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     stdin=p_dec.stdout,
                     stdout=err_file,
                     stderr=subprocess.PIPE,  # Pipe stderr to parse progress
-                    env=env
+                    env=env,
+                    creationflags=creationflags
                 )
                 processes.append(p_restore)
                 p_dec.stdout.close()
@@ -575,7 +585,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     stdin=subprocess.PIPE,
                     stdout=err_file,
                     stderr=subprocess.PIPE,  # Pipe stderr to parse progress
-                    env=env
+                    env=env,
+                    creationflags=creationflags
                 )
                 processes.append(p_restore)
                 stdin_stream = p_restore.stdin
@@ -691,7 +702,8 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     cmd = ["mongodump"] + mongo_cmd_args(m) + [
         f"--db={dbname}",
         "--archive",
-        "--numParallelCollections=4",
+        "--numParallelCollections=2",
+        "--readPreference=secondaryPreferred",  # Offload reads to secondary replicas, reduces primary server load
     ]
     if collection and collection != "full":
         cmd += [f"--collection={collection}"]
@@ -752,9 +764,11 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
             
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
         "--archive",
-        "--numParallelCollections=4",
+        "--numParallelCollections=2",
         "--numInsertionWorkersPerCollection=1",
         "--batchSize=100",
+        "--bypassDocumentValidation",  # Skip server-side document validation — saves server CPU
+        "--writeConcern={w:1,j:false}",  # Skip journal fsync on server — reduces server IO/CPU spikes
         "--verbose=1",
     ]
 
@@ -863,7 +877,7 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
         write_log(log_path, "INFO  No fast compressor found in PATH. Using single-threaded native pg_dump compression.")
         
     env = pg_env(db)
-    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB"
+    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
         
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
 
@@ -885,6 +899,7 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
         f"--host={db['host']}", f"--port={db['port']}",
         f"--username={db['username']}", f"--dbname={dbname}",
         "--no-password", "--no-acl", "--no-owner",
+        "--disable-triggers",  # Prevent trigger execution during restore — huge server CPU saver
         "--verbose"
     ]
     if not new_database:
@@ -905,7 +920,7 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
             decompression_cmd = ["gzip", "-d", "-c"]
             
     env = pg_env(db)
-    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB"
+    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
         
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
 
