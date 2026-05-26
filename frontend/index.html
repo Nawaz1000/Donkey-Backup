@@ -498,10 +498,11 @@ tr:hover td{background:rgba(255,255,255,0.015)}
 
       <!-- SETTINGS -->
       <div class="page" id="page-settings">
-        <div class="card" style="max-width:600px; margin: 0 auto;">
-          <div class="card-header">
-            <div class="card-title"><i data-lucide="bell"></i> Notification Webhooks</div>
-          </div>
+        <div style="display:flex; justify-content:center; align-items:center; min-height:80vh">
+          <div class="card" style="width:100%; max-width:600px; margin: 0 auto;">
+            <div class="card-header">
+              <div class="card-title"><i data-lucide="bell"></i> Notification Webhooks</div>
+            </div>
           <div style="padding: 24px;">
             <div class="form-group">
               <label>Slack Webhook URL</label>
@@ -519,6 +520,7 @@ tr:hover td{background:rgba(255,255,255,0.015)}
               <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
             </div>
           </div>
+        </div>
         </div>
       </div>
 
@@ -1748,9 +1750,9 @@ function fmtDate(iso){
   return d.toLocaleDateString()+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
 }
 function dbBadge(t){
-  return t==='postgresql'
-    ?'<span class="badge badge-pg" style="margin-right:6px"><i data-lucide="database" style="width:12px;height:12px"></i> PG</span>'
-    :'<span class="badge badge-mongo" style="margin-right:6px"><i data-lucide="leaf" style="width:12px;height:12px"></i> Mongo</span>';
+  if (t === 'postgresql') return '<span class="badge badge-pg" style="margin-right:6px"><i data-lucide="database" style="width:12px;height:12px"></i> PG</span>';
+  if (t === 'solr') return '<span class="badge badge-orange" style="margin-right:6px"><i data-lucide="search" style="width:12px;height:12px"></i> Solr</span>';
+  return '<span class="badge badge-mongo" style="margin-right:6px"><i data-lucide="leaf" style="width:12px;height:12px"></i> Mongo</span>';
 }
 function storageBadge(t){
   return t==='azure'

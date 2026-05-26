@@ -192,7 +192,6 @@ def pipe_and_count(src, dest, tracker: ProgressTracker = None):
             if tracker:
                 tracker.update_bytes(len(chunk))
             dest.write(chunk)
-            time.sleep(0.002)  # Tiny 2ms sleep to yield CPU and prevent high-utilization spikes
     except Exception as e:
         print(f"Error in pipe_and_count: {e}")
     finally:
@@ -365,7 +364,6 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
                     break
                 except queue.Full:
                     continue
-            time.sleep(0.002)  # Tiny 2ms sleep to yield CPU and prevent high-utilization spikes
     except Exception as e:
         print(f"Error in reader thread: {e}")
     finally:

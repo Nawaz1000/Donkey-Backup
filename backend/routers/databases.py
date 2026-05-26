@@ -217,12 +217,12 @@ def list_collections(db_id: str, database: str = "", user=Depends(get_current_us
         try:
             import urllib.request
             import json
-            url = f"http://{db['host']}:{db['port']}/solr/admin/collections?action=LIST&wt=json"
+            url = f"http://{db['host']}:{db['port']}/solr/admin/cores?action=STATUS&wt=json"
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode())
-                collections = data.get("collections", [])
-                return {"collections": collections}
+                cores = list(data.get("status", {}).keys())
+                return {"collections": cores}
         except Exception as e:
             raise HTTPException(400, f"Failed to fetch Solr collections: {str(e)}")
 
