@@ -187,7 +187,7 @@ class ProgressTracker:
             job_type = "RESTORE" if self.is_restore else "BACKUP"
             processed_mb = round(self.bytes_processed / (1024 * 1024), 2)
             log_msg = f"[{job_type} PROGRESS] ID: {self.job_id} | Progress: {pct}% | Processed: {processed_mb} MB"
-            print(log_msg)
+            log.info(log_msg)
             
             if self.log_path:
                 write_log(self.log_path, f"INFO  Progress: {pct}% ({processed_mb} MB processed)")
@@ -207,7 +207,6 @@ class ProgressWriter:
         self.dest_stream.write(b)
         if self.tracker:
             self.tracker.update_bytes(len(b))
-        time.sleep(0.001)
         return len(b)
         
     def flush(self):
@@ -223,7 +222,6 @@ def pipe_and_count(src, dest, tracker: ProgressTracker = None):
             if tracker:
                 tracker.update_bytes(len(chunk))
             dest.write(chunk)
-            time.sleep(0.001)
     except Exception as e:
         print(f"Error in pipe_and_count: {e}")
     finally:
@@ -240,6 +238,11 @@ def log_and_parse_stderr(stderr_stream, log_path: str, tracker: ProgressTracker 
                 line = line_bytes.decode("utf-8", errors="ignore")
                 f.write(line)
                 f.flush()
+                
+                # Also log to container console logs
+                clean_line = line.strip()
+                if clean_line:
+                    log.info(clean_line)
                 
                 pct_match = re.search(r'\((\d+(?:\.\d+)?)\%\)', line)
                 if pct_match and tracker:
@@ -661,7 +664,6 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     stdin_stream.write(chunk)
                     if dl_tracker:
                         dl_tracker.update_bytes(len(chunk))
-                    time.sleep(0.001)
                 stdin_stream.close()
                 
             elif storage["type"] == "gcs":
@@ -774,8 +776,8 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     log_cmd = mask_cmd(cmd)
     write_log(log_path, f"INFO  mongodump cmd: {' '.join(log_cmd)}")
     env = os.environ.copy()
-    env["GOGC"] = "50"
-    env["GOMAXPROCS"] = "2"
+    env["GOGC"] = "100"
+    env["GOMAXPROCS"] = "4"
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
 
 
@@ -808,9 +810,9 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         "mongorestore",
         f"--uri={m['uri']}",
         "--archive",
-        "--numParallelCollections=1",
-        "--numInsertionWorkersPerCollection=2",
-        "--batchSize=1000",
+        "--numParallelCollections=4",
+        "--numInsertionWorkersPerCollection=4",
+        "--batchSize=5000",
         "--bypassDocumentValidation",
         "--writeConcern=1",
         "--verbose=1",
@@ -844,8 +846,8 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     log_cmd = mask_cmd(cmd)
     write_log(log_path, f"INFO  mongorestore cmd: {' '.join(log_cmd)}")
     env = os.environ.copy()
-    env["GOGC"] = "50"
-    env["GOMAXPROCS"] = "2"
+    env["GOGC"] = "100"
+    env["GOMAXPROCS"] = "4"
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
 
 

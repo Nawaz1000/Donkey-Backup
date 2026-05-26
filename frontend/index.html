@@ -47,12 +47,13 @@
   --transition:all 0.2s cubic-bezier(0.4,0,0.2,1);
 }
 
+html{height:100%}
 body{
   background:var(--bg);
   font-family:'Inter',system-ui,-apple-system,sans-serif;
   color:var(--text);
-  min-height:100vh;
-  overflow-x:hidden;
+  height:100%;
+  overflow:hidden;
   -webkit-font-smoothing:antialiased;
 }
 
@@ -497,8 +498,6 @@ tr:hover td{background:rgba(255,255,255,0.015)}
         </div>
       </div>
 
-      </div>
-
       <!-- SYNCS -->
       <div class="page" id="page-syncs">
         <!-- Live progress card for sync -->
@@ -554,10 +553,10 @@ tr:hover td{background:rgba(255,255,255,0.015)}
         </div>
         </div>
       </div>
+      </div>
 
     </div>
   </div>
-</div>
 
 <!-- MODALS -->
 <!-- Add Database -->

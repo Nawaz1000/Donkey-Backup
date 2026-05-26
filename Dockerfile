@@ -9,6 +9,9 @@ COPY backend/ .
 # ─── Stage 2: Final image (nginx + uvicorn together) ────────────────────────
 FROM python:3.11-slim
 
+# Force stdin/stdout/stderr to be unbuffered in python containers
+ENV PYTHONUNBUFFERED=1
+
 # Install nginx, supervisor, postgresql-client, and mongodb tools
 RUN apt-get update && apt-get install -y \
     nginx supervisor \
