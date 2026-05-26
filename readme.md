@@ -84,8 +84,7 @@ backupvault/
   - Completely eliminates array slicing memory copy overhead, reducing Python process CPU utilization to near 0% and maximizing upload throughput.
 - **Resource Limits & CPU Throttling (Capped under 500m CPU):**
   - Restricts Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines to **1 thread** (`--threads=1`, `-p 1`). This caps system resource footprints under 0.5 core to prevent host system thrashing.
-  - **Adaptive Resource Throttling & Metrics Implementation:** Integrated `psutil` as an intelligent background `AdaptiveResourceManager` to dynamically tune throughput streams (via micro-sleep yields) to enforce strict <80% CPU limits and prevent host OS starvation. This guarantees smooth restore ingestion without buffer stuttering.
-  - Automatically captures Peak CPU and Peak RAM load metrics for every backup and restore job natively, displayed globally across history UI dashboard tables.
+
 - **Actual Progress Tracking (Bar, Percentages, and Stderr Parsing):**
   - Parses real-time `mongodump` and `mongorestore` logs using background regex parsers to fetch progress percentages.
   - Queries Postgres database size using SQL `pg_database_size` and tracks bytes streamed via a background `pipe_and_count` thread to compute exact progress.

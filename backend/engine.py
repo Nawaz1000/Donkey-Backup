@@ -12,7 +12,6 @@ import os
 import shutil
 import logging
 import tempfile
-import psutil
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, quote, urlparse
 from utils import read_json, write_json, send_notification
@@ -142,8 +141,7 @@ class ProgressTracker:
         self.bytes_processed = 0
         self.last_pct = -1
         self.last_update_time = 0
-        self.peak_cpu = 0.0
-        self.peak_ram = 0.0
+        self.last_update_time = 0
 
     def update_bytes(self, num_bytes: int):
         self.bytes_processed += num_bytes
@@ -170,59 +168,24 @@ class ProgressTracker:
             else:
                 update_backup(self.job_id, progress_percentage=pct)
 
-class AdaptiveResourceManager:
-    def __init__(self):
-        self.current_sleep = 0.001
-        self.stop_event = threading.Event()
-        self.peak_cpu = 0.0
-        self.peak_ram = 0.0
-        self.thread = threading.Thread(target=self._monitor, daemon=True)
-        self.thread.start()
-
-    def _monitor(self):
-        while not self.stop_event.is_set():
-            try:
-                cpu = psutil.cpu_percent(interval=1.0)
-                mem = psutil.virtual_memory()
-                self.peak_cpu = max(self.peak_cpu, cpu)
-                self.peak_ram = max(self.peak_ram, mem.used)
-                
-                if cpu > 80.0:
-                    self.current_sleep = min(0.01, self.current_sleep + 0.002)
-                elif cpu < 50.0:
-                    self.current_sleep = max(0.0, self.current_sleep - 0.001)
-            except Exception:
-                time.sleep(1.0)
-                
-    def stop(self):
-        self.stop_event.set()
-        
-    def get_sleep(self):
-        return self.current_sleep
 
 class ProgressWriter:
-    def __init__(self, dest_stream, tracker: ProgressTracker = None, throttler: AdaptiveResourceManager = None):
+    def __init__(self, dest_stream, tracker: ProgressTracker = None):
         self.dest_stream = dest_stream
         self.tracker = tracker
-        self.throttler = throttler
         
     def write(self, b):
         self.dest_stream.write(b)
         if self.tracker:
             self.tracker.update_bytes(len(b))
-        if self.throttler:
-            sleep_val = self.throttler.get_sleep()
-            if sleep_val > 0:
-                time.sleep(sleep_val)
-        else:
-            time.sleep(0.001)
+        time.sleep(0.001)
         return len(b)
         
     def flush(self):
         self.dest_stream.flush()
 
 
-def pipe_and_count(src, dest, tracker: ProgressTracker = None, throttler: AdaptiveResourceManager = None):
+def pipe_and_count(src, dest, tracker: ProgressTracker = None):
     try:
         while True:
             chunk = src.read(262144)  # 256KB chunks
@@ -231,12 +194,7 @@ def pipe_and_count(src, dest, tracker: ProgressTracker = None, throttler: Adapti
             if tracker:
                 tracker.update_bytes(len(chunk))
             dest.write(chunk)
-            if throttler:
-                sleep_val = throttler.get_sleep()
-                if sleep_val > 0:
-                    time.sleep(sleep_val)
-            else:
-                time.sleep(0.001)
+            time.sleep(0.001)
     except Exception as e:
         print(f"Error in pipe_and_count: {e}")
     finally:
@@ -395,7 +353,7 @@ class QueueReader(io.RawIOBase):
         return bytes(b[:n])
 
 
-def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_size: int = 1024 * 1024, tracker: ProgressTracker = None, throttler: AdaptiveResourceManager = None):
+def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_size: int = 1024 * 1024, tracker: ProgressTracker = None):
     try:
         while not stop_event.is_set():
             data = stream.read(chunk_size)
@@ -409,12 +367,7 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
                     break
                 except queue.Full:
                     continue
-            if throttler:
-                sleep_val = throttler.get_sleep()
-                if sleep_val > 0:
-                    time.sleep(sleep_val)
-            else:
-                time.sleep(0.001)
+            time.sleep(0.001)
     except Exception as e:
         print(f"Error in reader thread: {e}")
     finally:
@@ -455,7 +408,6 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     processes = []
     pipe_thread = None
     stderr_thread = None
-    throttler = AdaptiveResourceManager()
     
     is_mongo = "mongodump" in cmd[0]
     p_dump_stderr = subprocess.PIPE if is_mongo else open(log_path, "a")
@@ -485,7 +437,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
             # Start pipe thread
             pipe_thread = threading.Thread(
                 target=pipe_and_count,
-                args=(p_dump.stdout, p_comp.stdin, tracker if not is_mongo else None, throttler)
+                args=(p_dump.stdout, p_comp.stdin, tracker if not is_mongo else None)
             )
             pipe_thread.daemon = True
             pipe_thread.start()
@@ -526,7 +478,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     
     reader_thread = threading.Thread(
         target=reader_thread_fn,
-        args=(stdout_stream, q, stop_event, 1024 * 1024, reader_tracker, throttler)  # 1MB chunks
+        args=(stdout_stream, q, stop_event, 1024 * 1024, reader_tracker)  # 1MB chunks
     )
     reader_thread.daemon = True
     reader_thread.start()
@@ -588,6 +540,11 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 p.wait()
             except Exception:
                 pass
+        for p in processes:
+            try:
+                p.wait()
+            except Exception:
+                pass
 
     for p in processes:
         if p.returncode != 0:
@@ -595,10 +552,6 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
         
     write_log(log_path, f"INFO  Streaming upload successful.")
     
-    throttler.stop()
-    if tracker:
-        tracker.peak_cpu = round(throttler.peak_cpu, 1)
-        tracker.peak_ram = round(throttler.peak_ram / (1024*1024), 2)  # Save as MB
         
     return remote_path
 
@@ -608,7 +561,6 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
     
     processes = []
     stderr_thread = None
-    throttler = AdaptiveResourceManager()
     
     is_mongo = "mongorestore" in cmd[0]
     creationflags = 0x00004000 if os.name == 'nt' else 0
@@ -698,7 +650,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 blob = bucket.blob(remote_name)
                 blob.chunk_size = 16 * 1024 * 1024
                 
-                progress_writer = ProgressWriter(stdin_stream, dl_tracker, throttler)
+                progress_writer = ProgressWriter(stdin_stream, dl_tracker)
                 blob.download_to_file(progress_writer)
                 stdin_stream.close()
             else:
@@ -721,11 +673,6 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 write_log(log_path, f"WARN  Restore completed with warnings (exit code 1). This is often harmless in pg_restore.")
             
         write_log(log_path, f"INFO  Streaming restore successful.")
-        
-        throttler.stop()
-        if tracker:
-            tracker.peak_cpu = round(throttler.peak_cpu, 1)
-            tracker.peak_ram = round(throttler.peak_ram / (1024*1024), 2)
 
 
 # ─── MONGODB BACKUP ──────────────────────────────────────────────────────────
@@ -1177,8 +1124,7 @@ def do_backup(backup_id: str):
             source_dbname=source_dbname if db["type"] == "mongodb" else None,
             logs=logs, error=None,
             completed_at=datetime.utcnow().isoformat(),
-            duration_seconds=duration,
-            peak_cpu=tracker.peak_cpu, peak_ram=tracker.peak_ram
+            duration_seconds=duration
         )
         send_notification("Backup Successful \u2705", f"Job ID: {backup_id}\nDatabase: {db and db.get('name')}\nSize: {size_mb}MB\nDuration: {duration}s", is_error=False)
 
@@ -1272,10 +1218,9 @@ def do_restore(restore_id: str):
 
         logs = read_log(log_path)
         update_restore(restore_id,
-            status="completed", logs=logs, error=None,
+            status="completed", error=None, logs=logs,
             completed_at=datetime.utcnow().isoformat(),
-            duration_seconds=duration,
-            peak_cpu=tracker.peak_cpu, peak_ram=tracker.peak_ram
+            duration_seconds=duration
         )
         send_notification("Restore Successful \u2705", f"Job ID: {restore_id}\nTarget: {target_db and target_db.get('name')}\nDuration: {duration}s", is_error=False)
 

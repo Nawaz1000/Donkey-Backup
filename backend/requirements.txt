@@ -7,4 +7,3 @@ python-multipart==0.0.9
 azure-storage-blob==12.19.1
 google-cloud-storage==2.16.0
 pymongo==4.7.2
-psutil==5.9.8

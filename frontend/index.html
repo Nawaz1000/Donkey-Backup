@@ -446,7 +446,7 @@ tr:hover td{background:rgba(255,255,255,0.015)}
             </div>
           </div>
           <table>
-            <thead><tr><th>Label</th><th>Database</th><th>Storage</th><th>Status</th><th>Size (MB)</th><th>Duration</th><th>Peak Load</th><th>Date</th><th></th></tr></thead>
+            <thead><tr><th>Label</th><th>Database</th><th>Storage</th><th>Status</th><th>Size (MB)</th><th>Duration</th><th>Date</th><th></th></tr></thead>
             <tbody id="backups-table"></tbody>
           </table>
         </div>
@@ -488,7 +488,7 @@ tr:hover td{background:rgba(255,255,255,0.015)}
             </div>
           </div>
           <table>
-            <thead><tr><th>Backup Label</th><th>Collection</th><th>Target Database</th><th>Status</th><th>Duration</th><th>Peak Load</th><th>Date</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Backup Label</th><th>Collection</th><th>Target Database</th><th>Status</th><th>Duration</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody id="restores-table"></tbody>
           </table>
         </div>
@@ -1244,14 +1244,13 @@ async function loadBackups() {
         </td>
         <td>${b.size_mb??'—'}</td>
         <td>${formatDuration(b.duration_seconds)}</td>
-        <td>${b.peak_cpu ? `<span class="badge badge-blue"><i data-lucide="cpu" style="width:12px;height:12px"></i> ${b.peak_cpu}%</span> <span class="badge badge-orange"><i data-lucide="memory-stick" style="width:12px;height:12px"></i> ${b.peak_ram}MB</span>` : '—'}</td>
         <td class="text-muted text-sm">${fmtDate(b.created_at)}</td>
         <td><div class="actions">
           ${b.status==='completed'?`<button class="btn btn-secondary btn-sm" onclick="openRestoreFromBackup('${b.id}','${b.label.replace(/'/g,"\\'")}')"><i data-lucide="rotate-ccw" style="width:13px;height:13px"></i> Restore</button>`:''}
           <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}', false)" title="Delete History"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
           <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}', true)" title="Delete from Cloud Storage"><i data-lucide="cloud-off" style="width:14px;height:14px"></i></button>
         </div></td>
-      </tr>`).join('')||emptyRow(9,'No backups yet. Click "Run Backup" to start.');
+      </tr>`).join('')||emptyRow(8,'No backups yet. Click "Run Backup" to start.');
     lucide.createIcons();
     
     // Auto-resume live progress tracking for running backups
@@ -1510,12 +1509,11 @@ async function loadRestores() {
             </div>` : ''}
         </td>
         <td>${formatDuration(r.duration_seconds)}</td>
-        <td>${r.peak_cpu ? `<span class="badge badge-blue"><i data-lucide="cpu" style="width:12px;height:12px"></i> ${r.peak_cpu}%</span> <span class="badge badge-orange"><i data-lucide="memory-stick" style="width:12px;height:12px"></i> ${r.peak_ram}MB</span>` : '—'}</td>
         <td class="text-muted text-sm">${fmtDate(r.started_at)}</td>
         <td><div class="actions">
           <button class="btn btn-danger btn-sm btn-icon" onclick="deleteRestore('${r.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
         </div></td>
-      </tr>`).join('')||emptyRow(8,'No restores yet. Click "New Restore" to restore a backup.');
+      </tr>`).join('')||emptyRow(7,'No restores yet. Click "New Restore" to restore a backup.');
     lucide.createIcons();
     
     // Auto-resume live tracking for running restores
