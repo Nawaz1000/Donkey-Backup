@@ -632,11 +632,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     stdin_stream.write(chunk)
                     if dl_tracker:
                         dl_tracker.update_bytes(len(chunk))
-                    sleep_val = throttler.get_sleep()
-                    if sleep_val > 0:
-                        time.sleep(sleep_val)
-                    else:
-                        time.sleep(0.001)
+                    time.sleep(0.001)
                 stdin_stream.close()
                 
             elif storage["type"] == "gcs":

@@ -1739,7 +1739,7 @@ function trackRestoreProgress(restoreId) {
 
       if(logData && logData.logs && logData.logs.length !== lastLogLen) {
         lastLogLen = logData.logs.length;
-        const lines = logData.logs.split('\n').filter(Boolean);
+        const lines = logData.logs.split('\n').filter(Boolean).slice(-100);
         logsEl.innerHTML = lines.map(l => {
           const isErr = l.toLowerCase().includes('error') || l.toLowerCase().includes('fail');
           const isOk = l.toLowerCase().includes('complete') || l.toLowerCase().includes('success');
@@ -1871,7 +1871,7 @@ function toast(msg, type='info') {
 // ---- SYNCS ----
 async function loadSyncs() {
   try {
-    const syncs = await apiFetch('/syncs/');
+    const [syncs, databases] = await Promise.all([apiFetch('/syncs/'), apiFetch('/databases/')]);
     const tb = document.getElementById('syncs-table');
     tb.innerHTML = syncs.sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).map(s => {
       const srcDb = databases.find(d=>d.id===s.source_database_id);

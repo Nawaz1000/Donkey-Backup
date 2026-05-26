@@ -113,6 +113,7 @@ backupvault/
   - Support for deleting restore history from the UI.
   - Active Loading indicator spinners on manual refresh actions.
   - UTC timezone rendering with local browser conversion for database connections and history tables.
+  - **Log Windowing**: Prevents browser lag/freezing during massive failure events (e.g. thousands of duplicate key errors) by efficiently limiting DOM nodes to only the last 100 log lines.
 - **Direct Database Sync (Cloning):**
   - Instantly clone or sync data from a Source Database directly to a Target Database without requiring intermediate cloud storage or local disk space.
   - Streams `mongodump` directly into `mongorestore` (and `pg_dump` into `pg_restore`) over a zero-copy pipeline for maximum transfer speeds.
