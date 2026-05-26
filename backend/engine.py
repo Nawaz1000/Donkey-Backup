@@ -178,6 +178,7 @@ class ProgressWriter:
         self.dest_stream.write(b)
         if self.tracker:
             self.tracker.update_bytes(len(b))
+        time.sleep(0.001)
         return len(b)
         
     def flush(self):
@@ -193,6 +194,7 @@ def pipe_and_count(src, dest, tracker: ProgressTracker = None):
             if tracker:
                 tracker.update_bytes(len(chunk))
             dest.write(chunk)
+            time.sleep(0.001)
     except Exception as e:
         print(f"Error in pipe_and_count: {e}")
     finally:
@@ -630,6 +632,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     stdin_stream.write(chunk)
                     if dl_tracker:
                         dl_tracker.update_bytes(len(chunk))
+                    time.sleep(0.001)
                 stdin_stream.close()
                 
             elif storage["type"] == "gcs":
@@ -709,7 +712,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     cmd = ["mongodump"] + mongo_cmd_args(m) + [
         f"--db={dbname}",
         "--archive",
-        "--numParallelCollections=2",
+        "--numParallelCollections=1",
         "--readPreference=secondaryPreferred",  # Offload reads to secondary replicas, reduces primary server load
     ]
     if collection and collection != "full":
@@ -739,7 +742,8 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         write_log(log_path, "INFO  No fast compressor found in PATH. Using native mongodump compression.")
         
     env = os.environ.copy()
-    env["GOGC"] = "20"
+    env["GOGC"] = "50"
+    env["GOMAXPROCS"] = "2"
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
 
 
@@ -770,8 +774,8 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
             
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
         "--archive",
-        "--numParallelCollections=2",
-        "--numInsertionWorkersPerCollection=4",
+        "--numParallelCollections=1",
+        "--numInsertionWorkersPerCollection=2",
         "--batchSize=1000",
         "--bypassDocumentValidation",  # Skip server-side document validation — saves server CPU
         "--writeConcern={\"w\":1,\"j\":false}",  # Skip journal fsync on server — reduces server IO/CPU spikes
@@ -810,7 +814,8 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
 
     write_log(log_path, f"INFO  mongorestore cmd: {' '.join(cmd)}")
     env = os.environ.copy()
-    env["GOGC"] = "20"
+    env["GOGC"] = "50"
+    env["GOMAXPROCS"] = "2"
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
 
 
