@@ -178,7 +178,6 @@ class ProgressWriter:
         self.dest_stream.write(b)
         if self.tracker:
             self.tracker.update_bytes(len(b))
-        time.sleep(0.001)
         return len(b)
         
     def flush(self):
@@ -194,7 +193,6 @@ def pipe_and_count(src, dest, tracker: ProgressTracker = None):
             if tracker:
                 tracker.update_bytes(len(chunk))
             dest.write(chunk)
-            time.sleep(0.001)
     except Exception as e:
         print(f"Error in pipe_and_count: {e}")
     finally:
@@ -632,7 +630,6 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     stdin_stream.write(chunk)
                     if dl_tracker:
                         dl_tracker.update_bytes(len(chunk))
-                    time.sleep(0.001)
                 stdin_stream.close()
                 
             elif storage["type"] == "gcs":
@@ -743,7 +740,6 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         
     env = os.environ.copy()
     env["GOGC"] = "20"
-    env["GOMAXPROCS"] = "1"
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
 
 
@@ -778,7 +774,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         "--numInsertionWorkersPerCollection=4",
         "--batchSize=1000",
         "--bypassDocumentValidation",  # Skip server-side document validation — saves server CPU
-        "--writeConcern={\"w\":1,\"j\":false}",  # Skip journal fsync on server — reduces server IO/CPU spikes
+        "--writeConcern={\"w\":0}",  # Use w:0 to prevent blocking on replica set acknowledgements
         "--verbose=1",
     ]
 
@@ -815,7 +811,6 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     write_log(log_path, f"INFO  mongorestore cmd: {' '.join(cmd)}")
     env = os.environ.copy()
     env["GOGC"] = "20"
-    env["GOMAXPROCS"] = "1"
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
 
 
