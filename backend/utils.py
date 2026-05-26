@@ -38,12 +38,60 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     return {"sub": "local-user", "email": "admin@local"}
 
 def read_json(path: str):
-    with open(path) as f:
-        return json.load(f)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except json.JSONDecodeError as jde:
+        print(f"JSON decode error in {path}: {jde}. Attempting recovery...")
+        try:
+            with open(path) as f:
+                raw_data = f.read()
+            
+            # Simple bracket-based object extractor
+            parsed_items = []
+            stack = []
+            start_idx = -1
+            for i, char in enumerate(raw_data):
+                if char == '{':
+                    if not stack:
+                        start_idx = i
+                    stack.append(char)
+                elif char == '}':
+                    if stack:
+                        stack.pop()
+                        if not stack:
+                            obj_str = raw_data[start_idx:i+1]
+                            try:
+                                obj = json.loads(obj_str)
+                                if isinstance(obj, dict):
+                                    parsed_items.append(obj)
+                            except Exception:
+                                pass
+            if parsed_items:
+                if "settings.json" in path:
+                    salvaged = parsed_items[-1]
+                else:
+                    salvaged = [item for item in parsed_items if "id" in item]
+                
+                print(f"Successfully salvaged {len(salvaged) if isinstance(salvaged, list) else 1} items from {path}")
+                write_json(path, salvaged)
+                return salvaged
+        except Exception as re:
+            print(f"Failed to salvage JSON file {path}: {re}")
+        raise jde
 
 def write_json(path: str, data):
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2, default=str)
+    import tempfile
+    dir_name = os.path.dirname(path) or "."
+    fd, temp_path = tempfile.mkstemp(dir=dir_name, prefix=".tmp-")
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f, indent=2, default=str)
+        os.replace(temp_path, path)
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise e
 
 import urllib.request
 import urllib.parse
