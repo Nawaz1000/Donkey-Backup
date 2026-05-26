@@ -774,9 +774,9 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
             
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
         "--archive",
-        "--numParallelCollections=2",
-        "--numInsertionWorkersPerCollection=1",
-        "--batchSize=100",
+        "--numParallelCollections=4",
+        "--numInsertionWorkersPerCollection=8",
+        "--batchSize=10000",
         "--bypassDocumentValidation",  # Skip server-side document validation — saves server CPU
         "--writeConcern={w:1,j:false}",  # Skip journal fsync on server — reduces server IO/CPU spikes
         "--verbose=1",
@@ -1190,7 +1190,9 @@ def do_restore(restore_id: str):
             target_db = {**target_db, "database_name": new_dbname}
 
         compression = backup.get("compression")
-        source_dbname = backup.get("source_dbname")  # saved at backup time
+        source_db_connection = next((d for d in dbs if d["id"] == backup.get("database_id")), None)
+        fallback_source_dbname = source_db_connection["database_name"] if source_db_connection else None
+        source_dbname = backup.get("source_dbname") or fallback_source_dbname
 
         # Initialize progress tracker
         total_size = int(backup.get("size_mb", 0) * 1024 * 1024)

@@ -61,6 +61,7 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
     backup = {
         "id": str(uuid.uuid4()),
         "database_id": req.database_id,
+        "source_dbname": db.get("database_name", ""),
         "storage_id": req.storage_id,
         "label": req.label or f"backup-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}",
         "collection": req.collection or "full",
