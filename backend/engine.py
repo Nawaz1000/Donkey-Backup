@@ -201,14 +201,21 @@ class AdaptiveResourceManager:
         return self.current_sleep
 
 class ProgressWriter:
-    def __init__(self, dest_stream, tracker: ProgressTracker = None):
+    def __init__(self, dest_stream, tracker: ProgressTracker = None, throttler: AdaptiveResourceManager = None):
         self.dest_stream = dest_stream
         self.tracker = tracker
+        self.throttler = throttler
         
     def write(self, b):
         self.dest_stream.write(b)
         if self.tracker:
             self.tracker.update_bytes(len(b))
+        if self.throttler:
+            sleep_val = self.throttler.get_sleep()
+            if sleep_val > 0:
+                time.sleep(sleep_val)
+        else:
+            time.sleep(0.001)
         return len(b)
         
     def flush(self):
@@ -655,7 +662,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 except Exception: pass
             raise RuntimeError(f"Failed to start restore processes: {e}")
 
-        dl_tracker = tracker if not is_mongo else None
+        dl_tracker = tracker
 
         try:
             if storage["type"] == "azure":
@@ -673,6 +680,11 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     stdin_stream.write(chunk)
                     if dl_tracker:
                         dl_tracker.update_bytes(len(chunk))
+                    sleep_val = throttler.get_sleep()
+                    if sleep_val > 0:
+                        time.sleep(sleep_val)
+                    else:
+                        time.sleep(0.001)
                 stdin_stream.close()
                 
             elif storage["type"] == "gcs":
@@ -686,7 +698,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 blob = bucket.blob(remote_name)
                 blob.chunk_size = 16 * 1024 * 1024
                 
-                progress_writer = ProgressWriter(stdin_stream, dl_tracker)
+                progress_writer = ProgressWriter(stdin_stream, dl_tracker, throttler)
                 blob.download_to_file(progress_writer)
                 stdin_stream.close()
             else:
