@@ -774,7 +774,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         "--numInsertionWorkersPerCollection=4",
         "--batchSize=1000",
         "--bypassDocumentValidation",  # Skip server-side document validation — saves server CPU
-        "--writeConcern={\"w\":0}",  # Use w:0 to prevent blocking on replica set acknowledgements
+        "--writeConcern={\"w\":1,\"j\":false}",  # Skip journal fsync on server — reduces server IO/CPU spikes
         "--verbose=1",
     ]
 
