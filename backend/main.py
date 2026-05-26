@@ -12,7 +12,7 @@ import uuid
 from utils import read_json, write_json
 from engine import do_backup
 
-from routers import auth, databases, backups, storage, schedules, settings
+from routers import auth, databases, backups, storage, schedules, settings, syncs
 
 async def scheduler_loop():
     while True:
@@ -120,6 +120,7 @@ async def lifespan(app: FastAPI):
         ("data/backups.json", []),
         ("data/storages.json", []),
         ("data/schedules.json", []),
+        ("data/syncs.json", []),
     ]:
         os.makedirs("data", exist_ok=True)
         if not os.path.exists(f):
@@ -146,6 +147,7 @@ app.include_router(backups.router, prefix="/api/backups", tags=["backups"])
 app.include_router(storage.router, prefix="/api/storage", tags=["storage"])
 app.include_router(schedules.router, prefix="/api/schedules", tags=["schedules"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
+app.include_router(syncs.router, prefix="/api/syncs", tags=["syncs"])
 
 @app.get("/api/health")
 def health():

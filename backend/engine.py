@@ -1243,3 +1243,180 @@ def _cleanup_old_logs():
                     os.remove(fpath)
     except Exception:
         pass
+
+
+# ─── SYNC HELPERS ────────────────────────────────────────────────────────────
+
+def update_sync(sync_id: str, **kwargs):
+    syncs = read_json("data/syncs.json")
+    for s in syncs:
+        if s["id"] == sync_id:
+            s.update(kwargs)
+            break
+    write_json("data/syncs.json", syncs)
+
+
+def run_mongo_sync(src_db: dict, tgt_db: dict, sync_job: dict, log_path: str, tracker: ProgressTracker):
+    src_m = parse_mongo_uri(src_db)
+    tgt_m = parse_mongo_uri(tgt_db)
+    
+    collection = sync_job.get("collection", "full")
+    override_target_name = sync_job.get("override_target_name", "").strip()
+    drop_existing = sync_job.get("drop_existing", False)
+    
+    cmd_dump = ["mongodump"] + mongo_cmd_args(src_m) + [
+        f"--db={src_m['dbname']}",
+        "--archive"
+    ]
+    if collection and collection != "full":
+        cmd_dump += [f"--collection={collection}"]
+        
+    cmd_restore = ["mongorestore"] + mongo_cmd_args(tgt_m) + [
+        "--archive"
+    ]
+    if drop_existing:
+        cmd_restore.append("--drop")
+        
+    if override_target_name:
+        cmd_restore.extend([
+            f"--nsFrom={src_m['dbname']}.*",
+            f"--nsTo={override_target_name}.*"
+        ])
+        
+    write_log(log_path, f"INFO  Starting MongoDB Sync")
+    
+    creationflags = 0x00004000 if os.name == 'nt' else 0
+    with open(log_path, "a") as log_file:
+        p_dump = subprocess.Popen(cmd_dump, stdout=subprocess.PIPE, stderr=log_file, creationflags=creationflags)
+        p_restore = subprocess.Popen(cmd_restore, stdin=subprocess.PIPE, stdout=log_file, stderr=subprocess.PIPE, creationflags=creationflags)
+        
+        # Track progress
+        pipe_thread = threading.Thread(target=pipe_and_count, args=(p_dump.stdout, p_restore.stdin, tracker))
+        pipe_thread.start()
+        
+        # Log mongorestore stderr
+        stderr_thread = threading.Thread(target=log_and_parse_stderr, args=(p_restore.stderr, log_path, tracker))
+        stderr_thread.daemon = True
+        stderr_thread.start()
+        
+        pipe_thread.join()
+        
+        p_dump.wait()
+        p_restore.wait()
+        
+        if p_restore.returncode != 0:
+            raise RuntimeError(f"Mongo Sync failed with exit code {p_restore.returncode}")
+
+
+def run_pg_sync(src_db: dict, tgt_db: dict, sync_job: dict, log_path: str, tracker: ProgressTracker):
+    src_dbname = src_db.get("database_name", "")
+    tgt_dbname = sync_job.get("override_target_name", "").strip() or tgt_db.get("database_name", "")
+    collection = sync_job.get("collection", "full")
+    drop_existing = sync_job.get("drop_existing", False)
+    
+    cmd_dump = ["pg_dump", "-h", src_db["host"], "-p", str(src_db["port"]), "-U", src_db["username"], "--format=custom", "-d", src_dbname]
+    if collection and collection != "full":
+        cmd_dump += ["-t", collection]
+        
+    cmd_restore = ["pg_restore", "-h", tgt_db["host"], "-p", str(tgt_db["port"]), "-U", tgt_db["username"], "-d", tgt_dbname]
+    if drop_existing:
+        cmd_restore.append("--clean")
+        cmd_restore.append("--if-exists")
+        
+    src_env = pg_env(src_db)
+    tgt_env = pg_env(tgt_db)
+    
+    write_log(log_path, f"INFO  Starting PostgreSQL Sync")
+    
+    creationflags = 0x00004000 if os.name == 'nt' else 0
+    with open(log_path, "a") as log_file:
+        p_dump = subprocess.Popen(cmd_dump, stdout=subprocess.PIPE, stderr=log_file, env=src_env, creationflags=creationflags)
+        p_restore = subprocess.Popen(cmd_restore, stdin=subprocess.PIPE, stdout=log_file, stderr=log_file, env=tgt_env, creationflags=creationflags)
+        
+        pipe_thread = threading.Thread(target=pipe_and_count, args=(p_dump.stdout, p_restore.stdin, tracker))
+        pipe_thread.start()
+        pipe_thread.join()
+        
+        p_dump.wait()
+        p_restore.wait()
+        
+        if p_restore.returncode not in (0, 1):
+            raise RuntimeError(f"PostgreSQL Sync failed with exit code {p_restore.returncode}")
+
+
+def do_sync(sync_id: str):
+    start = datetime.utcnow()
+    tmp_dir = os.path.join(BACKUP_TMP, f"sync_{sync_id}")
+    os.makedirs(tmp_dir, exist_ok=True)
+    log_path = get_log_path(f"sync_{sync_id}")
+
+    write_log(log_path, f"=== SYNC START | id={sync_id} ===")
+
+    syncs = read_json("data/syncs.json")
+    sync_job = next((s for s in syncs if s["id"] == sync_id), None)
+    if not sync_job:
+        return
+
+    dbs = read_json("data/databases.json")
+    src_db = next((d for d in dbs if d["id"] == sync_job["source_database_id"]), None)
+    tgt_db = next((d for d in dbs if d["id"] == sync_job["target_database_id"]), None)
+
+    def fail(msg):
+        log.error(f"=== SYNC FAILED | id={sync_id} | {msg} ===")
+        write_log(log_path, f"ERROR {msg}")
+        logs = read_log(log_path)
+        update_sync(sync_id,
+            status="failed", error=msg, logs=logs,
+            completed_at=datetime.utcnow().isoformat(),
+            duration_seconds=int((datetime.utcnow() - start).total_seconds())
+        )
+        send_notification("Sync Failed \u274c", f"Job ID: {sync_id}\nError: {msg}", is_error=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    try:
+        if not src_db or not tgt_db:
+            return fail("Source or Target database not found")
+
+        total_size = 0
+        if src_db["type"] == "postgresql":
+            total_size = get_pg_db_size(src_db, src_db.get("database_name", ""))
+            write_log(log_path, f"INFO  Estimated source DB size: {round(total_size / (1024*1024), 2)} MB")
+
+        tracker = ProgressTracker(sync_id, is_restore=False, total_size=total_size, log_path=log_path)
+        
+        # Override tracker.update_pct to update sync status
+        def _update_sync_pct(pct: int):
+            now = time.time()
+            if pct != tracker.last_pct or now - tracker.last_update_time >= 1:
+                tracker.last_pct = pct
+                tracker.last_update_time = now
+                update_sync(sync_id, progress=pct)
+        tracker.update_pct = _update_sync_pct
+
+        if src_db["type"] == "mongodb":
+            run_mongo_sync(src_db, tgt_db, sync_job, log_path, tracker)
+        elif src_db["type"] == "postgresql":
+            run_pg_sync(src_db, tgt_db, sync_job, log_path, tracker)
+        else:
+            return fail(f"Unsupported DB type for sync: {src_db['type']}")
+
+        tracker.update_pct(100)
+        size_mb = round(tracker.bytes_processed / (1024 * 1024), 2)
+        duration = int((datetime.utcnow() - start).total_seconds())
+        
+        write_log(log_path, f"=== SYNC COMPLETE | size={size_mb}MB | duration={duration}s ===")
+        logs = read_log(log_path)
+        
+        update_sync(sync_id,
+            status="completed", size_mb=size_mb, logs=logs, error=None,
+            completed_at=datetime.utcnow().isoformat(),
+            duration_seconds=duration,
+            progress=100
+        )
+        send_notification("Sync Successful \u2705", f"Job ID: {sync_id}\nSize: {size_mb}MB\nDuration: {duration}s", is_error=False)
+
+    except Exception as e:
+        fail(str(e))
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        _cleanup_old_logs()

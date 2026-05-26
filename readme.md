@@ -113,6 +113,10 @@ backupvault/
   - Support for deleting restore history from the UI.
   - Active Loading indicator spinners on manual refresh actions.
   - UTC timezone rendering with local browser conversion for database connections and history tables.
+- **Direct Database Sync (Cloning):**
+  - Instantly clone or sync data from a Source Database directly to a Target Database without requiring intermediate cloud storage or local disk space.
+  - Streams `mongodump` directly into `mongorestore` (and `pg_dump` into `pg_restore`) over a zero-copy pipeline for maximum transfer speeds.
+  - Supports Target DB renaming, specific collection scope, and dropping existing data before sync to prevent duplicate errors.
 - **Apache Solr Support:**
   - Backup and Restore capabilities using native Apache Solr Collections API.
 - **Webhook Notifications:**
