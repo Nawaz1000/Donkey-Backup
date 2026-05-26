@@ -91,7 +91,7 @@ backupvault/
   - Wraps GCS/Azure download streams with a `ProgressWriter` to monitor restore progress and seamlessly track stdin archive ingestion metrics for MongoDB restores where logs are unavailable.
 - **Database Client Performance Tuning (Strict < 500MB RAM & < 500m CPU):**
   - Configures PostgreSQL for tight memory constraints (`work_mem=16MB`, `maintenance_work_mem=64MB`) to safely ensure < 500MB total memory usage even during massive parallel operations.
-  - Maximizes MongoDB restore throughput using 8 parallel insertion workers per collection (across 4 parallel collections) with a massive 10,000 batch size, achieving extreme insertion speeds. Host server RAM/CPU remains strictly bounded due to Zero-Copy streaming and single-threaded Zstd decompression.
+  - Maximizes MongoDB restore throughput using 4 parallel insertion workers per collection (across 2 parallel collections) with a balanced 1000 batch size. This achieves extremely fast insertion speeds without overwhelming external cloud-hosted database connections. Host server RAM/CPU remains strictly bounded.
   - Aggressive Go Runtime Environment Garbage Collection (`GOGC=20`), strict CPU capping (`GOMAXPROCS=1`), and Windows Background Process Priority Class (`BELOW_NORMAL_PRIORITY_CLASS`) for `mongodump`/`mongorestore`. This keeps host RAM strictly under 150MB, despite the massive concurrency.
   - Removed proactive Python execution yielding (`time.sleep(0.002)`) in the streaming background threads to unlock maximum network throughput, achieving 100GB backups in under 5 minutes while naturally balancing resource limits via IO blocking.
 - **Server-Side Resource Control (Database Engine Internal Limits):**

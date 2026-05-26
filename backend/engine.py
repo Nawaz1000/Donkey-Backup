@@ -774,9 +774,9 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
             
     cmd = ["mongorestore"] + mongo_cmd_args(m) + [
         "--archive",
-        "--numParallelCollections=4",
-        "--numInsertionWorkersPerCollection=8",
-        "--batchSize=10000",
+        "--numParallelCollections=2",
+        "--numInsertionWorkersPerCollection=4",
+        "--batchSize=1000",
         "--bypassDocumentValidation",  # Skip server-side document validation — saves server CPU
         "--writeConcern={w:1,j:false}",  # Skip journal fsync on server — reduces server IO/CPU spikes
         "--verbose=1",
