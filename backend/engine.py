@@ -101,6 +101,35 @@ def pg_env(db: dict) -> dict:
     return env
 
 
+def mask_cmd(cmd: list) -> list:
+    log_cmd = []
+    for arg in cmd:
+        if arg.startswith("--uri="):
+            try:
+                val = arg[6:]
+                if "@" in val:
+                    scheme_end = val.index("://") + 3
+                    scheme = val[:scheme_end]
+                    rest = val[scheme_end:]
+                    at_pos = rest.rfind("@")
+                    userinfo = rest[:at_pos]
+                    hostpart = rest[at_pos:]
+                    if ":" in userinfo:
+                        colon_pos = userinfo.index(":")
+                        user = userinfo[:colon_pos]
+                        masked_val = f"{scheme}{user}:******{hostpart}"
+                    else:
+                        masked_val = f"{scheme}******{hostpart}"
+                    log_cmd.append(f"--uri={masked_val}")
+                else:
+                    log_cmd.append(arg)
+            except Exception:
+                log_cmd.append("--uri=******")
+        else:
+            log_cmd.append(arg)
+    return log_cmd
+
+
 # ─── LOG FILE HELPERS ────────────────────────────────────────────────────────
 
 def get_log_path(job_id: str) -> str:
@@ -709,8 +738,9 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         except Exception as e:
             raise RuntimeError(f"Failed to backup MongoDB indexes: {e}")
 
-    cmd = ["mongodump"] + mongo_cmd_args(m) + [
-        f"--db={dbname}",
+    cmd = [
+        "mongodump",
+        f"--uri={m['uri']}",
         "--archive",
         "--numParallelCollections=1",
         "--readPreference=secondaryPreferred",  # Offload reads to secondary replicas, reduces primary server load
@@ -741,6 +771,8 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         cmd.append("--gzip")
         write_log(log_path, "INFO  No fast compressor found in PATH. Using native mongodump compression.")
         
+    log_cmd = mask_cmd(cmd)
+    write_log(log_path, f"INFO  mongodump cmd: {' '.join(log_cmd)}")
     env = os.environ.copy()
     env["GOGC"] = "50"
     env["GOMAXPROCS"] = "2"
@@ -772,31 +804,28 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         except Exception as e:
             pass
             
-    cmd = ["mongorestore"] + mongo_cmd_args(m) + [
+    cmd = [
+        "mongorestore",
+        f"--uri={m['uri']}",
         "--archive",
         "--numParallelCollections=1",
         "--numInsertionWorkersPerCollection=2",
         "--batchSize=1000",
-        "--bypassDocumentValidation",  # Skip server-side document validation — saves server CPU
-        "--writeConcern={\"w\":1,\"j\":false}",  # Skip journal fsync on server — reduces server IO/CPU spikes
+        "--bypassDocumentValidation",
+        "--writeConcern=1",
         "--verbose=1",
     ]
 
     if indexing_mode == "without_index":
         cmd.append("--noIndexRestore")
 
-    if source_dbname and source_dbname != dbname:
-        write_log(log_path, f"INFO  DB name mismatch: backup='{source_dbname}' target='{dbname}' — using namespace remapping")
-        cmd += [
-            f"--nsFrom={source_dbname}.*",
-            f"--nsTo={dbname}.*",
-        ]
-        if collection and collection != "full":
-            cmd += [f"--nsInclude={source_dbname}.{collection}"]
-    else:
-        cmd += [f"--db={dbname}"]
-        if collection and collection != "full":
-            cmd += [f"--collection={collection}"]
+    # Always use wildcard namespace remapping to force restore to dbname
+    cmd += [
+        "--nsFrom=$database$.$collection$",
+        f"--nsTo={dbname}.$collection$",
+    ]
+    if collection and collection != "full":
+        cmd += [f"--nsInclude=*.{collection}"]
 
     if drop_existing:
         cmd.append("--drop")
@@ -812,7 +841,8 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     elif compression in ("native", None):
         cmd.append("--gzip")
 
-    write_log(log_path, f"INFO  mongorestore cmd: {' '.join(cmd)}")
+    log_cmd = mask_cmd(cmd)
+    write_log(log_path, f"INFO  mongorestore cmd: {' '.join(log_cmd)}")
     env = os.environ.copy()
     env["GOGC"] = "50"
     env["GOMAXPROCS"] = "2"

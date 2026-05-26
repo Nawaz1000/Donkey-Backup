@@ -89,13 +89,15 @@ backupvault/
   - Parses real-time `mongodump` and `mongorestore` logs using background regex parsers to fetch progress percentages.
   - Queries Postgres database size using SQL `pg_database_size` and tracks bytes streamed via a background `pipe_and_count` thread to compute exact progress.
   - Wraps GCS/Azure download streams with a `ProgressWriter` to monitor restore progress and seamlessly track stdin archive ingestion metrics for MongoDB restores where logs are unavailable.
-- **Database Client Performance Tuning (Strict < 500MB RAM & < 500m CPU):**
-  - Configures PostgreSQL for tight memory constraints (`work_mem=16MB`, `maintenance_work_mem=64MB`) to safely ensure < 500MB total memory usage even during massive parallel operations.
-  - Maximizes MongoDB restore throughput using 4 parallel insertion workers per collection (across 2 parallel collections) with a balanced 1000 batch size. This achieves extremely fast insertion speeds without overwhelming external cloud-hosted database connections. Host server RAM/CPU remains strictly bounded.
-  - Aggressive Go Runtime Environment Garbage Collection (`GOGC=20`), strict CPU capping (`GOMAXPROCS=1`), and Windows Background Process Priority Class (`BELOW_NORMAL_PRIORITY_CLASS`) for `mongodump`/`mongorestore`. This keeps host RAM strictly under 150MB, despite the massive concurrency.
-  - Removed proactive Python execution yielding (`time.sleep(0.002)`) in the streaming background threads to unlock maximum network throughput, achieving 100GB backups in under 5 minutes while naturally balancing resource limits via IO blocking.
+- **Database Client Performance Tuning:**
+  - Configures PostgreSQL for memory constraints (`work_mem=16MB`, `maintenance_work_mem=64MB`) to safely ensure minimal memory usage even during massive parallel operations.
+  - MongoDB restore concurrency is optimized to 1 parallel collection and 2 insertion workers per collection (batch size of 1000) to ensure highly stable and low-overhead insertions.
+  - Uses Go Runtime environment tuning (`GOGC=50`) and safety thread constraints (`GOMAXPROCS=2`) for `mongodump`/`mongorestore`. This completely resolves Go scheduler single-core deadlocks while keeping host thread count and memory overhead minimal.
+  - Restores cooperative Python yielding (`time.sleep(0.001)`) in the background I/O threads to prevent GIL starvation and allow CPU cores to schedule child processes (`zstd` and `mongorestore`) smoothly.
+  - Uses direct connection URI (`--uri`) in MongoDB tool arguments to preserve critical options like SSL/TLS, `replicaSet`, and `directConnection` from connection strings.
+  - Implements dynamic wildcard namespace remapping (`--nsFrom=$database$.$collection$` and `--nsTo=target_db.$collection$`) to guarantee clean database renames when restoring archives.
 - **Server-Side Resource Control (Database Engine Internal Limits):**
-  - **MongoDB Server:** `--readPreference=secondaryPreferred` offloads backup reads to replica secondaries to reduce primary server load. `--bypassDocumentValidation` skips server-side document validation during restores (saves server CPU). `--writeConcern={"w":1,"j":false}` skips journal fsync to reduce server IO/CPU spikes.
+  - **MongoDB Server:** `--readPreference=secondaryPreferred` offloads backup reads to replica secondaries to reduce primary server load. `--bypassDocumentValidation` skips server-side document validation during restores (saves server CPU). `--writeConcern=1` (standard `w:1`) ensures acknowledged writes on the primary/standalone node without replica set blocking.
   - **PostgreSQL Server:** `max_parallel_workers_per_gather=0` prevents the Postgres server from spawning parallel worker processes (the #1 cause of server CPU spikes). `effective_io_concurrency=1` limits IO prefetching. `--disable-triggers` in `pg_restore` prevents trigger execution during data load, massively reducing server CPU during restores.
 - **Granular Indexing Modes:**
   - Introduced API/UI options for Backups and Restores: **Include Indexes**, **Exclude Indexes (Fast Data)**, and **Only Indexes (Schema)**.
