@@ -83,10 +83,12 @@ backupvault/
   - Optimized queue and buffer management using memory pointer offsets and Python `memoryview` stream wrappers.
   - Completely eliminates array slicing memory copy overhead, reducing Python process CPU utilization to near 0% and maximizing upload throughput.
 - **High-Performance Scaling & CPU Multi-threading:**
-  - Automatically scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines to use multiple cores (up to 4 threads) depending on host capability.
-  - Dynamically sets `GOMAXPROCS` to match the CPU count (or default 8 threads) to leverage all available cores in the Go-based tools (`mongodump` / `mongorestore`).
+  - Scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines dynamically (capped at 2 threads) to prevent CPU spikes from starving host processes.
+  - Limits Go runtime concurrency (`GOMAXPROCS` capped at 4 threads) to restrict active OS threads in Go-based tools (`mongodump` / `mongorestore`).
 - **Parallel Collection Transfer:**
-  - Supports dumping up to 4 collections in parallel, and restoring up to 8 collections and 8 insertion workers concurrently, dramatically reducing restore/backup time for large datasets (e.g. 50GB takes minutes instead of hours).
+  - Supports dumping up to 2 collections in parallel, and restoring up to 4 collections and 4 insertion workers concurrently, balancing high transfer speeds with reasonable system load.
+- **Bounded RAM Footprint (< 100MB):**
+  - Downloads and uploads GCS/Azure objects sequentially (`max_concurrency=1`) with `4MB` chunk sizes. This prevents parallel chunk buffering in memory when the database engine is writing slowly, strictly keeping RAM consumption under 100MB.
 - **Robust Connection Options Parsing:**
   - Implements an advanced, case-insensitive URI parser that detects database options from both query parameters and path-based segments (such as `...:27017/authMechanism=...`), auto-corrects them, and connects securely using keyword argument credentials to bypass PyMongo URI decoding limitations with special characters (like `!`).
 - **Verbosity & Notification Logging:**
@@ -98,8 +100,8 @@ backupvault/
   - Wraps GCS/Azure download streams with a `ProgressWriter` to monitor restore progress and seamlessly track stdin archive ingestion metrics for MongoDB restores where logs are unavailable.
 - **Database Client Performance Tuning:**
   - Configures PostgreSQL for memory constraints (`work_mem=16MB`, `maintenance_work_mem=64MB`) to safely ensure minimal memory usage even during massive parallel operations.
-  - MongoDB restore concurrency is optimized to 8 parallel collections and 8 insertion workers per collection (batch size of 2000) to maximize write performance.
-  - Uses Go Runtime environment tuning (`GOGC=100`) and multicore thread scheduling dynamically scaled to available cores for `mongodump`/`mongorestore` to achieve maximum throughput on multi-core host systems.
+  - MongoDB restore concurrency is optimized to 4 parallel collections and 4 insertion workers per collection (batch size of 2000) to balance write performance and CPU overhead.
+  - Uses Go Runtime environment tuning (`GOGC=100`) and multicore thread scheduling capped at 4 cores (`GOMAXPROCS`) to prevent database resource starvation.
   - Removed all artificial sleep delays from streaming background threads to enable line-rate direct download and decompression speeds.
   - Uses direct connection URI (`--uri`) in MongoDB tool arguments to preserve critical options like SSL/TLS, `replicaSet`, and `directConnection` from connection strings.
   - Implements dynamic wildcard namespace remapping (`--nsFrom=$database$.$collection$` and `--nsTo=target_db.$collection$`) to guarantee clean database renames when restoring archives.
