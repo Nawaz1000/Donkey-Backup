@@ -119,7 +119,7 @@ backupvault/
   - **Neon Donkey Favicon**: A customized neon donkey favicon linked globally across the dashboard.
 - **Apache Solr Support:**
   - Backup and Restore capabilities using native Apache Solr Collections API, with robust URL parsing, credentials-based basic authentication support, and built-in SSL certificate validation bypass for secure HTTPS endpoints (such as `https://solr.dev.travelswitch.com`).
-  - Streamlined manual backup workflow: automatically queries Solr server cores as the "Collection / Core" selector, and fetches core schema fields as the "Schema Fields" options.
+  - Streamlined manual backup workflow: automatically queries the Solr Collections API (and falls back to the Cores API with intelligent deduplication of shard/replica names) to retrieve logical collections as the "Collection / Core" selector, and fetches core schema fields as the "Schema Fields" options.
 - **Webhook Notifications:**
   - Configurable alerts for backup/restore success and failures directly to Slack, Microsoft Teams, and Telegram.
   - Custom User-Agent headers to prevent gateway firewalls from blocking notifications.

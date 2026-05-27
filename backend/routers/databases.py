@@ -189,6 +189,7 @@ def list_db_names(db_id: str, user=Depends(get_current_user)):
             import urllib.request
             import json
             import base64
+            import ssl
             
             host = db["host"]
             if host.startswith("http://") or host.startswith("https://"):
@@ -198,19 +199,48 @@ def list_db_names(db_id: str, user=Depends(get_current_user)):
             else:
                 solr_base_url = f"http://{host}:{db['port']}"
                 
-            url = f"{solr_base_url}/solr/admin/cores?action=STATUS&wt=json"
-            req = urllib.request.Request(url)
+            context = ssl._create_unverified_context()
+            
+            # 1. Try to fetch collections via the Collections API first (preferred for SolrCloud)
+            collections_url = f"{solr_base_url}/solr/admin/collections?action=LIST&wt=json"
+            req_coll = urllib.request.Request(collections_url)
+            
+            auth_str = None
             if db.get("username") and db.get("password"):
                 auth_str = f"{db['username']}:{db['password']}"
                 encoded_auth = base64.b64encode(auth_str.encode()).decode()
-                req.add_header("Authorization", f"Basic {encoded_auth}")
+                req_coll.add_header("Authorization", f"Basic {encoded_auth}")
+            
+            try:
+                with urllib.request.urlopen(req_coll, context=context, timeout=10) as response:
+                    data = json.loads(response.read().decode())
+                    if "collections" in data:
+                        return {"databases": sorted(list(data["collections"]))}
+            except Exception:
+                # Fall back to Cores API if Collections API fails or is unsupported
+                pass
+
+            # 2. Fallback: query Cores API
+            cores_url = f"{solr_base_url}/solr/admin/cores?action=STATUS&wt=json"
+            req_cores = urllib.request.Request(cores_url)
+            if auth_str:
+                encoded_auth = base64.b64encode(auth_str.encode()).decode()
+                req_cores.add_header("Authorization", f"Basic {encoded_auth}")
                 
-            import ssl
-            context = ssl._create_unverified_context()
-            with urllib.request.urlopen(req, context=context, timeout=10) as response:
+            with urllib.request.urlopen(req_cores, context=context, timeout=10) as response:
                 data = json.loads(response.read().decode())
-                cores = list(data.get("status", {}).keys())
-                return {"databases": sorted(cores)}
+                cores_status = data.get("status", {})
+                
+                collections_set = set()
+                for core_name, core_info in cores_status.items():
+                    # Deduplicate/resolve back to collection name if cloud parameters exist
+                    coll_name = core_info.get("cloud", {}).get("collection")
+                    if coll_name:
+                        collections_set.add(coll_name)
+                    else:
+                        collections_set.add(core_name)
+                        
+                return {"databases": sorted(list(collections_set))}
         except Exception as e:
             raise HTTPException(400, f"Failed to fetch Solr collections: {str(e)}")
 
