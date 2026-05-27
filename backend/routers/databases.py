@@ -70,6 +70,7 @@ class DatabaseCreate(BaseModel):
     database_name: Optional[str] = ""
     description: Optional[str] = ""
     mongo_uri: Optional[str] = ""
+    solr_backup_location: Optional[str] = "/tmp/backupvault"
 
 
 class TestUriRequest(BaseModel):
@@ -121,6 +122,7 @@ def add_database(req: DatabaseCreate, user=Depends(get_current_user)):
         "database_name": req.database_name,
         "description": req.description,
         "mongo_uri": req.mongo_uri or "",
+        "solr_backup_location": req.solr_backup_location or "/tmp/backupvault",
         "created_at": datetime.utcnow().isoformat(),
         "status": "active",
     }

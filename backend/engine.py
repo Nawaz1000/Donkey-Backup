@@ -1046,7 +1046,7 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
     backup_dirs = []
     for coll in collections_to_backup:
         backup_name = f"backup_{backup['id']}_{coll}"
-        location = BACKUP_TMP
+        location = db.get("solr_backup_location") or BACKUP_TMP
         
         # 1. Try Collections Backup API (Preferred for SolrCloud)
         url = f"{solr_base_url}/solr/admin/collections?action=BACKUP&name={backup_name}&collection={coll}&location={location}&wt=json"
@@ -1148,7 +1148,7 @@ def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str,
         if not target_coll or target_coll in ("full", "all_collections", "default"):
             target_coll = coll_in_backup
             
-        location = BACKUP_TMP
+        location = db.get("solr_backup_location") or BACKUP_TMP
         
         # 1. Try Collections Restore API (Preferred for SolrCloud)
         url = f"{solr_base_url}/solr/admin/collections?action=RESTORE&name={d}&collection={target_coll}&location={location}&wt=json"

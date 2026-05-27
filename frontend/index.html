@@ -583,6 +583,13 @@ tr:hover td{background:rgba(255,255,255,0.015)}
         <label>Solr Base URL</label>
         <input type="text" id="db-solr-url" placeholder="http://localhost:8983"/>
       </div>
+      <div class="form-group">
+        <label>Solr Backup Path (on Solr server)</label>
+        <input type="text" id="db-solr-backup-path" placeholder="/tmp/backupvault" value="/tmp/backupvault"/>
+        <div style="font-size:12px;color:var(--muted);margin-top:6px">
+          The directory path on the Solr server where Solr has write access. If using a different host, mount this folder to BackupVault at <code style="color:var(--accent)">/tmp/backupvault</code>.
+        </div>
+      </div>
       <div class="form-row">
         <div class="form-group">
           <label>Username (Optional)</label>
@@ -695,6 +702,10 @@ tr:hover td{background:rgba(255,255,255,0.015)}
       <div class="form-group"><label>Password</label><input type="password" id="edit-db-pass" placeholder="Leave blank to keep current"/></div>
     </div>
     <div class="form-group"><label>Database Name</label><input type="text" id="edit-db-dbname"/></div>
+    <div class="form-group" id="edit-solr-path-group" style="display:none">
+      <label>Solr Backup Path (on Solr server)</label>
+      <input type="text" id="edit-solr-backup-path" placeholder="/tmp/backupvault"/>
+    </div>
     <div class="form-group"><label>Description</label><input type="text" id="edit-db-desc"/></div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('edit-db-modal')">Cancel</button>
@@ -1098,7 +1109,8 @@ async function addDatabase() {
       username: v('db-solr-user'), 
       password: v('db-solr-pass'),
       database_name: 'default',
-      port: 8983 // default fallback
+      port: 8983,
+      solr_backup_location: v('db-solr-backup-path') || '/tmp/backupvault'
     };
   } else {
     const port = parseInt(v('db-port'));
@@ -1138,18 +1150,27 @@ async function openEditDb(id) {
   document.getElementById('edit-db-pass').value = '';
   document.getElementById('edit-db-dbname').value = d.database_name;
   document.getElementById('edit-db-desc').value = d.description||'';
+
+  const isSolr = d.type === 'solr';
+  document.getElementById('edit-solr-path-group').style.display = isSolr ? 'block' : 'none';
+  document.getElementById('edit-solr-backup-path').value = d.solr_backup_location || '/tmp/backupvault';
+
   openModal('edit-db-modal');
 }
 
 async function saveEditDatabase() {
   const id = document.getElementById('edit-db-id').value;
   const pass = v('edit-db-pass');
+  const type = v('edit-db-type');
   const payload = {
-    name:v('edit-db-name'), type:v('edit-db-type'), host:v('edit-db-host'),
+    name:v('edit-db-name'), type:type, host:v('edit-db-host'),
     port:parseInt(v('edit-db-port')), username:v('edit-db-user'),
     database_name:v('edit-db-dbname'), description:v('edit-db-desc')
   };
   if(pass) payload.password = pass;
+  if(type === 'solr') {
+    payload.solr_backup_location = v('edit-solr-backup-path') || '/tmp/backupvault';
+  }
   try {
     await apiFetch(`/databases/${id}`,{method:'PATCH',body:JSON.stringify(payload)});
     closeModal('edit-db-modal');
