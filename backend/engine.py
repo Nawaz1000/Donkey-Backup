@@ -750,20 +750,21 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     if collection and collection != "full":
         cmd += [f"--collection={collection}"]
         
-    if backup_method == "incremental" and incremental_field:
+    if backup_method in ("incremental", "differential") and incremental_field:
         backups = read_json("data/backups.json")
         last_success = None
         for b in sorted(backups, key=lambda x: x.get("created_at", ""), reverse=True):
             if b.get("status") == "completed" and b.get("database_id") == backup_info.get("database_id") and b.get("collection") == collection and b.get("id") != backup_info.get("id"):
-                last_success = b.get("completed_at")
-                break
+                if backup_method == "incremental" or b.get("backup_method") == "full":
+                    last_success = b.get("completed_at")
+                    break
                 
         if last_success:
-            write_log(log_path, f"INFO  Incremental backup mode detected. Querying {incremental_field} > {last_success}")
+            write_log(log_path, f"INFO  {backup_method.capitalize()} backup mode detected. Querying {incremental_field} > {last_success}")
             query = f'{{"{incremental_field}": {{"$gt": {{"$date": "{last_success}"}}}}}}'
             cmd += ["--query", query]
         else:
-            write_log(log_path, f"INFO  No previous successful backup found. Falling back to Full Backup.")
+            write_log(log_path, f"INFO  No previous successful {'Full ' if backup_method == 'differential' else ''}backup found. Falling back to Full Backup.")
             
     comp_info = get_compressor_info(log_path)
     compression_cmd = None
@@ -812,7 +813,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         "--archive",
         "--numParallelCollections=4",
         "--numInsertionWorkersPerCollection=4",
-        "--batchSize=5000",
+        "--batchSize=2000",
         "--bypassDocumentValidation",
         "--writeConcern=1",
         "--verbose=1",
@@ -834,10 +835,10 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
 
     decompression_cmd = None
     if compression == "zstd":
-        decompression_cmd = ["zstd", "-d", "-c", "--threads=1"]
+        decompression_cmd = ["zstd", "-d", "-c", "--threads=4"]
     elif compression in ("pigz", "gzip"):
         if shutil.which("pigz"):
-            decompression_cmd = ["pigz", "-d", "-c", "-p", "1"]
+            decompression_cmd = ["pigz", "-d", "-c", "-p", "4"]
         elif shutil.which("gzip"):
             decompression_cmd = ["gzip", "-d", "-c"]
     elif compression in ("native", None):
@@ -859,7 +860,7 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
     backup_method = backup_info.get("backup_method", "full")
     
     incremental_tables = None
-    if backup_method == "incremental":
+    if backup_method in ("incremental", "differential"):
         # Find last successful backup for this database
         backups = read_json("data/backups.json")
         last_success = None
@@ -867,19 +868,20 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
             if (b.get("status") == "completed" and 
                 b.get("database_id") == backup_info.get("database_id") and
                 b.get("id") != backup_info.get("id")):
-                last_success = b.get("completed_at") or b.get("created_at")
-                break
+                if backup_method == "incremental" or b.get("backup_method") == "full":
+                    last_success = b.get("completed_at") or b.get("created_at")
+                    break
         
         if last_success:
-            write_log(log_path, f"INFO  PostgreSQL incremental mode: detecting tables modified since {last_success}")
+            write_log(log_path, f"INFO  PostgreSQL {backup_method} mode: detecting tables modified since {last_success}")
             incremental_tables = get_pg_modified_tables(db, dbname, last_success, log_path)
             if incremental_tables is not None and len(incremental_tables) == 0:
-                write_log(log_path, "INFO  No tables modified since last backup. Creating minimal archive.")
+                write_log(log_path, f"INFO  No tables modified since last {backup_method} backup. Creating minimal archive.")
                 # Still create a backup record but with 0 tables — very fast
             elif incremental_tables is None:
                 write_log(log_path, "WARN  Could not detect modified tables. Falling back to full backup.")
         else:
-            write_log(log_path, "INFO  No previous successful backup found. Performing full backup.")
+            write_log(log_path, f"INFO  No previous successful {'Full ' if backup_method == 'differential' else ''}backup found. Performing full backup.")
         
     cmd = [
         "pg_dump",
@@ -954,23 +956,32 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
         
     decompression_cmd = None
     if compression == "zstd":
-        decompression_cmd = ["zstd", "-d", "-c", "--threads=1"]
+        decompression_cmd = ["zstd", "-d", "-c", "--threads=4"]
     elif compression in ("pigz", "gzip"):
         if shutil.which("pigz"):
-            decompression_cmd = ["pigz", "-d", "-c", "-p", "1"]
+            decompression_cmd = ["pigz", "-d", "-c", "-p", "4"]
         elif shutil.which("gzip"):
             decompression_cmd = ["gzip", "-d", "-c"]
             
     env = pg_env(db)
-    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
+    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=256MB -c max_parallel_workers_per_gather=2 -c effective_io_concurrency=2"
         
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
 
 # ─── SOLR BACKUP & RESTORE ───────────────────────────────────────────────────
 
+def get_solr_base_url(host: str, port: int) -> str:
+    if host.startswith("http://") or host.startswith("https://"):
+        from urllib.parse import urlparse
+        parsed = urlparse(host)
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return f"http://{host}:{port}"
+
+
 def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None):
     import urllib.request
     import json
+    import base64
     
     solr_host = db["host"]
     solr_port = db["port"]
@@ -980,10 +991,17 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
         
     backup_name = f"backup_{backup['id']}"
     location = BACKUP_TMP
-    url = f"http://{solr_host}:{solr_port}/solr/admin/collections?action=BACKUP&name={backup_name}&collection={collection}&location={location}&wt=json"
+    
+    solr_base_url = get_solr_base_url(solr_host, solr_port)
+    url = f"{solr_base_url}/solr/admin/collections?action=BACKUP&name={backup_name}&collection={collection}&location={location}&wt=json"
     
     write_log(log_path, f"INFO  Triggering Solr Backup: {url}")
     req = urllib.request.Request(url)
+    if db.get("username") and db.get("password"):
+        auth_str = f"{db['username']}:{db['password']}"
+        encoded_auth = base64.b64encode(auth_str.encode()).decode()
+        req.add_header("Authorization", f"Basic {encoded_auth}")
+        
     try:
         with urllib.request.urlopen(req, timeout=300) as response:
             res = json.loads(response.read().decode())
@@ -1006,6 +1024,7 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
 def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = False, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None):
     import urllib.request
     import json
+    import base64
     
     solr_host = db["host"]
     solr_port = db["port"]
@@ -1029,9 +1048,15 @@ def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str,
     if collection == "full" or not collection:
         collection = "default"
         
-    url = f"http://{solr_host}:{solr_port}/solr/admin/collections?action=RESTORE&name={backup_name}&collection={collection}&location={location}&wt=json"
+    solr_base_url = get_solr_base_url(solr_host, solr_port)
+    url = f"{solr_base_url}/solr/admin/collections?action=RESTORE&name={backup_name}&collection={collection}&location={location}&wt=json"
     write_log(log_path, f"INFO  Triggering Solr Restore: {url}")
     req = urllib.request.Request(url)
+    if db.get("username") and db.get("password"):
+        auth_str = f"{db['username']}:{db['password']}"
+        encoded_auth = base64.b64encode(auth_str.encode()).decode()
+        req.add_header("Authorization", f"Basic {encoded_auth}")
+        
     try:
         with urllib.request.urlopen(req, timeout=300) as response:
             res = json.loads(response.read().decode())

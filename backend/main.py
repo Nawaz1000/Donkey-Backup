@@ -12,7 +12,7 @@ import uuid
 from utils import read_json, write_json
 from engine import do_backup
 
-from routers import auth, databases, backups, storage, schedules, settings, syncs
+from routers import auth, databases, backups, storage, schedules, settings
 
 async def scheduler_loop():
     while True:
@@ -23,7 +23,6 @@ async def scheduler_loop():
                 
             schedules = read_json("data/schedules.json")
             now = datetime.utcnow()
-            current_time = now.strftime("%H:%M")
             day_of_week = now.weekday()
             day_of_month = now.day
 
@@ -46,33 +45,36 @@ async def scheduler_loop():
                         last_run_dt = datetime.fromisoformat(last_run)
                         if now - last_run_dt >= timedelta(hours=1):
                             is_due = True
-                elif freq == "weekly_mixed":
-                    # Weekly mixed: runs daily, full on Sunday, incremental Mon-Sat
-                    if current_time == target_time:
-                        last_run = s.get("last_run")
-                        if last_run:
-                            last_run_dt = datetime.fromisoformat(last_run)
-                            if now - last_run_dt < timedelta(minutes=2):
-                                continue
-                        is_due = True
-                        if day_of_week == 6:  # Sunday
-                            backup_method_override = "full"
-                        else:
-                            backup_method_override = "incremental"
                 else:
-                    if current_time == target_time:
-                        last_run = s.get("last_run")
-                        if last_run:
-                            last_run_dt = datetime.fromisoformat(last_run)
-                            if now - last_run_dt < timedelta(minutes=2):
-                                continue
-
-                        if freq == "daily":
-                            is_due = True
+                    try:
+                        th, tm = map(int, target_time.split(":"))
+                        target_dt = now.replace(hour=th, minute=tm, second=0, microsecond=0)
+                    except Exception:
+                        continue
+                        
+                    if target_dt <= now < target_dt + timedelta(minutes=5):
+                        day_ok = False
+                        if freq in ("daily", "weekly_mixed"):
+                            day_ok = True
                         elif freq == "weekly" and day_of_week == 0:
-                            is_due = True
+                            day_ok = True
                         elif freq == "monthly" and day_of_month == 1:
-                            is_due = True
+                            day_ok = True
+                            
+                        if day_ok:
+                            last_run = s.get("last_run")
+                            if not last_run:
+                                is_due = True
+                            else:
+                                last_run_dt = datetime.fromisoformat(last_run)
+                                if last_run_dt.date() < now.date():
+                                    is_due = True
+                            
+                            if is_due and freq == "weekly_mixed":
+                                if day_of_week == 6:  # Sunday
+                                    backup_method_override = "full"
+                                else:
+                                    backup_method_override = "incremental"
 
                 if is_due:
                     method = backup_method_override or s.get("backup_method", "full")
@@ -147,7 +149,6 @@ app.include_router(backups.router, prefix="/api/backups", tags=["backups"])
 app.include_router(storage.router, prefix="/api/storage", tags=["storage"])
 app.include_router(schedules.router, prefix="/api/schedules", tags=["schedules"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
-app.include_router(syncs.router, prefix="/api/syncs", tags=["syncs"])
 
 @app.get("/api/health")
 def health():

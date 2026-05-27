@@ -14,7 +14,7 @@ class BackupCreate(BaseModel):
     storage_id: str
     label: Optional[str] = ""
     collection: Optional[str] = ""
-    backup_method: Literal["full", "incremental"] = "full"
+    backup_method: Literal["full", "incremental", "differential"] = "full"
     incremental_field: Optional[str] = None
     indexing_mode: Literal["with_index", "without_index", "only_index"] = "with_index"
 

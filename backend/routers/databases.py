@@ -217,8 +217,23 @@ def list_collections(db_id: str, database: str = "", user=Depends(get_current_us
         try:
             import urllib.request
             import json
-            url = f"http://{db['host']}:{db['port']}/solr/admin/cores?action=STATUS&wt=json"
+            import base64
+            
+            host = db["host"]
+            if host.startswith("http://") or host.startswith("https://"):
+                from urllib.parse import urlparse
+                parsed = urlparse(host)
+                solr_base_url = f"{parsed.scheme}://{parsed.netloc}"
+            else:
+                solr_base_url = f"http://{host}:{db['port']}"
+                
+            url = f"{solr_base_url}/solr/admin/cores?action=STATUS&wt=json"
             req = urllib.request.Request(url)
+            if db.get("username") and db.get("password"):
+                auth_str = f"{db['username']}:{db['password']}"
+                encoded_auth = base64.b64encode(auth_str.encode()).decode()
+                req.add_header("Authorization", f"Basic {encoded_auth}")
+                
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode())
                 cores = list(data.get("status", {}).keys())
@@ -297,8 +312,23 @@ def test_connection(db_id: str, user=Depends(get_current_user)):
         try:
             import urllib.request
             import json
-            url = f"http://{db['host']}:{db['port']}/solr/admin/info/system?wt=json"
+            import base64
+            
+            host = db["host"]
+            if host.startswith("http://") or host.startswith("https://"):
+                from urllib.parse import urlparse
+                parsed = urlparse(host)
+                solr_base_url = f"{parsed.scheme}://{parsed.netloc}"
+            else:
+                solr_base_url = f"http://{host}:{db['port']}"
+                
+            url = f"{solr_base_url}/solr/admin/info/system?wt=json"
             req = urllib.request.Request(url)
+            if db.get("username") and db.get("password"):
+                auth_str = f"{db['username']}:{db['password']}"
+                encoded_auth = base64.b64encode(auth_str.encode()).decode()
+                req.add_header("Authorization", f"Basic {encoded_auth}")
+                
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode())
                 version = data.get("lucene", {}).get("solr-spec-version", "unknown")
@@ -315,7 +345,7 @@ def update_database(db_id: str, req: dict, user=Depends(get_current_user)):
     for d in dbs:
         if d["id"] == db_id and d["user_id"] == user["sub"]:
             for k, v in req.items():
-                if k not in ["id", "user_id"]:
+                if k not in ["id", "user_id", "type"]:
                     d[k] = v
             break
     write_json("data/databases.json", dbs)

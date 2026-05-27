@@ -14,7 +14,7 @@ class ScheduleCreate(BaseModel):
     frequency: Literal["hourly", "daily", "weekly", "monthly", "weekly_mixed"]
     time: Optional[str] = "02:00"  # HH:MM
     enabled: bool = True
-    backup_method: Literal["full", "incremental"] = "full"
+    backup_method: Literal["full", "incremental", "differential"] = "full"
     incremental_field: Optional[str] = None
 
 @router.get("/")

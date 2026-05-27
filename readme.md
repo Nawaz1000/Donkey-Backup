@@ -103,8 +103,8 @@ backupvault/
   - Introduced API/UI options for Backups and Restores: **Include Indexes**, **Exclude Indexes (Fast Data)**, and **Only Indexes (Schema)**.
   - "Exclude Indexes" mode skips costly `mongorestore` background index rebuilds and Postgres `post-data` sections, driving restore speeds beyond 100GB in 20 minutes natively.
   - Auto-fetches database schema and indexes instantly on connection via PyMongo and `psql` querying.
-- **Incremental Backups (MongoDB):**
-  - True Incremental Backups filter queries dynamically using the last successful backup date.
+- **Incremental & Differential Backups:**
+  - True Incremental and Differential Backups filter queries and databases dynamically using the last successful backup or full backup dates.
 - **User Interface & UX Enhancements:**
   - **Collapsible Sidebar:** Hamburger menu toggle to open/close the sidebar for a wider workspace view.
   - **Smart Duration Formatting:** Durations auto-format to `7m 54s`, `1h 23m 45s`, or raw seconds (if under 60s) instead of always showing raw seconds.
@@ -116,14 +116,12 @@ backupvault/
   - Active Loading indicator spinners on manual refresh actions.
   - UTC timezone rendering with local browser conversion for database connections and history tables.
   - **Log Windowing**: Prevents browser lag/freezing during massive failure events (e.g. thousands of duplicate key errors) by efficiently limiting DOM nodes to only the last 100 log lines.
-- **Direct Database Sync (Cloning):**
-  - Instantly clone or sync data from a Source Database directly to a Target Database without requiring intermediate cloud storage or local disk space.
-  - Streams `mongodump` directly into `mongorestore` (and `pg_dump` into `pg_restore`) over a zero-copy pipeline for maximum transfer speeds.
-  - Supports Target DB renaming, specific collection scope, and dropping existing data before sync to prevent duplicate errors.
+  - **Neon Donkey Favicon**: A customized neon donkey favicon linked globally across the dashboard.
 - **Apache Solr Support:**
-  - Backup and Restore capabilities using native Apache Solr Collections API.
+  - Backup and Restore capabilities using native Apache Solr Collections API, with robust URL parsing and credentials-based basic authentication support.
 - **Webhook Notifications:**
   - Configurable alerts for backup/restore success and failures directly to Slack, Microsoft Teams, and Telegram.
 - **Dynamic Scheduling:**
-  - Easy-to-use visual time picker with hour, minute, and AM/PM options.
+  - Robust time-window based scheduler logic avoiding race conditions.
+  - Native browser-integrated time picker supporting precise hour and minute selections.
 
