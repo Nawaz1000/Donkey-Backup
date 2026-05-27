@@ -119,8 +119,12 @@ backupvault/
   - **Neon Donkey Favicon**: A customized neon donkey favicon linked globally across the dashboard.
 - **Apache Solr Support:**
   - Backup and Restore capabilities using native Apache Solr Collections API, with robust URL parsing and credentials-based basic authentication support.
+  - Streamlined manual backup workflow: skips database name selection and dynamically fetches and displays collections/cores directly.
 - **Webhook Notifications:**
   - Configurable alerts for backup/restore success and failures directly to Slack, Microsoft Teams, and Telegram.
+  - Custom User-Agent headers to prevent gateway firewalls from blocking notifications.
+  - Instant Webhook testing on the Settings page to verify delivery.
+  - Per-backup preference toggle to opt-out of notification dispatches for specific manual runs.
 - **Dynamic Scheduling:**
   - Robust time-window based scheduler logic avoiding race conditions.
   - Native browser-integrated time picker supporting precise hour and minute selections.

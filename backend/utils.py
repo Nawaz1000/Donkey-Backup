@@ -105,20 +105,30 @@ def send_notification(title: str, message: str, is_error: bool = False):
         text = f"*{title}*\n{message}"
         color = "EF4444" if is_error else "10B981"
         
+        headers = {
+            "User-Agent": "BackupVault/1.0",
+            "Content-Type": "application/json"
+        }
+        
         # Slack
         if settings.get("slack_webhook"):
-            req = urllib.request.Request(settings["slack_webhook"], json.dumps({"text": text}).encode('utf-8'), {"Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=5)
+            payload = json.dumps({"text": text}).encode('utf-8')
+            req = urllib.request.Request(settings["slack_webhook"], data=payload, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                pass
             
         # Teams
         if settings.get("teams_webhook"):
-            payload = {"title": title, "text": message, "themeColor": color}
-            req = urllib.request.Request(settings["teams_webhook"], json.dumps(payload).encode('utf-8'), {"Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=5)
+            payload = json.dumps({"title": title, "text": message, "themeColor": color}).encode('utf-8')
+            req = urllib.request.Request(settings["teams_webhook"], data=payload, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                pass
             
         # Telegram
         if settings.get("telegram_webhook"):
             url = settings["telegram_webhook"] + "&text=" + urllib.parse.quote(text)
-            urllib.request.urlopen(url, timeout=5)
+            req = urllib.request.Request(url, headers={"User-Agent": "BackupVault/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                pass
     except Exception as e:
         print(f"Failed to send notification: {e}")

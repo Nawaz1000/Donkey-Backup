@@ -92,6 +92,7 @@ async def scheduler_loop():
                         "collection": "full",
                         "backup_method": method,
                         "incremental_field": s.get("incremental_field", None),
+                        "send_notifications": True,
                         "status": "running",
                         "size_mb": None,
                         "remote_path": None,

@@ -1121,7 +1121,8 @@ def do_backup(backup_id: str):
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
-        send_notification("Backup Failed \u274c", f"Job ID: {backup_id}\nDatabase: {db and db.get('name')}\nError: {msg}", is_error=True)
+        if backup.get("send_notifications", True):
+            send_notification("Backup Failed \u274c", f"Job ID: {backup_id}\nDatabase: {db and db.get('name')}\nError: {msg}", is_error=True)
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     try:
@@ -1179,7 +1180,8 @@ def do_backup(backup_id: str):
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=duration
         )
-        send_notification("Backup Successful \u2705", f"Job ID: {backup_id}\nDatabase: {db and db.get('name')}\nSize: {size_mb}MB\nDuration: {duration}s", is_error=False)
+        if backup.get("send_notifications", True):
+            send_notification("Backup Successful \u2705", f"Job ID: {backup_id}\nDatabase: {db and db.get('name')}\nSize: {size_mb}MB\nDuration: {duration}s", is_error=False)
 
     except Exception as e:
         fail(str(e))

@@ -17,6 +17,7 @@ class BackupCreate(BaseModel):
     backup_method: Literal["full", "incremental", "differential"] = "full"
     incremental_field: Optional[str] = None
     indexing_mode: Literal["with_index", "without_index", "only_index"] = "with_index"
+    send_notifications: Optional[bool] = True
 
 class RestoreRequest(BaseModel):
     backup_id: str
@@ -68,6 +69,7 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
         "backup_method": req.backup_method,
         "incremental_field": req.incremental_field,
         "indexing_mode": req.indexing_mode,
+        "send_notifications": req.send_notifications,
         "status": "running",
         "size_mb": None,
         "remote_path": None,
