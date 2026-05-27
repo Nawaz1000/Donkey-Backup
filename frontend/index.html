@@ -1417,6 +1417,20 @@ async function deleteBackup(id, deleteFromRemote = false) {
 }
 
 // ---- SCHEDULES ----
+function fmtLocalTime(utcTimeStr) {
+  if (!utcTimeStr) return '—';
+  try {
+    const [utcHr, utcMin] = utcTimeStr.split(':').map(Number);
+    const date = new Date();
+    date.setUTCHours(utcHr, utcMin, 0, 0);
+    const hr = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    return `${hr}:${min}`;
+  } catch(e) {
+    return utcTimeStr;
+  }
+}
+
 async function loadSchedules() {
   try {
     const schedules = await apiFetch('/schedules/');
@@ -1435,7 +1449,7 @@ async function loadSchedules() {
         <td>${s.storage_name}</td>
         <td>${freqDisplay}</td>
         <td>${methodDisplay}</td>
-        <td class="mono text-sm">${s.time}</td>
+        <td class="mono text-sm">${fmtLocalTime(s.time)}</td>
         <td>${s.enabled?'<span class="badge badge-green"><span class="dot dot-pulse"></span>Active</span>':'<span class="badge badge-red"><span class="dot"></span>Paused</span>'}</td>
         <td><div class="actions">
           <button class="btn btn-secondary btn-sm" onclick="toggleSchedule('${s.id}')">${s.enabled?'Pause':'Resume'}</button>
@@ -1450,7 +1464,17 @@ async function loadSchedules() {
 async function addSchedule() {
   const freq = v('sc-freq');
   const method = v('sc-method');
-  const timeStr = v('sc-time') || '02:00';
+  const localTime = v('sc-time') || '02:00';
+
+  let timeStr = localTime;
+  try {
+    const [hr, min] = localTime.split(':').map(Number);
+    const date = new Date();
+    date.setHours(hr, min, 0, 0);
+    const utcHr = String(date.getUTCHours()).padStart(2, '0');
+    const utcMin = String(date.getUTCMinutes()).padStart(2, '0');
+    timeStr = `${utcHr}:${utcMin}`;
+  } catch(e) {}
 
   try {
     await apiFetch('/schedules/',{method:'POST',body:JSON.stringify({
