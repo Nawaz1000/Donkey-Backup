@@ -14,7 +14,7 @@ import logging
 import tempfile
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, quote, urlparse
-from utils import read_json, write_json, send_notification
+from utils import read_json, write_json, send_notification, parse_mongo_uri
 
 BACKUP_TMP = "/tmp/backupvault"
 os.makedirs(BACKUP_TMP, exist_ok=True)
@@ -25,59 +25,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("backupvault")
 
-
-# ─── URI HELPERS ─────────────────────────────────────────────────────────────
-
-def sanitize_mongo_uri(uri: str) -> str:
-    try:
-        if "://" not in uri:
-            return uri
-        scheme_end = uri.index("://") + 3
-        scheme = uri[:scheme_end]
-        rest = uri[scheme_end:]
-        if "@" not in rest:
-            return uri
-        at_pos = rest.rfind("@")
-        userinfo = rest[:at_pos]
-        hostpart = rest[at_pos + 1:]
-        if ":" in userinfo:
-            colon_pos = userinfo.index(":")
-            user = userinfo[:colon_pos]
-            password = userinfo[colon_pos + 1:]
-            safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
-            return f"{scheme}{quote(user, safe=safe)}:{quote(password, safe=safe)}@{hostpart}"
-        return uri
-    except Exception:
-        return uri
-
-
-def parse_mongo_uri(db: dict) -> dict:
-    raw_uri = db.get("mongo_uri") or ""
-    if raw_uri:
-        uri = sanitize_mongo_uri(raw_uri)
-    else:
-        host = db.get("host", "").strip()
-        port = int(str(db.get("port", 27017)).strip())
-        user = db.get("username", "")
-        password = db.get("password", "")
-        dbname = db.get("database_name", "")
-        if user and password:
-            uri = sanitize_mongo_uri(f"mongodb://{user}:{password}@{host}:{port}/{dbname}")
-        else:
-            uri = f"mongodb://{host}:{port}/{dbname}"
-
-    parsed = urlparse(uri)
-    query = parse_qs(parsed.query)
-    return {
-        "uri": uri,
-        "host": parsed.hostname or "localhost",
-        "port": parsed.port or 27017,
-        "username": unquote(parsed.username) if parsed.username else None,
-        "password": unquote(parsed.password) if parsed.password else None,
-        "dbname": db.get("database_name", "").strip() or (parsed.path.lstrip("/") or ""),
-        "auth_source": query.get("authSource", ["admin"])[0],
-        "auth_mechanism": query.get("authMechanism", [None])[0],
-    }
 
 
 def mongo_cmd_args(m: dict) -> list:

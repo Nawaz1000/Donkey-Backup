@@ -132,3 +132,151 @@ def send_notification(title: str, message: str, is_error: bool = False):
                 pass
     except Exception as e:
         print(f"Failed to send notification: {e}")
+
+
+def parse_mongo_uri(db_or_uri) -> dict:
+    from urllib.parse import unquote, quote
+
+    if isinstance(db_or_uri, str):
+        raw_uri = db_or_uri
+        db_name_default = ""
+    else:
+        raw_uri = db_or_uri.get("mongo_uri") or ""
+        db_name_default = db_or_uri.get("database_name", "").strip()
+
+    # Defaults
+    scheme = "mongodb"
+    userinfo = ""
+    hosts = "localhost:27017"
+    dbname = db_name_default
+    options = {}
+
+    if raw_uri:
+        # Determine scheme
+        if "://" in raw_uri:
+            scheme, rest = raw_uri.split("://", 1)
+        else:
+            rest = raw_uri
+
+        # Split userinfo and the rest
+        if "@" in rest:
+            userinfo, rest = rest.rsplit("@", 1)
+        else:
+            userinfo = ""
+
+        # Parse query options first (if any)
+        if "?" in rest:
+            hosts_path, query_str = rest.split("?", 1)
+            for pair in query_str.split("&"):
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    options[k.lower()] = unquote(v)
+        else:
+            hosts_path = rest
+
+        # Parse hosts and path
+        if "/" in hosts_path:
+            hosts, path_str = hosts_path.split("/", 1)
+            path_parts = path_str.split("/")
+            for part in path_parts:
+                if not part:
+                    continue
+                if "=" in part or "&" in part:
+                    for pair in part.split("&"):
+                        if "=" in pair:
+                            k, v = pair.split("=", 1)
+                            options[k.lower()] = unquote(v)
+                else:
+                    dbname = part
+        else:
+            hosts = hosts_path
+    else:
+        # Construct from individual fields if not a string
+        if isinstance(db_or_uri, dict):
+            host = db_or_uri.get("host", "").strip() or "localhost"
+            port = db_or_uri.get("port")
+            if port is not None:
+                hosts = f"{host}:{port}"
+            else:
+                hosts = host
+            user = db_or_uri.get("username", "").strip()
+            pwd = db_or_uri.get("password", "").strip()
+            if user and pwd:
+                userinfo = f"{user}:{pwd}"
+            elif user:
+                userinfo = user
+        else:
+            hosts = "localhost:27017"
+
+    # Fallback to default dbname if empty
+    if not dbname and db_name_default:
+        dbname = db_name_default
+
+    # Reconstruct quoted credentials
+    quoted_userinfo = ""
+    username_unquoted = None
+    password_unquoted = None
+    if userinfo:
+        safe_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+        if ":" in userinfo:
+            u, p = userinfo.split(":", 1)
+            username_unquoted = unquote(u)
+            password_unquoted = unquote(p)
+            quoted_userinfo = f"{quote(username_unquoted, safe=safe_chars)}:{quote(password_unquoted, safe=safe_chars)}@"
+        else:
+            username_unquoted = unquote(userinfo)
+            quoted_userinfo = f"{quote(username_unquoted, safe=safe_chars)}@"
+
+    # Map option keys to standard casing
+    standard_keys = {
+        "authsource": "authSource",
+        "authmechanism": "authMechanism",
+        "directconnection": "directConnection",
+        "tls": "tls",
+        "ssl": "ssl",
+        "replicaset": "replicaSet",
+        "readpreference": "readPreference",
+        "retrywrites": "retryWrites",
+        "w": "w"
+    }
+
+    uri_options = {}
+    for k, v in options.items():
+        std_key = standard_keys.get(k, k)
+        uri_options[std_key] = v
+
+    # Build query string
+    query_parts = []
+    for k, v in uri_options.items():
+        query_parts.append(f"{k}={quote(v)}")
+    query_str = "?" + "&".join(query_parts) if query_parts else ""
+
+    # Reconstruct URI
+    uri_path = f"/{dbname}" if dbname else "/"
+    reconstructed_uri = f"{scheme}://{quoted_userinfo}{hosts}{uri_path}{query_str}"
+
+    # Parse first host and port for compatibility
+    first_host = hosts.split(",")[0]
+    if ":" in first_host:
+        h, p = first_host.split(":", 1)
+        try:
+            port_val = int(p)
+        except ValueError:
+            port_val = 27017
+    else:
+        h = first_host
+        port_val = 27017
+
+    return {
+        "uri": reconstructed_uri,
+        "hosts": hosts,
+        "host": h,
+        "port": port_val,
+        "username": username_unquoted,
+        "password": password_unquoted,
+        "dbname": dbname,
+        "auth_source": uri_options.get("authSource", "admin"),
+        "auth_mechanism": uri_options.get("authMechanism"),
+        "direct_connection": uri_options.get("directConnection"),
+        "options": uri_options
+    }

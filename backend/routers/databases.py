@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, Literal
 import uuid
 from datetime import datetime
-from utils import get_current_user, read_json, write_json
+from utils import get_current_user, read_json, write_json, parse_mongo_uri
 
 router = APIRouter()
 
@@ -34,29 +34,27 @@ def sanitize_mongo_uri(uri: str) -> str:
 
 def connect_mongo(uri: str):
     from pymongo import MongoClient
-    from urllib.parse import urlparse, parse_qs, unquote
-    parsed = urlparse(uri)
-    query = parse_qs(parsed.query)
+    m = parse_mongo_uri(uri)
     kwargs = {
-        "host": parsed.hostname,
-        "port": parsed.port or 27017,
+        "host": m["hosts"],
+        "port": m["port"] or 27017,
         "serverSelectionTimeoutMS": 5000,
         "connectTimeoutMS": 5000,
         "socketTimeoutMS": 10000,
     }
-    if parsed.username:
-        kwargs["username"] = unquote(parsed.username)
-    if parsed.password:
-        kwargs["password"] = unquote(parsed.password)
-    auth_source = query.get("authSource", [None])[0]
-    if auth_source:
-        kwargs["authSource"] = auth_source
-    auth_mech = query.get("authMechanism", [None])[0]
-    if auth_mech:
-        kwargs["authMechanism"] = auth_mech
-    direct = query.get("directConnection", ["false"])[0].lower() == "true"
-    if direct:
-        kwargs["directConnection"] = True
+    if m["username"]:
+        kwargs["username"] = m["username"]
+    if m["password"]:
+        kwargs["password"] = m["password"]
+    
+    opts = m["options"]
+    if "authSource" in opts:
+        kwargs["authSource"] = opts["authSource"]
+    if "authMechanism" in opts:
+        kwargs["authMechanism"] = opts["authMechanism"]
+    if "directConnection" in opts:
+        kwargs["directConnection"] = str(opts["directConnection"]).lower() == "true"
+        
     return MongoClient(**kwargs)
 
 
