@@ -120,6 +120,8 @@ backupvault/
 - **Apache Solr Support:**
   - Backup and Restore capabilities using native Apache Solr Collections API, with robust URL parsing, credentials-based basic authentication support, and built-in SSL certificate validation bypass for secure HTTPS endpoints (such as `https://solr.dev.travelswitch.com`).
   - Streamlined manual backup workflow: automatically queries the Solr Collections API (and falls back to the Cores API with intelligent deduplication of shard/replica names) to retrieve logical collections as the "Collection / Core" selector, and fetches core schema fields as the "Schema Fields" options.
+  - Support for full Solr server backups via an **"All Collections / Cores"** option that triggers sequential backups of all logical collections and packages them in a single archive.
+  - Hybrid deployment support with automatic fallback to the Core Admin API if the Collections API is unavailable (standalone Solr installations), and detailed error body diagnostic extraction to parse and display verbose JSON error logs from the Solr server.
 - **Webhook Notifications:**
   - Configurable alerts for backup/restore success and failures directly to Slack, Microsoft Teams, and Telegram.
   - Custom User-Agent headers to prevent gateway firewalls from blocking notifications.
