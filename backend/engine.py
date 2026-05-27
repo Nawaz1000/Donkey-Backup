@@ -354,19 +354,20 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
 
 
 def get_compressor_info(log_path: str = None) -> dict:
+    threads = min(4, os.cpu_count() or 1)
     if shutil.which("zstd"):
         if log_path:
-            write_log(log_path, "INFO  Using Zstandard (zstd) with 1 thread for capped CPU usage.")
+            write_log(log_path, f"INFO  Using Zstandard (zstd) with {threads} threads for optimized speed.")
         return {
-            "cmd": ["zstd", "-1", "--threads=1"],
+            "cmd": ["zstd", "-1", f"--threads={threads}"],
             "ext": "zst",
             "type": "zstd"
         }
     elif shutil.which("pigz"):
         if log_path:
-            write_log(log_path, "INFO  Using pigz (parallel gzip) with 1 thread for capped CPU usage.")
+            write_log(log_path, f"INFO  Using pigz (parallel gzip) with {threads} threads for optimized speed.")
         return {
-            "cmd": ["pigz", "-1", "-p", "1"],
+            "cmd": ["pigz", "-1", "-p", str(threads)],
             "ext": "gz",
             "type": "pigz"
         }
@@ -691,7 +692,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         "mongodump",
         f"--uri={m['uri']}",
         "--archive",
-        "--numParallelCollections=1",
+        "--numParallelCollections=4",
         "--readPreference=secondaryPreferred",  # Offload reads to secondary replicas, reduces primary server load
     ]
     if collection and collection != "full":
@@ -725,7 +726,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     write_log(log_path, f"INFO  mongodump cmd: {' '.join(log_cmd)}")
     env = os.environ.copy()
     env["GOGC"] = "100"
-    env["GOMAXPROCS"] = "4"
+    env["GOMAXPROCS"] = str(os.cpu_count() or 8)
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
 
 
@@ -758,8 +759,8 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         "mongorestore",
         f"--uri={m['uri']}",
         "--archive",
-        "--numParallelCollections=4",
-        "--numInsertionWorkersPerCollection=4",
+        "--numParallelCollections=8",
+        "--numInsertionWorkersPerCollection=8",
         "--batchSize=2000",
         "--bypassDocumentValidation",
         "--writeConcern=1",
@@ -780,12 +781,13 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     if drop_existing:
         cmd.append("--drop")
 
+    decompression_threads = min(8, os.cpu_count() or 4)
     decompression_cmd = None
     if compression == "zstd":
-        decompression_cmd = ["zstd", "-d", "-c", "--threads=4"]
+        decompression_cmd = ["zstd", "-d", "-c", f"--threads={decompression_threads}"]
     elif compression in ("pigz", "gzip"):
         if shutil.which("pigz"):
-            decompression_cmd = ["pigz", "-d", "-c", "-p", "4"]
+            decompression_cmd = ["pigz", "-d", "-c", "-p", str(decompression_threads)]
         elif shutil.which("gzip"):
             decompression_cmd = ["gzip", "-d", "-c"]
     elif compression in ("native", None):
@@ -795,7 +797,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     write_log(log_path, f"INFO  mongorestore cmd: {' '.join(log_cmd)}")
     env = os.environ.copy()
     env["GOGC"] = "100"
-    env["GOMAXPROCS"] = "4"
+    env["GOMAXPROCS"] = str(os.cpu_count() or 8)
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
 
 
@@ -1203,7 +1205,7 @@ def do_backup(backup_id: str):
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
         if backup.get("send_notifications", True):
-            send_notification("Backup Failed \u274c", f"Job ID: {backup_id}\nDatabase: {db and db.get('name')}\nError: {msg}", is_error=True)
+            send_notification("Backup Failed \u274c", f"Job ID: {backup_id}\nDatabase: {db and db.get('name')}\nError: {msg}", is_error=True, log_path=log_path)
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     try:
@@ -1262,7 +1264,7 @@ def do_backup(backup_id: str):
             duration_seconds=duration
         )
         if backup.get("send_notifications", True):
-            send_notification("Backup Successful \u2705", f"Job ID: {backup_id}\nDatabase: {db and db.get('name')}\nSize: {size_mb}MB\nDuration: {duration}s", is_error=False)
+            send_notification("Backup Successful \u2705", f"Job ID: {backup_id}\nDatabase: {db and db.get('name')}\nSize: {size_mb}MB\nDuration: {duration}s", is_error=False, log_path=log_path)
 
     except Exception as e:
         fail(str(e))
@@ -1305,7 +1307,7 @@ def do_restore(restore_id: str):
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
-        send_notification("Restore Failed \u274c", f"Job ID: {restore_id}\nTarget: {target_db and target_db.get('name')}\nError: {msg}", is_error=True)
+        send_notification("Restore Failed \u274c", f"Job ID: {restore_id}\nTarget: {target_db and target_db.get('name')}\nError: {msg}", is_error=True, log_path=log_path)
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     try:
@@ -1360,7 +1362,7 @@ def do_restore(restore_id: str):
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=duration
         )
-        send_notification("Restore Successful \u2705", f"Job ID: {restore_id}\nTarget: {target_db and target_db.get('name')}\nDuration: {duration}s", is_error=False)
+        send_notification("Restore Successful \u2705", f"Job ID: {restore_id}\nTarget: {target_db and target_db.get('name')}\nDuration: {duration}s", is_error=False, log_path=log_path)
 
     except Exception as e:
         fail(str(e))
@@ -1508,7 +1510,7 @@ def do_sync(sync_id: str):
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
-        send_notification("Sync Failed \u274c", f"Job ID: {sync_id}\nError: {msg}", is_error=True)
+        send_notification("Sync Failed \u274c", f"Job ID: {sync_id}\nError: {msg}", is_error=True, log_path=log_path)
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     try:
@@ -1551,7 +1553,7 @@ def do_sync(sync_id: str):
             duration_seconds=duration,
             progress=100
         )
-        send_notification("Sync Successful \u2705", f"Job ID: {sync_id}\nSize: {size_mb}MB\nDuration: {duration}s", is_error=False)
+        send_notification("Sync Successful \u2705", f"Job ID: {sync_id}\nSize: {size_mb}MB\nDuration: {duration}s", is_error=False, log_path=log_path)
 
     except Exception as e:
         fail(str(e))

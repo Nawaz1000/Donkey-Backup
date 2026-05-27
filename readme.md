@@ -82,8 +82,15 @@ backupvault/
 - **High-Performance Zero-Copy `QueueReader`:**
   - Optimized queue and buffer management using memory pointer offsets and Python `memoryview` stream wrappers.
   - Completely eliminates array slicing memory copy overhead, reducing Python process CPU utilization to near 0% and maximizing upload throughput.
-- **Resource Limits & CPU Throttling (Capped under 500m CPU):**
-  - Restricts Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines to **1 thread** (`--threads=1`, `-p 1`). This caps system resource footprints under 0.5 core to prevent host system thrashing.
+- **High-Performance Scaling & CPU Multi-threading:**
+  - Automatically scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines to use multiple cores (up to 4 threads) depending on host capability.
+  - Dynamically sets `GOMAXPROCS` to match the CPU count (or default 8 threads) to leverage all available cores in the Go-based tools (`mongodump` / `mongorestore`).
+- **Parallel Collection Transfer:**
+  - Supports dumping up to 4 collections in parallel, and restoring up to 8 collections and 8 insertion workers concurrently, dramatically reducing restore/backup time for large datasets (e.g. 50GB takes minutes instead of hours).
+- **Robust Connection Options Parsing:**
+  - Implements an advanced, case-insensitive URI parser that detects database options from both query parameters and path-based segments (such as `...:27017/authMechanism=...`), auto-corrects them, and connects securely using keyword argument credentials to bypass PyMongo URI decoding limitations with special characters (like `!`).
+- **Verbosity & Notification Logging:**
+  - Job logs now track webhook notification dispatches and connection statuses in real-time, detailing successes and errors in the job's viewable console logs.
 
 - **Actual Progress Tracking (Bar, Percentages, and Stderr Parsing):**
   - Parses real-time `mongodump` and `mongorestore` logs using background regex parsers to fetch progress percentages.
@@ -91,8 +98,8 @@ backupvault/
   - Wraps GCS/Azure download streams with a `ProgressWriter` to monitor restore progress and seamlessly track stdin archive ingestion metrics for MongoDB restores where logs are unavailable.
 - **Database Client Performance Tuning:**
   - Configures PostgreSQL for memory constraints (`work_mem=16MB`, `maintenance_work_mem=64MB`) to safely ensure minimal memory usage even during massive parallel operations.
-  - MongoDB restore concurrency is optimized to 4 parallel collections and 4 insertion workers per collection (batch size of 5000) to maximize write performance and restore 50GB in 15 minutes.
-  - Uses Go Runtime environment tuning (`GOGC=100`) and multicore thread scheduling (`GOMAXPROCS=4`) for `mongodump`/`mongorestore` to achieve maximum throughput on multi-core host systems.
+  - MongoDB restore concurrency is optimized to 8 parallel collections and 8 insertion workers per collection (batch size of 2000) to maximize write performance.
+  - Uses Go Runtime environment tuning (`GOGC=100`) and multicore thread scheduling dynamically scaled to available cores for `mongodump`/`mongorestore` to achieve maximum throughput on multi-core host systems.
   - Removed all artificial sleep delays from streaming background threads to enable line-rate direct download and decompression speeds.
   - Uses direct connection URI (`--uri`) in MongoDB tool arguments to preserve critical options like SSL/TLS, `replicaSet`, and `directConnection` from connection strings.
   - Implements dynamic wildcard namespace remapping (`--nsFrom=$database$.$collection$` and `--nsTo=target_db.$collection$`) to guarantee clean database renames when restoring archives.

@@ -96,9 +96,15 @@ def write_json(path: str, data):
 import urllib.request
 import urllib.parse
 
-def send_notification(title: str, message: str, is_error: bool = False):
+def send_notification(title: str, message: str, is_error: bool = False, log_path: str = None):
     try:
         if not os.path.exists("data/settings.json"):
+            if log_path:
+                try:
+                    from engine import write_log
+                    write_log(log_path, "WARN  Cannot send notification: data/settings.json does not exist. Please configure notification webhooks in UI settings.")
+                except Exception:
+                    pass
             return
         settings = read_json("data/settings.json")
         
@@ -112,26 +118,68 @@ def send_notification(title: str, message: str, is_error: bool = False):
         
         # Slack
         if settings.get("slack_webhook"):
+            if log_path:
+                try:
+                    from engine import write_log
+                    write_log(log_path, "INFO  Sending Slack webhook notification...")
+                except Exception:
+                    pass
             payload = json.dumps({"text": text}).encode('utf-8')
             req = urllib.request.Request(settings["slack_webhook"], data=payload, headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=5) as resp:
-                pass
+                if log_path:
+                    try:
+                        from engine import write_log
+                        write_log(log_path, f"INFO  Slack notification sent successfully (status: {resp.status})")
+                    except Exception:
+                        pass
             
         # Teams
         if settings.get("teams_webhook"):
+            if log_path:
+                try:
+                    from engine import write_log
+                    write_log(log_path, "INFO  Sending Microsoft Teams webhook notification...")
+                except Exception:
+                    pass
             payload = json.dumps({"title": title, "text": message, "themeColor": color}).encode('utf-8')
             req = urllib.request.Request(settings["teams_webhook"], data=payload, headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=5) as resp:
-                pass
+                if log_path:
+                    try:
+                        from engine import write_log
+                        write_log(log_path, f"INFO  Teams notification sent successfully (status: {resp.status})")
+                    except Exception:
+                        pass
             
         # Telegram
         if settings.get("telegram_webhook"):
-            url = settings["telegram_webhook"] + "&text=" + urllib.parse.quote(text)
+            if log_path:
+                try:
+                    from engine import write_log
+                    write_log(log_path, "INFO  Sending Telegram webhook notification...")
+                except Exception:
+                    pass
+            tg_url = settings["telegram_webhook"]
+            connector = "&" if "?" in tg_url else "?"
+            url = tg_url + connector + "text=" + urllib.parse.quote(text)
             req = urllib.request.Request(url, headers={"User-Agent": "BackupVault/1.0"})
             with urllib.request.urlopen(req, timeout=5) as resp:
-                pass
+                if log_path:
+                    try:
+                        from engine import write_log
+                        write_log(log_path, f"INFO  Telegram notification sent successfully (status: {resp.status})")
+                    except Exception:
+                        pass
     except Exception as e:
-        print(f"Failed to send notification: {e}")
+        msg = f"Failed to send notification: {e}"
+        print(msg)
+        if log_path:
+            try:
+                from engine import write_log
+                write_log(log_path, f"ERROR {msg}")
+            except Exception:
+                pass
 
 
 def parse_mongo_uri(db_or_uri) -> dict:
