@@ -1006,7 +1006,9 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
         req.add_header("Authorization", f"Basic {encoded_auth}")
         
     try:
-        with urllib.request.urlopen(req, timeout=300) as response:
+        import ssl
+        context = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, context=context, timeout=300) as response:
             res = json.loads(response.read().decode())
             if "responseHeader" in res and res["responseHeader"].get("status") != 0:
                 raise RuntimeError(f"Solr backup failed: {res}")
@@ -1063,7 +1065,9 @@ def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str,
         req.add_header("Authorization", f"Basic {encoded_auth}")
         
     try:
-        with urllib.request.urlopen(req, timeout=300) as response:
+        import ssl
+        context = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, context=context, timeout=300) as response:
             res = json.loads(response.read().decode())
             if "responseHeader" in res and res["responseHeader"].get("status") != 0:
                 raise RuntimeError(f"Solr restore failed: {res}")

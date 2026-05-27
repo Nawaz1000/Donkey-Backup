@@ -118,7 +118,7 @@ backupvault/
   - **Log Windowing**: Prevents browser lag/freezing during massive failure events (e.g. thousands of duplicate key errors) by efficiently limiting DOM nodes to only the last 100 log lines.
   - **Neon Donkey Favicon**: A customized neon donkey favicon linked globally across the dashboard.
 - **Apache Solr Support:**
-  - Backup and Restore capabilities using native Apache Solr Collections API, with robust URL parsing and credentials-based basic authentication support.
+  - Backup and Restore capabilities using native Apache Solr Collections API, with robust URL parsing, credentials-based basic authentication support, and built-in SSL certificate validation bypass for secure HTTPS endpoints (such as `https://solr.dev.travelswitch.com`).
   - Streamlined manual backup workflow: automatically queries Solr server cores as the "Collection / Core" selector, and fetches core schema fields as the "Schema Fields" options.
 - **Webhook Notifications:**
   - Configurable alerts for backup/restore success and failures directly to Slack, Microsoft Teams, and Telegram.

@@ -205,7 +205,9 @@ def list_db_names(db_id: str, user=Depends(get_current_user)):
                 encoded_auth = base64.b64encode(auth_str.encode()).decode()
                 req.add_header("Authorization", f"Basic {encoded_auth}")
                 
-            with urllib.request.urlopen(req, timeout=10) as response:
+            import ssl
+            context = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, context=context, timeout=10) as response:
                 data = json.loads(response.read().decode())
                 cores = list(data.get("status", {}).keys())
                 return {"databases": sorted(cores)}
@@ -278,7 +280,9 @@ def list_collections(db_id: str, database: str = "", user=Depends(get_current_us
                 encoded_auth = base64.b64encode(auth_str.encode()).decode()
                 req.add_header("Authorization", f"Basic {encoded_auth}")
                 
-            with urllib.request.urlopen(req, timeout=10) as response:
+            import ssl
+            context = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, context=context, timeout=10) as response:
                 data = json.loads(response.read().decode())
                 fields = [f["name"] for f in data.get("fields", [])]
                 return {"collections": sorted(fields)}
@@ -373,7 +377,9 @@ def test_connection(db_id: str, user=Depends(get_current_user)):
                 encoded_auth = base64.b64encode(auth_str.encode()).decode()
                 req.add_header("Authorization", f"Basic {encoded_auth}")
                 
-            with urllib.request.urlopen(req, timeout=10) as response:
+            import ssl
+            context = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, context=context, timeout=10) as response:
                 data = json.loads(response.read().decode())
                 version = data.get("lucene", {}).get("solr-spec-version", "unknown")
                 return {"success": True, "message": f"Connected to {db['name']} — Apache Solr v{version}"}
