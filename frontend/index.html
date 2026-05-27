@@ -1293,41 +1293,44 @@ async function onBackupDbChange() {
   const selectedOpt = dbEl.options[dbEl.selectedIndex];
   const dbType = selectedOpt ? selectedOpt.getAttribute('data-type') : '';
 
+  const dbnameGroup = document.getElementById('bk-dbname-group');
+  const typeGroup = document.getElementById('bk-type-group');
+  const collGroup = document.getElementById('bk-collection-group');
+  
+  if (dbnameGroup) dbnameGroup.style.display = 'block';
+  if (typeGroup) typeGroup.style.display = 'block';
+
+  const dbnameLabel = dbnameGroup ? dbnameGroup.querySelector('label') : null;
+  const collLabel = collGroup ? collGroup.querySelector('label') : null;
+  const typeSelect = document.getElementById('bk-type');
+
   if (dbType === 'solr') {
-    const dbnameGroup = document.getElementById('bk-dbname-group');
-    const typeGroup = document.getElementById('bk-type-group');
-    if (dbnameGroup) dbnameGroup.style.display = 'none';
-    if (typeGroup) typeGroup.style.display = 'none';
-    
-    const collGroup = document.getElementById('bk-collection-group');
-    if (collGroup) collGroup.style.display = 'block';
-
-    dbnameEl.innerHTML = '<option value="default" selected>default</option>';
-
-    if(collEl) collEl.innerHTML = '<option>Loading collections...</option>';
-    try {
-      const r = await apiFetch(`/databases/${dbId}/collections?database=default`);
-      collEl.innerHTML = r.collections.map(c=>`<option value="${c}">${c}</option>`).join('');
-    } catch(e) {
-      if(collEl) collEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
+    if (dbnameLabel) dbnameLabel.innerHTML = 'Collection / Core <span style="color:var(--muted);font-size:11px">(fetched from server)</span>';
+    if (collLabel) collLabel.innerHTML = 'Schema Fields <span style="color:var(--muted);font-size:11px">(fetched from server)</span>';
+    if (typeSelect) {
+      typeSelect.options[0].text = 'Full Core / Collection';
+      typeSelect.options[1].text = 'Specific Schema Field';
     }
-  } else {
-    const dbnameGroup = document.getElementById('bk-dbname-group');
-    const typeGroup = document.getElementById('bk-type-group');
-    if (dbnameGroup) dbnameGroup.style.display = 'block';
-    if (typeGroup) typeGroup.style.display = 'block';
-
+    // For Solr, always evaluate if the collection group needs to be displayed based on selected scope
     onBackupTypeChange();
-
-    dbnameEl.innerHTML = '<option>Loading databases...</option>';
-    if(collEl) collEl.innerHTML = '<option>— select database name first —</option>';
-    try {
-      const r = await apiFetch(`/databases/${dbId}/databases`);
-      dbnameEl.innerHTML = r.databases.map(d=>`<option value="${d}">${d}</option>`).join('');
-      onBackupDbnameChange();
-    } catch(e) {
-      dbnameEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
+  } else {
+    if (dbnameLabel) dbnameLabel.innerHTML = 'Database Name <span style="color:var(--muted);font-size:11px">(fetched from server)</span>';
+    if (collLabel) collLabel.innerHTML = 'Collection / Table <span style="color:var(--muted);font-size:11px">(fetched from server)</span>';
+    if (typeSelect) {
+      typeSelect.options[0].text = 'Full Database';
+      typeSelect.options[1].text = 'Specific Collection / Table';
     }
+    onBackupTypeChange();
+  }
+
+  dbnameEl.innerHTML = '<option>Loading...</option>';
+  if(collEl) collEl.innerHTML = dbType === 'solr' ? '<option>— select collection / core first —</option>' : '<option>— select database name first —</option>';
+  try {
+    const r = await apiFetch(`/databases/${dbId}/databases`);
+    dbnameEl.innerHTML = r.databases.map(d=>`<option value="${d}">${d}</option>`).join('');
+    onBackupDbnameChange();
+  } catch(e) {
+    dbnameEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
   }
 }
 
@@ -1360,13 +1363,12 @@ async function runBackup() {
   const selectedOpt = dbEl.options[dbEl.selectedIndex];
   const dbType = selectedOpt ? selectedOpt.getAttribute('data-type') : '';
 
-  const isSolr = dbType === 'solr';
-  const collection = (isSolr || type === 'collection') ? v('bk-collection-select') : '';
+  const collection = (type === 'collection') ? v('bk-collection-select') : '';
   const label = v('bk-label') || `backup-${Date.now()}`;
   
   if(!dbId){ toast('Select a database connection','error'); return; }
   if(!dbname){ toast('Select a database name','error'); return; }
-  if((isSolr || type === 'collection') && !collection){ toast('Select a collection','error'); return; }
+  if(type === 'collection' && !collection){ toast('Select a collection/schema','error'); return; }
   
   const indexingMode = v('bk-indexing-mode');
   const sendNotifications = document.getElementById('bk-send-notifications') ? document.getElementById('bk-send-notifications').checked : true;

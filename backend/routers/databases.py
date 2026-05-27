@@ -83,6 +83,23 @@ router = APIRouter()
 @router.get("/")
 def list_databases(user=Depends(get_current_user)):
     dbs = read_json("data/databases.json")
+    modified = False
+    for d in dbs:
+        if not d.get("type"):
+            name = d.get("name", "").lower()
+            host = d.get("host", "").lower()
+            if "solr" in name or "solr" in host or d.get("port") == 8983:
+                d["type"] = "solr"
+                modified = True
+            elif "mongo" in name or "mongo" in host or d.get("mongo_uri") or d.get("port") == 27017:
+                d["type"] = "mongodb"
+                modified = True
+            else:
+                d["type"] = "postgresql"
+                modified = True
+    if modified:
+        write_json("data/databases.json", dbs)
+
     return [
         {k: v for k, v in d.items() if k != "password"}
         for d in dbs if d["user_id"] == user["sub"]
@@ -168,8 +185,32 @@ def list_db_names(db_id: str, user=Depends(get_current_user)):
             raise HTTPException(400, f"Failed to fetch databases: {str(e)}")
             
     elif db["type"] == "solr":
-        # Solr doesn't have "databases", only "collections"
-        return {"databases": ["default"]}
+        try:
+            import urllib.request
+            import json
+            import base64
+            
+            host = db["host"]
+            if host.startswith("http://") or host.startswith("https://"):
+                from urllib.parse import urlparse
+                parsed = urlparse(host)
+                solr_base_url = f"{parsed.scheme}://{parsed.netloc}"
+            else:
+                solr_base_url = f"http://{host}:{db['port']}"
+                
+            url = f"{solr_base_url}/solr/admin/cores?action=STATUS&wt=json"
+            req = urllib.request.Request(url)
+            if db.get("username") and db.get("password"):
+                auth_str = f"{db['username']}:{db['password']}"
+                encoded_auth = base64.b64encode(auth_str.encode()).decode()
+                req.add_header("Authorization", f"Basic {encoded_auth}")
+                
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode())
+                cores = list(data.get("status", {}).keys())
+                return {"databases": sorted(cores)}
+        except Exception as e:
+            raise HTTPException(400, f"Failed to fetch Solr collections: {str(e)}")
 
 
 @router.get("/{db_id}/collections")
@@ -227,7 +268,10 @@ def list_collections(db_id: str, database: str = "", user=Depends(get_current_us
             else:
                 solr_base_url = f"http://{host}:{db['port']}"
                 
-            url = f"{solr_base_url}/solr/admin/cores?action=STATUS&wt=json"
+            if not target_db or target_db == "default":
+                return {"collections": []}
+                
+            url = f"{solr_base_url}/solr/{target_db}/schema/fields?wt=json"
             req = urllib.request.Request(url)
             if db.get("username") and db.get("password"):
                 auth_str = f"{db['username']}:{db['password']}"
@@ -236,10 +280,10 @@ def list_collections(db_id: str, database: str = "", user=Depends(get_current_us
                 
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode())
-                cores = list(data.get("status", {}).keys())
-                return {"collections": cores}
+                fields = [f["name"] for f in data.get("fields", [])]
+                return {"collections": sorted(fields)}
         except Exception as e:
-            raise HTTPException(400, f"Failed to fetch Solr collections: {str(e)}")
+            raise HTTPException(400, f"Failed to fetch Solr schemas: {str(e)}")
 
 
 @router.get("/{db_id}/test")

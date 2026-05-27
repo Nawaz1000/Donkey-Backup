@@ -985,8 +985,11 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
     
     solr_host = db["host"]
     solr_port = db["port"]
-    collection = backup.get("collection")
-    if collection == "full" or not collection:
+    
+    collection = db.get("database_name")
+    if not collection or collection == "default" or collection == "full":
+        collection = backup.get("collection")
+    if not collection or collection == "full":
         collection = "default"
         
     backup_name = f"backup_{backup['id']}"
@@ -1046,6 +1049,8 @@ def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str,
         os.rename(os.path.join(BACKUP_TMP, original_name), os.path.join(BACKUP_TMP, backup_name))
     
     if collection == "full" or not collection:
+        collection = db.get("database_name")
+    if not collection or collection == "full":
         collection = "default"
         
     solr_base_url = get_solr_base_url(solr_host, solr_port)
