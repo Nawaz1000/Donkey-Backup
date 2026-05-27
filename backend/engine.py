@@ -354,7 +354,7 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
 
 
 def get_compressor_info(log_path: str = None) -> dict:
-    threads = min(4, os.cpu_count() or 1)
+    threads = min(2, os.cpu_count() or 1)
     if shutil.which("zstd"):
         if log_path:
             write_log(log_path, f"INFO  Using Zstandard (zstd) with {threads} threads for optimized speed.")
@@ -474,13 +474,14 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 f"AccountKey={storage['azure_account_key']};"
                 f"EndpointSuffix=core.windows.net"
             )
-            client = BlobServiceClient.from_connection_string(conn_str, max_block_size=4 * 1024 * 1024)
+            client = BlobServiceClient.from_connection_string(conn_str, max_block_size=4 * 1024 * 1024, connection_timeout=300, read_timeout=3600)
             container = client.get_container_client(storage["azure_container"])
             container.upload_blob(
                 name=remote_name, 
                 data=queue_reader, 
                 overwrite=True,
-                max_concurrency=4
+                max_concurrency=1,
+                read_timeout=3600
             )
             blob_props = container.get_blob_client(remote_name).get_blob_properties()
             stream_backup_to_storage.last_size_bytes = blob_props.size
@@ -495,8 +496,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
             client = gcs.Client(credentials=creds)
             bucket = client.bucket(storage["gcs_bucket"])
             blob = bucket.blob(remote_name)
-            blob.chunk_size = 16 * 1024 * 1024
-            blob.upload_from_file(queue_reader, num_retries=3)
+            blob.chunk_size = 4 * 1024 * 1024
+            blob.upload_from_file(queue_reader, num_retries=3, timeout=3600)
             blob.reload()
             stream_backup_to_storage.last_size_bytes = blob.size
             remote_path = f"gcs://{storage['gcs_bucket']}/{remote_name}"
@@ -605,9 +606,9 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     f"AccountKey={storage['azure_account_key']};"
                     f"EndpointSuffix=core.windows.net"
                 )
-                client = BlobServiceClient.from_connection_string(conn_str, max_single_get_size=16 * 1024 * 1024, max_chunk_get_size=16 * 1024 * 1024)
+                client = BlobServiceClient.from_connection_string(conn_str, max_single_get_size=4 * 1024 * 1024, max_chunk_get_size=4 * 1024 * 1024, connection_timeout=300, read_timeout=3600)
                 container = client.get_container_client(storage["azure_container"])
-                stream = container.download_blob(remote_name, max_concurrency=4)
+                stream = container.download_blob(remote_name, max_concurrency=1, read_timeout=3600)
                 for chunk in stream.chunks():
                     stdin_stream.write(chunk)
                     if dl_tracker:
@@ -623,10 +624,10 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 client = gcs.Client(credentials=creds)
                 bucket = client.bucket(storage["gcs_bucket"])
                 blob = bucket.blob(remote_name)
-                blob.chunk_size = 16 * 1024 * 1024
+                blob.chunk_size = 4 * 1024 * 1024
                 
                 progress_writer = ProgressWriter(stdin_stream, dl_tracker)
-                blob.download_to_file(progress_writer)
+                blob.download_to_file(progress_writer, timeout=3600)
                 stdin_stream.close()
             else:
                 raise ValueError(f"Unknown storage type: {storage['type']}")
@@ -692,7 +693,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         "mongodump",
         f"--uri={m['uri']}",
         "--archive",
-        "--numParallelCollections=4",
+        "--numParallelCollections=2",
         "--readPreference=secondaryPreferred",  # Offload reads to secondary replicas, reduces primary server load
     ]
     if collection and collection != "full":
@@ -726,7 +727,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     write_log(log_path, f"INFO  mongodump cmd: {' '.join(log_cmd)}")
     env = os.environ.copy()
     env["GOGC"] = "100"
-    env["GOMAXPROCS"] = str(os.cpu_count() or 8)
+    env["GOMAXPROCS"] = str(min(4, os.cpu_count() or 2))
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
 
 
@@ -759,8 +760,8 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         "mongorestore",
         f"--uri={m['uri']}",
         "--archive",
-        "--numParallelCollections=8",
-        "--numInsertionWorkersPerCollection=8",
+        "--numParallelCollections=4",
+        "--numInsertionWorkersPerCollection=4",
         "--batchSize=2000",
         "--bypassDocumentValidation",
         "--writeConcern=1",
@@ -781,7 +782,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     if drop_existing:
         cmd.append("--drop")
 
-    decompression_threads = min(8, os.cpu_count() or 4)
+    decompression_threads = min(4, os.cpu_count() or 2)
     decompression_cmd = None
     if compression == "zstd":
         decompression_cmd = ["zstd", "-d", "-c", f"--threads={decompression_threads}"]
@@ -797,7 +798,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     write_log(log_path, f"INFO  mongorestore cmd: {' '.join(log_cmd)}")
     env = os.environ.copy()
     env["GOGC"] = "100"
-    env["GOMAXPROCS"] = str(os.cpu_count() or 8)
+    env["GOMAXPROCS"] = str(min(4, os.cpu_count() or 2))
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
 
 
