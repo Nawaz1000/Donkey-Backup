@@ -53,7 +53,34 @@ def test_notifications(req: SettingsUpdate, user=Depends(get_current_user)):
             
     if req.teams_webhook:
         try:
-            payload = json.dumps({"title": title, "text": message, "themeColor": "10B981"}).encode('utf-8')
+            adaptive_card = {
+                "type": "message",
+                "attachments": [
+                    {
+                        "contentType": "application/vnd.microsoft.card.adaptive",
+                        "content": {
+                            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                            "type": "AdaptiveCard",
+                            "version": "1.2",
+                            "body": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": title,
+                                    "weight": "Bolder",
+                                    "size": "Medium",
+                                    "color": "Good"
+                                },
+                                {
+                                    "type": "TextBlock",
+                                    "text": message,
+                                    "wrap": True
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+            payload = json.dumps(adaptive_card).encode('utf-8')
             request = urllib.request.Request(req.teams_webhook, data=payload, headers=headers, method="POST")
             with urllib.request.urlopen(request, timeout=10) as resp:
                 if resp.status not in (200, 201, 204):

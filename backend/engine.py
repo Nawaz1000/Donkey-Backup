@@ -354,7 +354,7 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
 
 
 def get_compressor_info(log_path: str = None) -> dict:
-    threads = min(2, os.cpu_count() or 1)
+    threads = 1
     if shutil.which("zstd"):
         if log_path:
             write_log(log_path, f"INFO  Using Zstandard (zstd) with {threads} threads for optimized speed.")
@@ -693,7 +693,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         "mongodump",
         f"--uri={m['uri']}",
         "--archive",
-        "--numParallelCollections=2",
+        "--numParallelCollections=1",
         "--readPreference=secondaryPreferred",  # Offload reads to secondary replicas, reduces primary server load
     ]
     if collection and collection != "full":
@@ -727,7 +727,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     write_log(log_path, f"INFO  mongodump cmd: {' '.join(log_cmd)}")
     env = os.environ.copy()
     env["GOGC"] = "100"
-    env["GOMAXPROCS"] = str(min(4, os.cpu_count() or 2))
+    env["GOMAXPROCS"] = "1"
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
 
 
@@ -760,9 +760,9 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         "mongorestore",
         f"--uri={m['uri']}",
         "--archive",
-        "--numParallelCollections=4",
-        "--numInsertionWorkersPerCollection=4",
-        "--batchSize=2000",
+        "--numParallelCollections=1",
+        "--numInsertionWorkersPerCollection=1",
+        "--batchSize=500",
         "--bypassDocumentValidation",
         "--writeConcern=1",
         "--verbose=1",
@@ -782,7 +782,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     if drop_existing:
         cmd.append("--drop")
 
-    decompression_threads = min(4, os.cpu_count() or 2)
+    decompression_threads = 1
     decompression_cmd = None
     if compression == "zstd":
         decompression_cmd = ["zstd", "-d", "-c", f"--threads={decompression_threads}"]
@@ -798,7 +798,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     write_log(log_path, f"INFO  mongorestore cmd: {' '.join(log_cmd)}")
     env = os.environ.copy()
     env["GOGC"] = "100"
-    env["GOMAXPROCS"] = str(min(4, os.cpu_count() or 2))
+    env["GOMAXPROCS"] = "1"
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
 
 
@@ -1206,12 +1206,15 @@ def do_backup(backup_id: str):
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
         if backup.get("send_notifications", True):
-            send_notification("Backup Failed \u274c", f"Job ID: {backup_id}\nDatabase: {db and db.get('name')}\nError: {msg}", is_error=True, log_path=log_path)
+            send_notification("Backup Failed \u274c", f"Backup of {collection if collection != 'full' else (db and db.get('name'))} in {storage and storage.get('name')} failed at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}. Error: {msg}", is_error=True, log_path=log_path)
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     try:
         if not db or not storage:
             return fail("Database or storage not found")
+            
+        if backup.get("send_notifications", True):
+            send_notification("Backup Started \u23f3", f"Backup of {collection if collection != 'full' else db.get('name')} in {storage.get('name')} started at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}", is_error=False, log_path=log_path)
 
         comp_info = get_compressor_info(log_path)
         ext = comp_info["ext"] if comp_info else "gz"
@@ -1221,7 +1224,13 @@ def do_backup(backup_id: str):
         if not safe_db_name:
             safe_db_name = db.get("name", "db").strip().replace(" ", "_")
         date_str = datetime.utcnow().strftime('%Y-%m-%d_%H-%M-%S')
-        remote_name = f"{safe_db_name}-{date_str}/backup.archive.{ext}"
+        
+        if collection and collection != "full":
+            base_name = collection.strip().replace(" ", "_")
+        else:
+            base_name = safe_db_name
+            
+        remote_name = f"{base_name}-{date_str}/backup.archive.{ext}"
 
         # Initialize progress tracker
         total_size = 0
@@ -1265,7 +1274,7 @@ def do_backup(backup_id: str):
             duration_seconds=duration
         )
         if backup.get("send_notifications", True):
-            send_notification("Backup Successful \u2705", f"Job ID: {backup_id}\nDatabase: {db and db.get('name')}\nSize: {size_mb}MB\nDuration: {duration}s", is_error=False, log_path=log_path)
+            send_notification("Backup Successful \u2705", f"Backup of {collection if collection != 'full' else (db and db.get('name'))} in {storage and storage.get('name')} completed successfully at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}. Size: {size_mb}MB. Duration: {duration}s", is_error=False, log_path=log_path)
 
     except Exception as e:
         fail(str(e))
@@ -1294,7 +1303,6 @@ def do_restore(restore_id: str):
     dbs = read_json("data/databases.json")
     storages = read_json("data/storages.json")
 
-    backup = next((b for b in backups if b["id"] == restore["backup_id"]), None)
     target_db = next((d for d in dbs if d["id"] == restore["target_database_id"]), None)
 
     log.info(f"=== RESTORE START | id={restore_id} target={target_db and target_db['name']} ===")
@@ -1308,22 +1316,47 @@ def do_restore(restore_id: str):
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
-        send_notification("Restore Failed \u274c", f"Job ID: {restore_id}\nTarget: {target_db and target_db.get('name')}\nError: {msg}", is_error=True, log_path=log_path)
+        send_notification("Restore Failed \u274c", f"Restore of {restore.get('remote_name', 'backup')} to {target_db and target_db.get('name')} failed at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}. Error: {msg}", is_error=True, log_path=log_path)
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     try:
-        if not backup or not target_db:
-            return fail("Backup or target database not found")
+        if not target_db:
+            return fail("Target database not found")
 
-        storage = next((s for s in storages if s["id"] == backup["storage_id"]), None)
-        if not storage:
-            return fail("Storage not found")
+        if restore.get("backup_id"):
+            backup = next((b for b in backups if b["id"] == restore["backup_id"]), None)
+            if not backup:
+                return fail("Backup not found")
+            storage = next((s for s in storages if s["id"] == backup["storage_id"]), None)
+            if not storage:
+                return fail("Storage not found")
+            remote_name = backup.get("remote_name")
+            if not remote_name:
+                return fail("Backup has no remote file")
+            collection = backup.get("collection", "full")
+            compression = backup.get("compression")
+            source_db_connection = next((d for d in dbs if d["id"] == backup.get("database_id")), None)
+            fallback_source_dbname = source_db_connection["database_name"] if source_db_connection else None
+            source_dbname = backup.get("source_dbname") or fallback_source_dbname
+            total_size = int(backup.get("size_mb", 0) * 1024 * 1024)
+        elif restore.get("storage_id") and restore.get("remote_name"):
+            storage = next((s for s in storages if s["id"] == restore["storage_id"]), None)
+            if not storage:
+                return fail("Storage not found")
+            remote_name = restore["remote_name"]
+            collection = "full"
+            if ".zst" in remote_name:
+                compression = "zstd"
+            elif ".gz" in remote_name:
+                compression = "gzip"
+            else:
+                compression = "native"
+            source_dbname = None
+            total_size = 0
+        else:
+            return fail("Backup ID or Storage/Remote Name not provided")
 
-        remote_name = backup.get("remote_name")
-        if not remote_name:
-            return fail("Backup has no remote file")
-
-        collection = backup.get("collection", "full")
+        send_notification("Restore Started \u23f3", f"Restore of {remote_name} from {storage.get('name')} to {target_db.get('name')} started at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}", is_error=False, log_path=log_path)
 
         # Override dbname if new database
         if restore.get("new_database") and restore.get("new_database_name"):
@@ -1332,13 +1365,7 @@ def do_restore(restore_id: str):
             log.info(f"Restoring to NEW database: {new_dbname}")
             target_db = {**target_db, "database_name": new_dbname}
 
-        compression = backup.get("compression")
-        source_db_connection = next((d for d in dbs if d["id"] == backup.get("database_id")), None)
-        fallback_source_dbname = source_db_connection["database_name"] if source_db_connection else None
-        source_dbname = backup.get("source_dbname") or fallback_source_dbname
-
         # Initialize progress tracker
-        total_size = int(backup.get("size_mb", 0) * 1024 * 1024)
         tracker = ProgressTracker(restore_id, is_restore=True, total_size=total_size, log_path=log_path)
         indexing_mode = restore.get("indexing_mode", "with_index")
 
@@ -1363,7 +1390,7 @@ def do_restore(restore_id: str):
             completed_at=datetime.utcnow().isoformat(),
             duration_seconds=duration
         )
-        send_notification("Restore Successful \u2705", f"Job ID: {restore_id}\nTarget: {target_db and target_db.get('name')}\nDuration: {duration}s", is_error=False, log_path=log_path)
+        send_notification("Restore Successful \u2705", f"Restore of {remote_name} to {target_db and target_db.get('name')} completed successfully at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}. Duration: {duration}s", is_error=False, log_path=log_path)
 
     except Exception as e:
         fail(str(e))

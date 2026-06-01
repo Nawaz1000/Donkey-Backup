@@ -20,7 +20,9 @@ class BackupCreate(BaseModel):
     send_notifications: Optional[bool] = True
 
 class RestoreRequest(BaseModel):
-    backup_id: str
+    backup_id: Optional[str] = None
+    storage_id: Optional[str] = None
+    remote_name: Optional[str] = None
     target_database_id: str
     new_database: bool = False
     new_database_name: Optional[str] = None
@@ -231,17 +233,25 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
     if not os.path.exists("data/restores.json"):
         write_json("data/restores.json", [])
 
-    backups = read_json("data/backups.json")
     dbs = read_json("data/databases.json")
     user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
 
-    backup = next((b for b in backups if b["id"] == req.backup_id and b["database_id"] in user_db_ids), None)
-    if not backup:
-        raise HTTPException(404, "Backup not found")
-    if backup["status"] != "completed":
-        raise HTTPException(400, "Only completed backups can be restored")
-    if not backup.get("remote_name"):
-        raise HTTPException(400, "Backup has no remote file stored")
+    if req.backup_id:
+        backups = read_json("data/backups.json")
+        backup = next((b for b in backups if b["id"] == req.backup_id and b["database_id"] in user_db_ids), None)
+        if not backup:
+            raise HTTPException(404, "Backup not found")
+        if backup["status"] != "completed":
+            raise HTTPException(400, "Only completed backups can be restored")
+        if not backup.get("remote_name"):
+            raise HTTPException(400, "Backup has no remote file stored")
+    elif req.storage_id and req.remote_name:
+        storages = read_json("data/storages.json")
+        storage = next((s for s in storages if s["id"] == req.storage_id and s["user_id"] == user["sub"]), None)
+        if not storage:
+            raise HTTPException(404, "Storage not found")
+    else:
+        raise HTTPException(400, "Must provide either backup_id or both storage_id and remote_name")
 
     target_db = next((d for d in dbs if d["id"] == req.target_database_id and d["user_id"] == user["sub"]), None)
     if not target_db:
@@ -251,6 +261,8 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
     restore = {
         "id": str(uuid.uuid4()),
         "backup_id": req.backup_id,
+        "storage_id": req.storage_id,
+        "remote_name": req.remote_name,
         "target_database_id": req.target_database_id,
         "new_database": req.new_database,
         "new_database_name": req.new_database_name if req.new_database else None,

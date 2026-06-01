@@ -82,11 +82,11 @@ backupvault/
 - **High-Performance Zero-Copy `QueueReader`:**
   - Optimized queue and buffer management using memory pointer offsets and Python `memoryview` stream wrappers.
   - Completely eliminates array slicing memory copy overhead, reducing Python process CPU utilization to near 0% and maximizing upload throughput.
-- **High-Performance Scaling & CPU Multi-threading:**
-  - Scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines dynamically (capped at 2 threads) to prevent CPU spikes from starving host processes.
-  - Limits Go runtime concurrency (`GOMAXPROCS` capped at 4 threads) to restrict active OS threads in Go-based tools (`mongodump` / `mongorestore`).
-- **Parallel Collection Transfer:**
-  - Supports dumping up to 2 collections in parallel, and restoring up to 4 collections and 4 insertion workers concurrently, balancing high transfer speeds with reasonable system load.
+- **Ultra-Lightweight Scaling & CPU Allocation (1 Core / 1.5GB RAM constraint):**
+  - Rigidly scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines to exactly **1 thread** to guarantee safe execution on single-core constrained environments (like low-tier VMs).
+  - Enforces Go runtime concurrency limits (`GOMAXPROCS=1`) to strictly restrict active OS threads in Go-based tools (`mongodump` / `mongorestore`).
+- **Throttled Collection Transfer:**
+  - Enforces strict limits: dumping 1 collection at a time, restoring with 1 insertion worker and a batch size of 500, prioritizing maximum stability and low memory usage under strict 1.5GB RAM limitations.
 - **Bounded RAM Footprint (< 100MB):**
   - Downloads and uploads GCS/Azure objects sequentially (`max_concurrency=1`) with `4MB` chunk sizes. This prevents parallel chunk buffering in memory when the database engine is writing slowly, strictly keeping RAM consumption under 100MB.
 - **Robust Connection Options Parsing:**
@@ -100,8 +100,8 @@ backupvault/
   - Wraps GCS/Azure download streams with a `ProgressWriter` to monitor restore progress and seamlessly track stdin archive ingestion metrics for MongoDB restores where logs are unavailable.
 - **Database Client Performance Tuning:**
   - Configures PostgreSQL for memory constraints (`work_mem=16MB`, `maintenance_work_mem=64MB`) to safely ensure minimal memory usage even during massive parallel operations.
-  - MongoDB restore concurrency is optimized to 4 parallel collections and 4 insertion workers per collection (batch size of 2000) to balance write performance and CPU overhead.
-  - Uses Go Runtime environment tuning (`GOGC=100`) and multicore thread scheduling capped at 4 cores (`GOMAXPROCS`) to prevent database resource starvation.
+  - MongoDB restore concurrency is heavily throttled to 1 parallel collection and 1 insertion worker (batch size of 500) to ensure predictable and safe low-memory execution.
+  - Uses Go Runtime environment tuning (`GOGC=100`) and single-core thread scheduling (`GOMAXPROCS=1`) to prevent database resource exhaustion on 1-core instances.
   - Removed all artificial sleep delays from streaming background threads to enable line-rate direct download and decompression speeds.
   - Uses direct connection URI (`--uri`) in MongoDB tool arguments to preserve critical options like SSL/TLS, `replicaSet`, and `directConnection` from connection strings.
   - Implements dynamic wildcard namespace remapping (`--nsFrom=$database$.$collection$` and `--nsTo=target_db.$collection$`) to guarantee clean database renames when restoring archives.
@@ -118,8 +118,10 @@ backupvault/
   - **Collapsible Sidebar:** Hamburger menu toggle to open/close the sidebar for a wider workspace view.
   - **Smart Duration Formatting:** Durations auto-format to `7m 54s`, `1h 23m 45s`, or raw seconds (if under 60s) instead of always showing raw seconds.
   - **Detailed Database Info in History Tables:** Backup and Restore tables now display the connection name, actual database name, and collection/table name for full visibility into what was backed up or restored.
+  - **Storage Connection Management:** In-UI Storage editor to easily update storage credentials and paths without deleting them.
   - "Total Restores" added to the main Dashboard analytics.
   - Remote cloud storage object deletion directly from the BackupVault dashboard with a dedicated "Delete from Bucket" button.
+  - Restoring external backups natively by auto-fetching existing backup files straight from Cloud buckets without requiring local history.
   - Live progress card state persistence — progress bars instantly resume tracking background jobs even across hard browser refreshes.
   - Support for deleting restore history from the UI.
   - Active Loading indicator spinners on manual refresh actions.
@@ -132,7 +134,7 @@ backupvault/
   - Support for full Solr server backups via an **"All Collections / Cores"** option that triggers sequential backups of all logical collections and packages them in a single archive.
   - Hybrid deployment support with automatic fallback to the Core Admin API if the Collections API is unavailable (standalone Solr installations), detailed error body diagnostic extraction to parse and display verbose JSON error logs from the Solr server, and custom backup path configuration (allowing you to specify where Solr writes backups on the Solr server, defaulting to `/tmp/backupvault`).
 - **Webhook Notifications:**
-  - Configurable alerts for backup/restore success and failures directly to Slack, Microsoft Teams, and Telegram.
+  - Configurable alerts for backup/restore success and failures directly to Slack, Microsoft Teams (using modern Adaptive Cards for Power Automate Workflows), and Telegram.
   - Custom User-Agent headers to prevent gateway firewalls from blocking notifications.
   - Instant Webhook testing on the Settings page to verify delivery.
   - Per-backup preference toggle to opt-out of notification dispatches for specific manual runs.

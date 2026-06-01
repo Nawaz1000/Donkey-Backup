@@ -676,6 +676,54 @@ tr:hover td{background:rgba(255,255,255,0.015)}
   </div>
 </div>
 
+<!-- Edit Storage -->
+<div class="modal-overlay" id="edit-storage-modal">
+  <div class="modal">
+    <div class="modal-title"><i data-lucide="cloud"></i> Edit Storage</div>
+    <input type="hidden" id="edit-st-id"/>
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" id="edit-st-name" placeholder="My Azure Bucket"/>
+    </div>
+    <div class="form-group">
+      <label>Type</label>
+      <select id="edit-st-type" disabled>
+        <option value="azure">Azure Blob Storage</option>
+        <option value="gcs">Google Cloud Storage</option>
+      </select>
+    </div>
+    <div id="edit-azure-fields">
+      <div class="form-group">
+        <label>Account Name</label>
+        <input type="text" id="edit-st-azure-account"/>
+      </div>
+      <div class="form-group">
+        <label>Account Key</label>
+        <input type="password" id="edit-st-azure-key" placeholder="Leave blank to keep current"/>
+      </div>
+      <div class="form-group">
+        <label>Container Name</label>
+        <input type="text" id="edit-st-azure-container"/>
+      </div>
+    </div>
+    <div id="edit-gcs-fields" style="display:none">
+      <div class="form-group">
+        <label>Bucket Name</label>
+        <input type="text" id="edit-st-gcs-bucket"/>
+      </div>
+      <div class="form-group">
+        <label>Service Account JSON</label>
+        <textarea id="edit-st-gcs-creds" rows="4" placeholder="Leave blank to keep current"></textarea>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('edit-storage-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditStorage()"><i data-lucide="save" style="width:15px;height:15px"></i> Save Changes</button>
+    </div>
+  </div>
+</div>
+
+
 <!-- Edit Database -->
 <div class="modal-overlay" id="edit-db-modal">
   <div class="modal">
@@ -847,9 +895,28 @@ tr:hover td{background:rgba(255,255,255,0.015)}
     <div class="modal-title"><i data-lucide="rotate-ccw"></i> Restore Backup</div>
 
     <div class="form-group">
+      <label>Restore Source Type</label>
+      <select id="rs-source-type" onchange="onRestoreSourceChange()">
+        <option value="local">Local Backup Record</option>
+        <option value="external">External Cloud Bucket</option>
+      </select>
+    </div>
+
+    <div class="form-group" id="rs-local-group">
       <label>Select Backup to Restore</label>
       <select id="rs-backup" onchange="onRestoreBackupChange()"></select>
     </div>
+
+    <div class="form-group" id="rs-external-storage-group" style="display:none">
+      <label>Select Storage Bucket</label>
+      <select id="rs-external-storage" onchange="onRestoreExternalStorageChange()"></select>
+    </div>
+
+    <div class="form-group" id="rs-external-file-group" style="display:none">
+      <label>Select Backup File</label>
+      <select id="rs-external-file"></select>
+    </div>
+
     <div id="rs-info" style="background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;font-size:13px;color:var(--text2);margin-bottom:16px;display:none">
       <span id="rs-info-text"></span>
     </div>
@@ -1215,7 +1282,10 @@ async function loadStorage() {
         <td>${storageBadge(s.type)}</td>
         <td class="mono text-sm">${s.azure_container||s.gcs_bucket||'—'}</td>
         <td class="text-muted text-sm">${fmtDate(s.created_at)}</td>
-        <td><button class="btn btn-danger btn-sm btn-icon" onclick="deleteStorage('${s.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button></td>
+        <td><div class="actions">
+          <button class="btn btn-secondary btn-sm btn-icon" onclick="openEditStorage('${s.id}')" title="Edit"><i data-lucide="pencil" style="width:14px;height:14px"></i></button>
+          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteStorage('${s.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
+        </div></td>
       </tr>`).join('')||emptyRow(5,'No storage configured yet.');
     lucide.createIcons();
   } catch(e) { toast(e.message,'error'); }
@@ -1239,6 +1309,55 @@ async function deleteStorage(id) {
   if(!confirm('Delete this storage?')) return;
   await apiFetch(`/storage/${id}`,{method:'DELETE'});
   toast('Deleted','success'); loadStorage();
+}
+
+async function openEditStorage(id) {
+  const storages = await apiFetch('/storage/');
+  const s = storages.find(x=>x.id===id);
+  if(!s) return;
+  document.getElementById('edit-st-id').value = s.id;
+  document.getElementById('edit-st-name').value = s.name;
+  document.getElementById('edit-st-type').value = s.type;
+  
+  document.getElementById('edit-azure-fields').style.display = s.type === 'azure' ? 'block' : 'none';
+  document.getElementById('edit-gcs-fields').style.display = s.type === 'gcs' ? 'block' : 'none';
+  
+  if (s.type === 'azure') {
+    document.getElementById('edit-st-azure-account').value = s.azure_account_name || '';
+    document.getElementById('edit-st-azure-key').value = '';
+    document.getElementById('edit-st-azure-container').value = s.azure_container || '';
+  } else if (s.type === 'gcs') {
+    document.getElementById('edit-st-gcs-bucket').value = s.gcs_bucket || '';
+    document.getElementById('edit-st-gcs-creds').value = '';
+  }
+  openModal('edit-storage-modal');
+}
+
+async function saveEditStorage() {
+  const id = v('edit-st-id');
+  const type = v('edit-st-type');
+  const payload = {
+    name: v('edit-st-name'),
+    type: type
+  };
+  
+  if (type === 'azure') {
+    payload.azure_account_name = v('edit-st-azure-account');
+    payload.azure_container = v('edit-st-azure-container');
+    const key = v('edit-st-azure-key');
+    if (key) payload.azure_account_key = key;
+  } else if (type === 'gcs') {
+    payload.gcs_bucket = v('edit-st-gcs-bucket');
+    const creds = v('edit-st-gcs-creds');
+    if (creds) payload.gcs_credentials_json = creds;
+  }
+  
+  try {
+    await apiFetch(`/storage/${id}`, {method:'PATCH', body:JSON.stringify(payload)});
+    closeModal('edit-storage-modal');
+    toast('Storage updated!', 'success');
+    loadStorage();
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 // ---- BACKUPS ----
@@ -1646,7 +1765,7 @@ async function openRestoreFromBackup(backupId, backupLabel) {
 }
 
 async function populateRestoreSelects() {
-  const [backups, dbs] = await Promise.all([apiFetch('/backups/'), apiFetch('/databases/')]);
+  const [backups, dbs, storages] = await Promise.all([apiFetch('/backups/'), apiFetch('/databases/'), apiFetch('/storage/')]);
   const completed = backups.filter(b=>b.status==='completed'&&b.remote_name);
   document.getElementById('rs-backup').innerHTML = completed.length
     ? completed.map(b=>`<option value="${b.id}" data-collection="${b.collection||'full'}" data-size="${b.size_mb}" data-dbname="${b.database_name}">${b.label} — ${b.database_name} (${fmtDate(b.created_at)})</option>`).join('')
@@ -1654,8 +1773,42 @@ async function populateRestoreSelects() {
   document.getElementById('rs-target-db').innerHTML = dbs.map(d=>
     `<option value="${d.id}">${d.name} (${d.type})</option>`
   ).join('');
+  document.getElementById('rs-external-storage').innerHTML = storages.map(s=>
+    `<option value="${s.id}">${s.name} (${s.type})</option>`
+  ).join('<option value="">— select storage —</option>');
+  
+  onRestoreSourceChange();
   onRestoreBackupChange();
   onRestoreTargetDbChange();
+}
+
+function onRestoreSourceChange() {
+  const isExternal = v('rs-source-type') === 'external';
+  document.getElementById('rs-local-group').style.display = isExternal ? 'none' : 'block';
+  document.getElementById('rs-external-storage-group').style.display = isExternal ? 'block' : 'none';
+  document.getElementById('rs-external-file-group').style.display = isExternal ? 'block' : 'none';
+  const info = document.getElementById('rs-info');
+  if (isExternal) {
+    info.style.display = 'none';
+    onRestoreExternalStorageChange();
+  } else {
+    onRestoreBackupChange();
+  }
+}
+
+async function onRestoreExternalStorageChange() {
+  const storageId = v('rs-external-storage');
+  if (!storageId) return;
+  const sel = document.getElementById('rs-external-file');
+  sel.innerHTML = '<option>Loading files...</option>';
+  try {
+    const res = await apiFetch(`/storage/${storageId}/files`);
+    sel.innerHTML = res.files.length 
+      ? res.files.map(f=>`<option value="${f.name}">${f.name} (${(f.size/1024/1024).toFixed(2)} MB)</option>`).join('')
+      : '<option value="">— no backup files found —</option>';
+  } catch (e) {
+    sel.innerHTML = `<option value="">⚠ ${e.message}</option>`;
+  }
 }
 
 function onRestoreBackupChange() {
@@ -1708,12 +1861,17 @@ function setRestoreMode(mode) {
 }
 
 async function runRestore() {
+  const isExternal = v('rs-source-type') === 'external';
   const backupId = v('rs-backup');
   const targetDbId = v('rs-target-db');
   const isNew = document.getElementById('rs-new-fields').style.display !== 'none';
   const targetDbname = isNew ? v('rs-new-dbname').trim() : v('rs-target-dbname');
 
-  if(!backupId){ toast('Select a backup to restore','error'); return; }
+  if(!isExternal && !backupId){ toast('Select a backup to restore','error'); return; }
+  const storageId = v('rs-external-storage');
+  const file = v('rs-external-file');
+  if(isExternal && (!storageId || !file)) { toast('Select a bucket and file', 'error'); return; }
+  
   if(!targetDbId){ toast('Select a target database connection','error'); return; }
   if(!targetDbname){ toast(isNew ? 'Enter a new database name' : 'Select a target database name','error'); return; }
 
@@ -1728,13 +1886,21 @@ async function runRestore() {
   } catch(e){}
 
   try {
-    const r = await apiFetch('/backups/restore', {method:'POST', body:JSON.stringify({
-      backup_id: backupId,
+    let payload = {
       target_database_id: targetDbId,
       new_database: isNew,
       new_database_name: isNew ? targetDbname : null,
       indexing_mode: v('rs-indexing-mode')
-    })});
+    };
+    
+    if (isExternal) {
+      payload.storage_id = storageId;
+      payload.remote_name = file;
+    } else {
+      payload.backup_id = backupId;
+    }
+  
+    const r = await apiFetch('/backups/restore', {method:'POST', body:JSON.stringify(payload)});
     closeModal('restore-modal');
     toast(isNew ? `Creating "${targetDbname}" and restoring...` : 'Restore started!', 'info');
     showPage('restores');

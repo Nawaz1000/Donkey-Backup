@@ -54,3 +54,68 @@ def delete_storage(storage_id: str, user=Depends(get_current_user)):
     storages = [s for s in storages if not (s["id"] == storage_id and s["user_id"] == user["sub"])]
     write_json("data/storages.json", storages)
     return {"message": "Deleted"}
+
+@router.put("/{storage_id}")
+def update_storage(storage_id: str, req: StorageCreate, user=Depends(get_current_user)):
+    storages = read_json("data/storages.json")
+    for s in storages:
+        if s["id"] == storage_id and s["user_id"] == user["sub"]:
+            s["name"] = req.name
+            s["type"] = req.type
+            s["azure_account_name"] = req.azure_account_name
+            if req.azure_account_key and req.azure_account_key != "********":
+                s["azure_account_key"] = req.azure_account_key
+            s["azure_container"] = req.azure_container
+            s["gcs_bucket"] = req.gcs_bucket
+            if req.gcs_credentials_json and req.gcs_credentials_json != "********":
+                s["gcs_credentials_json"] = req.gcs_credentials_json
+            write_json("data/storages.json", storages)
+            safe = {k: v for k, v in s.items() if k not in ["azure_account_key", "gcs_credentials_json"]}
+            return safe
+    raise HTTPException(404, "Storage not found")
+
+@router.get("/{storage_id}/files")
+def list_storage_files(storage_id: str, user=Depends(get_current_user)):
+    storages = read_json("data/storages.json")
+    storage = next((s for s in storages if s["id"] == storage_id and s["user_id"] == user["sub"]), None)
+    if not storage:
+        raise HTTPException(404, "Storage not found")
+        
+    files = []
+    try:
+        if storage["type"] == "azure":
+            from azure.storage.blob import BlobServiceClient
+            conn_str = (
+                f"DefaultEndpointsProtocol=https;"
+                f"AccountName={storage['azure_account_name']};"
+                f"AccountKey={storage['azure_account_key']};"
+                f"EndpointSuffix=core.windows.net"
+            )
+            client = BlobServiceClient.from_connection_string(conn_str)
+            container = client.get_container_client(storage["azure_container"])
+            for blob in container.list_blobs():
+                if blob.name.endswith(".gz") or blob.name.endswith(".zst") or blob.name.endswith(".archive") or "backup.archive" in blob.name:
+                    files.append({
+                        "name": blob.name,
+                        "size": blob.size,
+                        "last_modified": blob.last_modified.isoformat() if blob.last_modified else None
+                    })
+        elif storage["type"] == "gcs":
+            import json
+            from google.cloud import storage as gcs
+            from google.oauth2 import service_account
+            creds_dict = json.loads(storage["gcs_credentials_json"])
+            creds = service_account.Credentials.from_service_account_info(creds_dict)
+            client = gcs.Client(credentials=creds)
+            bucket = client.bucket(storage["gcs_bucket"])
+            for blob in bucket.list_blobs():
+                if blob.name.endswith(".gz") or blob.name.endswith(".zst") or blob.name.endswith(".archive") or "backup.archive" in blob.name:
+                    files.append({
+                        "name": blob.name,
+                        "size": blob.size,
+                        "last_modified": blob.updated.isoformat() if blob.updated else None
+                    })
+    except Exception as e:
+        raise HTTPException(500, f"Failed to fetch files: {str(e)}")
+        
+    return sorted(files, key=lambda x: x["last_modified"] or "", reverse=True)
