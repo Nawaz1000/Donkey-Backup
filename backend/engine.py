@@ -968,15 +968,21 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
     if not collections_to_backup:
         raise RuntimeError("No Solr collections found to backup.")
 
-                        pass
-                raise RuntimeError(f"Solr backup failed for '{coll}'. Collections API error: {orig_err_detail}. Cores API error: {err_detail}")
-            
-    # Compress all backup directories into one tar archive
-    cmd = ["tar", "-czf", "-", "-C", BACKUP_TMP] + backup_dirs
-    stream_backup_to_storage(cmd, {}, storage, remote_name, log_path, compression_cmd=None, tracker=tracker)
+    write_log(log_path, f"INFO  Starting HTTP-based Solr backup for collections: {collections_to_backup}")
+
+    # Use gzip compression for JSON lines
+    comp_info = get_compressor_info(log_path)
+    compression_cmd = comp_info["cmd"] if comp_info else ["gzip", "-c"]
+
+    if len(collections_to_backup) > 1:
+        write_log(log_path, f"WARN  Multiple collections selected. Only '{collections_to_backup[0]}' will be backed up in this stream.")
+        
+    coll = collections_to_backup[0]
     
-    for d in backup_dirs:
-        shutil.rmtree(os.path.join(BACKUP_TMP, d), ignore_errors=True)
+    cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "solr_helper.py"), "dump", solr_base_url, coll, auth_str]
+    
+    stream_backup_to_storage(cmd, {}, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
+    write_log(log_path, "INFO  Solr backup streamed successfully via HTTP API.")
         
     return f"{storage['type']}://{remote_name}"
 
