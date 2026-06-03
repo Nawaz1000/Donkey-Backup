@@ -764,7 +764,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         "--numInsertionWorkersPerCollection=10",
         "--batchSize=500",
         "--bypassDocumentValidation",
-        "--writeConcern={w: 'majority', j: true}",
+        "--writeConcern={w: 1}",
         "--verbose=1",
     ]
 
@@ -933,6 +933,7 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
     import urllib.request
     import json
     import ssl
+    import sys
     
     solr_host = db["host"]
     solr_port = db["port"]
@@ -989,6 +990,7 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
 
 def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = False, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None):
     import base64
+    import sys
     
     solr_host = db["host"]
     solr_port = db["port"]

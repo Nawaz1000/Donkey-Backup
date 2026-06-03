@@ -85,7 +85,7 @@ backupvault/
 - **Ultra-Fast Dynamic CPU Scaling:**
   - Dynamically scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines up to 4 parallel threads, dramatically accelerating backup speeds while protecting host system resources.
 - **Disk-Flush Backpressure (OOM Crash Protection):**
-  - **MongoDB:** Uses `w: 'majority'` & `j: true` with 10 insertion workers, creating a natural backpressure stream. This forces `mongorestore` to throttle dynamically to match your target disk flush rate, completely eliminating out-of-memory crashes while maximizing insertion speed.
+  - **MongoDB:** Uses `w: 1` with 10 insertion workers, creating a balanced memory-acknowledgment stream. This allows `mongorestore` to insert data at maximum speed while WiredTiger naturally manages disk eviction in the background, minimizing memory bloat and maximizing insertion speed.
   - **PostgreSQL:** Throttles safely with parallel workers (`--jobs=4`), enforcing memory limits (`maintenance_work_mem=64MB`), and using `synchronous_commit=on` to naturally backpressure the restore without crashes.
 - **Bounded RAM Footprint (< 256MB):**
   - Downloads and uploads GCS/Azure objects sequentially (`max_concurrency=1`) with `4MB` chunk sizes. This prevents parallel chunk buffering in memory when the database engine is writing slowly, strictly keeping RAM consumption under 256MB.
