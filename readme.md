@@ -82,13 +82,13 @@ backupvault/
 - **High-Performance Zero-Copy `QueueReader`:**
   - Optimized queue and buffer management using memory pointer offsets and Python `memoryview` stream wrappers.
   - Completely eliminates array slicing memory copy overhead, reducing Python process CPU utilization to near 0% and maximizing upload throughput.
-- **Ultra-Lightweight Scaling & CPU Allocation (1 Core / 1.5GB RAM constraint):**
-  - Rigidly scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines to exactly **1 thread** to guarantee safe execution on single-core constrained environments (like low-tier VMs).
-  - Enforces Go runtime concurrency limits (`GOMAXPROCS=1`) to strictly restrict active OS threads in Go-based tools (`mongodump` / `mongorestore`).
-- **Throttled Collection Transfer:**
-  - Enforces strict limits: dumping 1 collection at a time, restoring with 1 insertion worker and a batch size of 500, prioritizing maximum stability and low memory usage under strict 1.5GB RAM limitations.
-- **Bounded RAM Footprint (< 100MB):**
-  - Downloads and uploads GCS/Azure objects sequentially (`max_concurrency=1`) with `4MB` chunk sizes. This prevents parallel chunk buffering in memory when the database engine is writing slowly, strictly keeping RAM consumption under 100MB.
+- **Ultra-Fast Dynamic CPU Scaling:**
+  - Dynamically scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines up to 4 parallel threads, dramatically accelerating backup speeds while protecting host system resources.
+- **Disk-Flush Backpressure (OOM Crash Protection):**
+  - **MongoDB:** Uses `w: 'majority'` & `j: true` with 10 insertion workers, creating a natural backpressure stream. This forces `mongorestore` to throttle dynamically to match your target disk flush rate, completely eliminating out-of-memory crashes while maximizing insertion speed.
+  - **PostgreSQL:** Throttles safely with parallel workers (`--jobs=4`), enforcing memory limits (`maintenance_work_mem=64MB`), and using `synchronous_commit=on` to naturally backpressure the restore without crashes.
+- **Bounded RAM Footprint (< 256MB):**
+  - Downloads and uploads GCS/Azure objects sequentially (`max_concurrency=1`) with `4MB` chunk sizes. This prevents parallel chunk buffering in memory when the database engine is writing slowly, strictly keeping RAM consumption under 256MB.
 - **Robust Connection Options Parsing:**
   - Implements an advanced, case-insensitive URI parser that detects database options from both query parameters and path-based segments (such as `...:27017/authMechanism=...`), auto-corrects them, and connects securely using keyword argument credentials to bypass PyMongo URI decoding limitations with special characters (like `!`).
 - **Verbosity & Notification Logging:**

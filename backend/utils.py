@@ -112,7 +112,7 @@ def send_notification(title: str, message: str, is_error: bool = False, log_path
         color = "EF4444" if is_error else "10B981"
         
         headers = {
-            "User-Agent": "BackupVault/1.0",
+            "User-Agent": "curl/7.68.0",
             "Content-Type": "application/json"
         }
         
@@ -142,34 +142,10 @@ def send_notification(title: str, message: str, is_error: bool = False, log_path
                     write_log(log_path, "INFO  Sending Microsoft Teams webhook notification...")
                 except Exception:
                     pass
-            adaptive_card = {
-                "type": "message",
-                "attachments": [
-                    {
-                        "contentType": "application/vnd.microsoft.card.adaptive",
-                        "content": {
-                            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                            "type": "AdaptiveCard",
-                            "version": "1.2",
-                            "body": [
-                                {
-                                    "type": "TextBlock",
-                                    "text": title,
-                                    "weight": "Bolder",
-                                    "size": "Medium",
-                                    "color": "Attention" if is_error else "Good"
-                                },
-                                {
-                                    "type": "TextBlock",
-                                    "text": message,
-                                    "wrap": True
-                                }
-                            ]
-                        }
-                    }
-                ]
+            teams_payload = {
+                "text": text
             }
-            payload = json.dumps(adaptive_card).encode('utf-8')
+            payload = json.dumps(teams_payload).encode('utf-8')
             req = urllib.request.Request(settings["teams_webhook"], data=payload, headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 if log_path:

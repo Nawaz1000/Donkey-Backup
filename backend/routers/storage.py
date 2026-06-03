@@ -95,10 +95,12 @@ def list_storage_files(storage_id: str, user=Depends(get_current_user)):
             container = client.get_container_client(storage["azure_container"])
             for blob in container.list_blobs():
                 if blob.name.endswith(".gz") or blob.name.endswith(".zst") or blob.name.endswith(".archive") or "backup.archive" in blob.name:
+                    # Robust fallback for Azure blob creation/modification time
+                    lm = blob.last_modified or getattr(blob, 'creation_time', None)
                     files.append({
                         "name": blob.name,
                         "size": blob.size,
-                        "last_modified": blob.last_modified.isoformat() if blob.last_modified else None
+                        "last_modified": lm.isoformat() if lm else None
                     })
         elif storage["type"] == "gcs":
             import json
@@ -110,10 +112,12 @@ def list_storage_files(storage_id: str, user=Depends(get_current_user)):
             bucket = client.bucket(storage["gcs_bucket"])
             for blob in bucket.list_blobs():
                 if blob.name.endswith(".gz") or blob.name.endswith(".zst") or blob.name.endswith(".archive") or "backup.archive" in blob.name:
+                    # Robust fallback for GCS blob creation/modification time
+                    lm = blob.updated or getattr(blob, 'time_created', None)
                     files.append({
                         "name": blob.name,
                         "size": blob.size,
-                        "last_modified": blob.updated.isoformat() if blob.updated else None
+                        "last_modified": lm.isoformat() if lm else None
                     })
     except Exception as e:
         raise HTTPException(500, f"Failed to fetch files: {str(e)}")
