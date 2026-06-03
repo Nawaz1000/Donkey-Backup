@@ -132,6 +132,9 @@ backupvault/
   - Completely bypasses Solr's filesystem dependency. Uses a custom Python HTTP-streaming pipeline that iteratively fetches documents via `/select` (with `cursorMark` pagination) and restores them in optimal batches using `/update`.
   - No shared volume mounts or `/tmp/backupvault` configuration required. You only need the Solr URL, Username, and Password.
   - Dynamically discovers the unique key for pagination directly from the Solr schema. Automatically compresses payloads on the fly via `zstd` or `pigz` and streams directly to Cloud Storage.
+  - Features real-time live log output mapping progress metrics directly to the UI during both dump and restore operations.
+- **Job Management:**
+  - Includes a global "Stop Job" functionality that allows users to instantly terminate active backup and restore background processes from the UI. Safely sends forceful termination signals to prevent hanging streams or runaway I/O tasks.
 - **Webhook Notifications:**
   - Configurable alerts for backup/restore success and failures directly to Slack, Microsoft Teams (using modern Adaptive Cards for Power Automate Workflows), and Telegram.
   - Custom User-Agent headers to prevent gateway firewalls from blocking notifications.

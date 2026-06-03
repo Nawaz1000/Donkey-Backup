@@ -22,6 +22,8 @@ def dump_solr(solr_base_url, collection, auth_header):
     unique_key = get_unique_key(solr_base_url, headers, context, collection)
     cursor_mark = "*"
     
+    total_dumped = 0
+    
     while True:
         query_url = f"{solr_base_url}/solr/{collection}/select?q=*:*&rows=1000&wt=json&cursorMark={urllib.parse.quote(cursor_mark)}&sort={unique_key}+asc"
         req = urllib.request.Request(query_url, headers=headers)
@@ -36,6 +38,11 @@ def dump_solr(solr_base_url, collection, auth_header):
                     # Write JSON lines to stdout
                     sys.stdout.buffer.write(json.dumps(doc).encode('utf-8') + b"\n")
                 
+                total_dumped += len(docs)
+                if len(docs) > 0:
+                    sys.stderr.write(f"Dumped {total_dumped} documents from '{collection}'...\n")
+                    sys.stderr.flush()
+                
                 next_cursor = data.get("nextCursorMark")
                 if not next_cursor or next_cursor == cursor_mark or not docs:
                     break
@@ -49,8 +56,10 @@ def restore_solr(solr_base_url, collection, auth_header):
     context = ssl._create_unverified_context()
     
     batch = []
+    total_restored = 0
     
     def post_batch():
+        nonlocal total_restored
         if not batch:
             return
         url = f"{solr_base_url}/solr/{collection}/update?commitWithin=10000"
@@ -58,7 +67,9 @@ def restore_solr(solr_base_url, collection, auth_header):
         req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, context=context, timeout=120) as response:
-                pass
+                total_restored += len(batch)
+                sys.stderr.write(f"Restored {total_restored} documents to '{collection}'...\n")
+                sys.stderr.flush()
         except Exception as e:
             sys.stderr.write(f"Solr restore batch error: {str(e)}\n")
             sys.exit(1)
@@ -80,10 +91,14 @@ def restore_solr(solr_base_url, collection, auth_header):
     post_batch()
     
     # Final Commit
+    sys.stderr.write(f"Issuing final commit for '{collection}'...\n")
+    sys.stderr.flush()
     commit_url = f"{solr_base_url}/solr/{collection}/update?commit=true"
     req = urllib.request.Request(commit_url, data=b"{}", headers=headers, method="POST")
     try:
         urllib.request.urlopen(req, context=context, timeout=60)
+        sys.stderr.write(f"Final commit successful.\n")
+        sys.stderr.flush()
     except Exception as e:
         sys.stderr.write(f"Solr final commit error: {str(e)}\n")
         sys.exit(1)

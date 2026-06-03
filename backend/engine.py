@@ -25,6 +25,19 @@ logging.basicConfig(
 )
 log = logging.getLogger("backupvault")
 
+ACTIVE_PROCESSES = {}
+
+def cancel_job(job_id: str) -> bool:
+    if job_id in ACTIVE_PROCESSES:
+        for p in ACTIVE_PROCESSES[job_id]:
+            try:
+                p.terminate()
+                p.kill()
+            except Exception:
+                pass
+        return True
+    return False
+
 
 
 def mongo_cmd_args(m: dict) -> list:
@@ -386,6 +399,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     write_log(log_path, f"INFO  Starting streaming backup to {storage['type']}: {remote_name}")
     
     processes = []
+    if tracker:
+        ACTIVE_PROCESSES[tracker.job_id] = processes
     pipe_thread = None
     stderr_thread = None
     
@@ -541,6 +556,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
     write_log(log_path, f"INFO  Starting streaming restore from {storage['type']}: {remote_name}")
     
     processes = []
+    if tracker:
+        ACTIVE_PROCESSES[tracker.job_id] = processes
     stderr_thread = None
     
     is_mongo = "mongorestore" in cmd[0]

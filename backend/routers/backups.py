@@ -5,7 +5,7 @@ import uuid
 import os
 from datetime import datetime
 from utils import get_current_user, read_json, write_json
-from engine import do_backup, do_restore
+from engine import do_backup, do_restore, cancel_job
 
 router = APIRouter()
 
@@ -277,3 +277,37 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
     write_json("data/restores.json", restores)
     background_tasks.add_task(do_restore, restore["id"])
     return restore
+
+
+@router.post("/backups/{backup_id}/cancel")
+def cancel_backup(backup_id: str, user=Depends(get_current_user)):
+    backups = read_json("data/backups.json")
+    for b in backups:
+        if b["id"] == backup_id:
+            if b.get("status") == "running":
+                if cancel_job(backup_id):
+                    b["status"] = "failed"
+                    b["error"] = "Cancelled by user"
+                    write_json("data/backups.json", backups)
+                    return {"success": True, "message": "Backup cancelled"}
+                return {"success": False, "message": "Could not cancel backup (process not found)"}
+            return {"success": False, "message": "Backup is not running"}
+    raise HTTPException(404, "Backup not found")
+
+
+@router.post("/restores/{restore_id}/cancel")
+def cancel_restore(restore_id: str, user=Depends(get_current_user)):
+    if not os.path.exists("data/restores.json"):
+        raise HTTPException(404, "Restore not found")
+    restores = read_json("data/restores.json")
+    for r in restores:
+        if r["id"] == restore_id:
+            if r.get("status") == "running":
+                if cancel_job(restore_id):
+                    r["status"] = "failed"
+                    r["error"] = "Cancelled by user"
+                    write_json("data/restores.json", restores)
+                    return {"success": True, "message": "Restore cancelled"}
+                return {"success": False, "message": "Could not cancel restore (process not found)"}
+            return {"success": False, "message": "Restore is not running"}
+    raise HTTPException(404, "Restore not found")

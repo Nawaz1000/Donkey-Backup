@@ -1369,6 +1369,7 @@ async function loadBackups() {
         <td>${formatDuration(b.duration_seconds)}</td>
         <td class="text-muted text-sm">${fmtDate(b.created_at)}</td>
         <td><div class="actions">
+          ${b.status==='running'?`<button class="btn btn-danger btn-sm btn-icon" onclick="cancelJob('${b.id}', 'backups')" title="Stop Job"><i data-lucide="square" style="width:14px;height:14px"></i></button>`:''}
           ${b.status==='completed'?`<button class="btn btn-secondary btn-sm" onclick="openRestoreFromBackup('${b.id}','${b.label.replace(/'/g,"\\'")}')"><i data-lucide="rotate-ccw" style="width:13px;height:13px"></i> Restore</button>`:''}
           <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}', false)" title="Delete History"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
           <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}', true)" title="Delete from Cloud Storage"><i data-lucide="cloud-off" style="width:14px;height:14px"></i></button>
@@ -1599,6 +1600,22 @@ function simulateProgress(backupId, label) {
   }, 1500);
 }
 
+async function cancelJob(id, type) {
+  if(!confirm('Are you sure you want to STOP this running job?')) return;
+  try {
+    const res = await apiFetch(`/${type}/${id}/cancel`, {method:'POST'});
+    if(res.success) {
+      toast('Job cancelled successfully.', 'success');
+      if (type === 'backups') loadBackups();
+      else loadRestores();
+    } else {
+      toast(res.message, 'error');
+    }
+  } catch(e) {
+    toast(e.message, 'error');
+  }
+}
+
 async function deleteBackup(id, deleteFromRemote = false) {
   const msg = deleteFromRemote 
     ? 'Delete this backup history AND remove the file from remote cloud storage?' 
@@ -1717,6 +1734,7 @@ async function loadRestores() {
         <td>${formatDuration(r.duration_seconds)}</td>
         <td class="text-muted text-sm">${fmtDate(r.started_at)}</td>
         <td><div class="actions">
+          ${r.status==='running'?`<button class="btn btn-danger btn-sm btn-icon" onclick="cancelJob('${r.id}', 'restores')" title="Stop Job"><i data-lucide="square" style="width:14px;height:14px"></i></button>`:''}
           <button class="btn btn-danger btn-sm btn-icon" onclick="deleteRestore('${r.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
         </div></td>
       </tr>`).join('')||emptyRow(7,'No restores yet. Click "New Restore" to restore a backup.');
