@@ -929,10 +929,9 @@ def get_solr_base_url(host: str, port: int) -> str:
 
 
 def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None):
-    import urllib.request
-    import urllib.error
-    import json
     import base64
+    import urllib.request
+    import json
     import ssl
     
     solr_host = db["host"]
@@ -945,107 +944,30 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
         collection = "default"
         
     solr_base_url = get_solr_base_url(solr_host, solr_port)
-    context = ssl._create_unverified_context()
     
-    headers = {}
-    auth_str = None
+    auth_str = "None"
     if db.get("username") and db.get("password"):
-        auth_str = f"{db['username']}:{db['password']}"
-        encoded_auth = base64.b64encode(auth_str.encode()).decode()
-        headers["Authorization"] = f"Basic {encoded_auth}"
+        auth_raw = f"{db['username']}:{db['password']}"
+        auth_str = f"Basic {base64.b64encode(auth_raw.encode()).decode()}"
 
     collections_to_backup = []
     if collection == "all_collections":
-        # 1. Fetch the list of all logical collections from Solr
         try:
-            collections_url = f"{solr_base_url}/solr/admin/collections?action=LIST&wt=json"
-            req_coll = urllib.request.Request(collections_url, headers=headers)
-            with urllib.request.urlopen(req_coll, context=context, timeout=10) as response:
+            context = ssl._create_unverified_context()
+            headers = {"Authorization": auth_str} if auth_str != "None" else {}
+            cores_url = f"{solr_base_url}/solr/admin/cores?action=STATUS&wt=json"
+            req_cores = urllib.request.Request(cores_url, headers=headers)
+            with urllib.request.urlopen(req_cores, context=context, timeout=10) as response:
                 data = json.loads(response.read().decode())
-                if "collections" in data:
-                    collections_to_backup = list(data["collections"])
+                collections_to_backup = list(data.get("status", {}).keys())
         except Exception as e:
-            write_log(log_path, f"WARN  Failed to fetch collections list via collections API: {e}. Trying cores fallback.")
-            
-        # 2. Fallback: get collections from cores status
-        if not collections_to_backup:
-            try:
-                cores_url = f"{solr_base_url}/solr/admin/cores?action=STATUS&wt=json"
-                req_cores = urllib.request.Request(cores_url, headers=headers)
-                with urllib.request.urlopen(req_cores, context=context, timeout=10) as response:
-                    data = json.loads(response.read().decode())
-                    cores_status = data.get("status", {})
-                    collections_set = set()
-                    for core_name, core_info in cores_status.items():
-                        coll_name = core_info.get("cloud", {}).get("collection")
-                        if coll_name:
-                            collections_set.add(coll_name)
-                        else:
-                            collections_set.add(core_name)
-                    collections_to_backup = list(collections_set)
-            except Exception as e:
-                raise RuntimeError(f"Failed to fetch Solr collections for full backup: {e}")
+            raise RuntimeError(f"Failed to fetch Solr collections list: {e}")
     else:
         collections_to_backup = [collection]
 
     if not collections_to_backup:
         raise RuntimeError("No Solr collections found to backup.")
 
-    write_log(log_path, f"INFO  Starting Solr backup for collections: {collections_to_backup}")
-    
-    backup_dirs = []
-    for coll in collections_to_backup:
-        backup_name = f"backup_{backup['id']}_{coll}"
-        location = db.get("solr_backup_location") or BACKUP_TMP
-        
-        # 1. Try Collections Backup API (Preferred for SolrCloud)
-        url = f"{solr_base_url}/solr/admin/collections?action=BACKUP&name={backup_name}&collection={coll}&location={location}&wt=json"
-        write_log(log_path, f"INFO  Triggering Solr Collections Backup for '{coll}': {url}")
-        req = urllib.request.Request(url, headers=headers)
-        try:
-            with urllib.request.urlopen(req, context=context, timeout=300) as response:
-                res = json.loads(response.read().decode())
-                if "responseHeader" in res and res["responseHeader"].get("status") != 0:
-                    raise RuntimeError(f"Solr backup failed: {res}")
-                backup_dirs.append(backup_name)
-        except Exception as e:
-            # 2. Try Cores Backup API (Fallback for Standalone Solr)
-            cores_url = f"{solr_base_url}/solr/admin/cores?action=BACKUP&name={backup_name}&core={coll}&location={location}&wt=json"
-            write_log(log_path, f"INFO  Collections Backup failed or unsupported. Trying Standalone Cores Backup for '{coll}': {cores_url}")
-            req_core = urllib.request.Request(cores_url, headers=headers)
-            try:
-                with urllib.request.urlopen(req_core, context=context, timeout=300) as response:
-                    res = json.loads(response.read().decode())
-                    if "responseHeader" in res and res["responseHeader"].get("status") != 0:
-                        raise RuntimeError(f"Solr core backup failed: {res}")
-                    backup_dirs.append(backup_name)
-            except Exception as core_err:
-                for d in backup_dirs:
-                    shutil.rmtree(os.path.join(BACKUP_TMP, d), ignore_errors=True)
-                
-                # Fetch detailed error messages from Solr response for diagnostic visibility
-                err_detail = str(core_err)
-                if isinstance(core_err, urllib.error.HTTPError):
-                    try:
-                        err_detail = core_err.read().decode('utf-8', errors='ignore')
-                        try:
-                            err_json = json.loads(err_detail)
-                            err_detail = err_json.get("error", {}).get("msg", err_detail)
-                        except:
-                            pass
-                    except:
-                        pass
-                
-                orig_err_detail = str(e)
-                if isinstance(e, urllib.error.HTTPError):
-                    try:
-                        orig_err_detail = e.read().decode('utf-8', errors='ignore')
-                        try:
-                            err_json = json.loads(orig_err_detail)
-                            orig_err_detail = err_json.get("error", {}).get("msg", orig_err_detail)
-                        except:
-                            pass
-                    except:
                         pass
                 raise RuntimeError(f"Solr backup failed for '{coll}'. Collections API error: {orig_err_detail}. Cores API error: {err_detail}")
             
@@ -1060,97 +982,39 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
 
 
 def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = False, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None):
-    import urllib.request
-    import urllib.error
-    import json
     import base64
-    import ssl
     
     solr_host = db["host"]
     solr_port = db["port"]
     
-    cmd = ["tar", "-xzf", "-", "-C", BACKUP_TMP]
-    decompression_cmd = None
-        
-    stream_restore_from_storage(cmd, {}, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
-    
-    extracted = [d for d in os.listdir(BACKUP_TMP) if d.startswith("backup_")]
-    if not extracted:
-        raise RuntimeError("No Solr backup directories extracted from archive.")
+    if not collection or collection in ("default", "full", "all_collections"):
+        raise RuntimeError("A specific collection name is required for Solr HTTP restore.")
         
     solr_base_url = get_solr_base_url(solr_host, solr_port)
-    context = ssl._create_unverified_context()
     
-    headers = {}
+    auth_str = "None"
     if db.get("username") and db.get("password"):
-        auth_str = f"{db['username']}:{db['password']}"
-        encoded_auth = base64.b64encode(auth_str.encode()).decode()
-        headers["Authorization"] = f"Basic {encoded_auth}"
-        
-    for d in extracted:
-        parts = d.split("_")
-        if len(parts) >= 3:
-            coll_in_backup = "_".join(parts[2:])
-        else:
-            coll_in_backup = parts[-1]
+        auth_raw = f"{db['username']}:{db['password']}"
+        auth_str = f"Basic {base64.b64encode(auth_raw.encode()).decode()}"
+
+    write_log(log_path, f"INFO  Starting HTTP-based Solr restore to collection '{collection}'")
+
+    comp_info = get_compressor_info(log_path)
+    decompression_cmd = comp_info.get("decompress_cmd")
+
+    if not decompression_cmd:
+        if remote_name.endswith(".zst"):
+            decompression_cmd = ["zstd", "-d", "-c"]
+        elif remote_name.endswith(".gz") or remote_name.endswith(".tar.gz"):
+            if shutil.which("pigz"):
+                decompression_cmd = ["pigz", "-d", "-c"]
+            else:
+                decompression_cmd = ["gzip", "-d", "-c"]
             
-        target_coll = collection
-        if not target_coll or target_coll in ("full", "all_collections", "default"):
-            target_coll = coll_in_backup
-            
-        location = db.get("solr_backup_location") or BACKUP_TMP
-        
-        # 1. Try Collections Restore API (Preferred for SolrCloud)
-        url = f"{solr_base_url}/solr/admin/collections?action=RESTORE&name={d}&collection={target_coll}&location={location}&wt=json"
-        write_log(log_path, f"INFO  Triggering Solr Collections Restore for '{target_coll}': {url}")
-        req = urllib.request.Request(url, headers=headers)
-        
-        try:
-            with urllib.request.urlopen(req, context=context, timeout=300) as response:
-                res = json.loads(response.read().decode())
-                if "responseHeader" in res and res["responseHeader"].get("status") != 0:
-                    raise RuntimeError(f"Solr restore failed: {res}")
-        except Exception as e:
-            # 2. Try Cores Restore API (Fallback for Standalone Solr)
-            cores_url = f"{solr_base_url}/solr/admin/cores?action=RESTORE&name={d}&core={target_coll}&location={location}&wt=json"
-            write_log(log_path, f"INFO  Collections Restore failed or unsupported. Trying Standalone Cores Restore for '{target_coll}': {cores_url}")
-            req_core = urllib.request.Request(cores_url, headers=headers)
-            try:
-                with urllib.request.urlopen(req_core, context=context, timeout=300) as response:
-                    res = json.loads(response.read().decode())
-                    if "responseHeader" in res and res["responseHeader"].get("status") != 0:
-                        raise RuntimeError(f"Solr core restore failed: {res}")
-            except Exception as core_err:
-                for ext_d in extracted:
-                    shutil.rmtree(os.path.join(BACKUP_TMP, ext_d), ignore_errors=True)
-                
-                err_detail = str(core_err)
-                if isinstance(core_err, urllib.error.HTTPError):
-                    try:
-                        err_detail = core_err.read().decode('utf-8', errors='ignore')
-                        try:
-                            err_json = json.loads(err_detail)
-                            err_detail = err_json.get("error", {}).get("msg", err_detail)
-                        except:
-                            pass
-                    except:
-                        pass
-                
-                orig_err_detail = str(e)
-                if isinstance(e, urllib.error.HTTPError):
-                    try:
-                        orig_err_detail = e.read().decode('utf-8', errors='ignore')
-                        try:
-                            err_json = json.loads(orig_err_detail)
-                            orig_err_detail = err_json.get("error", {}).get("msg", orig_err_detail)
-                        except:
-                            pass
-                    except:
-                        pass
-                raise RuntimeError(f"Solr restore failed for '{target_coll}'. Collections API error: {orig_err_detail}. Cores API error: {err_detail}")
-            
-    for ext_d in extracted:
-        shutil.rmtree(os.path.join(BACKUP_TMP, ext_d), ignore_errors=True)
+    cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "solr_helper.py"), "restore", solr_base_url, collection, auth_str]
+    
+    stream_restore_from_storage(cmd, {}, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
+    write_log(log_path, "INFO  Solr restore streamed successfully via HTTP API.")
 
 # ─── STATE HELPERS ───────────────────────────────────────────────────────────
 

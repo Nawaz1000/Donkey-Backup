@@ -128,11 +128,10 @@ backupvault/
   - UTC timezone rendering with local browser conversion for database connections and history tables.
   - **Log Windowing**: Prevents browser lag/freezing during massive failure events (e.g. thousands of duplicate key errors) by efficiently limiting DOM nodes to only the last 100 log lines.
   - **Neon Donkey Favicon**: A customized neon donkey favicon linked globally across the dashboard.
-- **Apache Solr Support:**
-  - Backup and Restore capabilities using native Apache Solr Collections API, with robust URL parsing, credentials-based basic authentication support, and built-in SSL certificate validation bypass for secure HTTPS endpoints (such as `https://solr.dev.travelswitch.com`).
-  - Streamlined manual backup workflow: automatically queries the Solr Collections API (and falls back to the Cores API with intelligent deduplication of shard/replica names) to retrieve logical collections as the "Collection / Core" selector, and fetches core schema fields as the "Schema Fields" options.
-  - Support for full Solr server backups via an **"All Collections / Cores"** option that triggers sequential backups of all logical collections and packages them in a single archive.
-  - Hybrid deployment support with automatic fallback to the Core Admin API if the Collections API is unavailable (standalone Solr installations), detailed error body diagnostic extraction to parse and display verbose JSON error logs from the Solr server, and custom backup path configuration (allowing you to specify where Solr writes backups on the Solr server, defaulting to `/tmp/backupvault`).
+- **Apache Solr Support (Zero-Dependency HTTP Streaming):**
+  - Completely bypasses Solr's filesystem dependency. Uses a custom Python HTTP-streaming pipeline that iteratively fetches documents via `/select` (with `cursorMark` pagination) and restores them in optimal batches using `/update`.
+  - No shared volume mounts or `/tmp/backupvault` configuration required. You only need the Solr URL, Username, and Password.
+  - Dynamically discovers the unique key for pagination directly from the Solr schema. Automatically compresses payloads on the fly via `zstd` or `pigz` and streams directly to Cloud Storage.
 - **Webhook Notifications:**
   - Configurable alerts for backup/restore success and failures directly to Slack, Microsoft Teams (using modern Adaptive Cards for Power Automate Workflows), and Telegram.
   - Custom User-Agent headers to prevent gateway firewalls from blocking notifications.
