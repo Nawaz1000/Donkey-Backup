@@ -15,28 +15,90 @@ def get_unique_key(solr_base_url, headers, context, collection):
     except Exception:
         return "id"
 
+def apply_schema(solr_base_url, collection, headers, context, backup_schema):
+    sys.stderr.write("Applying source schema to target collection...\n")
+    sys.stderr.flush()
+    try:
+        url = f"{solr_base_url}/solr/{collection}/schema?wt=json"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, context=context, timeout=30) as resp:
+            target_data = json.loads(resp.read().decode())
+            target_schema = target_data.get("schema", {})
+        
+        target_field_types = {ft["name"] for ft in target_schema.get("fieldTypes", [])}
+        target_fields = {f["name"] for f in target_schema.get("fields", [])}
+        target_dynamic = {f["name"] for f in target_schema.get("dynamicFields", [])}
+        
+        payload = {}
+        
+        add_field_types = [ft for ft in backup_schema.get("fieldTypes", []) if ft["name"] not in target_field_types]
+        if add_field_types:
+            payload["add-field-type"] = add_field_types
+            
+        add_fields = [f for f in backup_schema.get("fields", []) if f["name"] not in target_fields]
+        if add_fields:
+            payload["add-field"] = add_fields
+            
+        add_dynamic = [f for f in backup_schema.get("dynamicFields", []) if f["name"] not in target_dynamic]
+        if add_dynamic:
+            payload["add-dynamic-field"] = add_dynamic
+            
+        # Copy fields can just be added, errors will be suppressed if they exist
+        add_copy = backup_schema.get("copyFields", [])
+        if add_copy:
+            payload["add-copy-field"] = add_copy
+
+        if not payload:
+            sys.stderr.write("Schema is already up-to-date.\n")
+            return
+
+        schema_update_url = f"{solr_base_url}/solr/{collection}/schema?wt=json"
+        post_data = json.dumps(payload).encode('utf-8')
+        req_update = urllib.request.Request(schema_update_url, data=post_data, headers=headers, method="POST")
+        with urllib.request.urlopen(req_update, context=context, timeout=60) as resp_update:
+            sys.stderr.write("Successfully applied source schema.\n")
+            sys.stderr.flush()
+            
+    except Exception as e:
+        sys.stderr.write(f"WARN: Failed to fully apply schema (some fields may already exist): {e}\n")
+        sys.stderr.flush()
+
 def dump_solr(solr_base_url, collection, auth_header):
     headers = {"Authorization": auth_header} if auth_header else {}
     context = ssl._create_unverified_context()
     
     unique_key = get_unique_key(solr_base_url, headers, context, collection)
-    cursor_mark = "*"
     
+    # 1. Back up Schema
+    schema_url = f"{solr_base_url}/solr/{collection}/schema?wt=json"
+    try:
+        req = urllib.request.Request(schema_url, headers=headers)
+        with urllib.request.urlopen(req, context=context, timeout=30) as response:
+            schema_data = json.loads(response.read().decode())
+            schema_payload = {"__backupvault_schema__": schema_data.get("schema", {})}
+            sys.stdout.buffer.write(json.dumps(schema_payload).encode('utf-8') + b"\n")
+            sys.stdout.buffer.flush()
+    except Exception as e:
+        sys.stderr.write(f"WARN: Failed to fetch Solr schema: {e}\n")
+    
+    cursor_mark = "*"
     total_dumped = 0
     
     while True:
-        query_url = f"{solr_base_url}/solr/{collection}/select?q=*:*&rows=1000&wt=json&cursorMark={urllib.parse.quote(cursor_mark)}&sort={unique_key}+asc"
+        query_url = f"{solr_base_url}/solr/{collection}/select?q=*:*&rows=20000&wt=json&cursorMark={urllib.parse.quote(cursor_mark)}&sort={unique_key}+asc"
         req = urllib.request.Request(query_url, headers=headers)
         try:
-            with urllib.request.urlopen(req, context=context, timeout=60) as response:
-                data = json.loads(response.read().decode())
+            with urllib.request.urlopen(req, context=context, timeout=120) as response:
+                data = json.loads(response.read().decode('utf-8'))
                 docs = data.get("response", {}).get("docs", [])
                 
+                buffer_bytes = bytearray()
                 for doc in docs:
-                    if "_version_" in doc:
-                        del doc["_version_"]
-                    # Write JSON lines to stdout
-                    sys.stdout.buffer.write(json.dumps(doc).encode('utf-8') + b"\n")
+                    doc.pop("_version_", None)
+                    buffer_bytes.extend(json.dumps(doc).encode('utf-8'))
+                    buffer_bytes.extend(b"\n")
+                
+                sys.stdout.buffer.write(buffer_bytes)
                 
                 total_dumped += len(docs)
                 if len(docs) > 0:
@@ -82,8 +144,12 @@ def restore_solr(solr_base_url, collection, auth_header):
             continue
         try:
             doc = json.loads(line)
+            if "__backupvault_schema__" in doc:
+                apply_schema(solr_base_url, collection, headers, context, doc["__backupvault_schema__"])
+                continue
+                
             batch.append(doc)
-            if len(batch) >= 500:
+            if len(batch) >= 5000:
                 post_batch()
         except Exception as e:
             sys.stderr.write(f"JSON parse error during restore: {str(e)}\n")

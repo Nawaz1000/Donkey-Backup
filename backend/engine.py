@@ -476,8 +476,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 pass
         raise RuntimeError(f"Failed to start subprocesses: {e}")
 
-    # Scale chunk size and queue capacity for higher throughput (4MB chunk, 64 capacity = 256MB buffer)
-    q = queue.Queue(maxsize=64)
+    # Scale chunk size and queue capacity for higher throughput (8MB chunk, 32 capacity = 256MB buffer)
+    q = queue.Queue(maxsize=32)
     stop_event = threading.Event()
     if tracker:
         ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
@@ -486,7 +486,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     
     reader_thread = threading.Thread(
         target=reader_thread_fn,
-        args=(stdout_stream, q, stop_event, 4 * 1024 * 1024, reader_tracker)  # 4MB chunks
+        args=(stdout_stream, q, stop_event, 8 * 1024 * 1024, reader_tracker)  # 8MB chunks
     )
     reader_thread.daemon = True
     reader_thread.start()
@@ -502,13 +502,13 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 f"AccountKey={storage['azure_account_key']};"
                 f"EndpointSuffix=core.windows.net"
             )
-            client = BlobServiceClient.from_connection_string(conn_str, max_block_size=4 * 1024 * 1024, connection_timeout=300, read_timeout=3600)
+            client = BlobServiceClient.from_connection_string(conn_str, max_block_size=8 * 1024 * 1024, connection_timeout=300, read_timeout=3600)
             container = client.get_container_client(storage["azure_container"])
             container.upload_blob(
                 name=remote_name, 
                 data=queue_reader, 
                 overwrite=True,
-                max_concurrency=1,
+                max_concurrency=4,
                 read_timeout=3600
             )
             blob_props = container.get_blob_client(remote_name).get_blob_properties()
@@ -524,7 +524,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
             client = gcs.Client(credentials=creds)
             bucket = client.bucket(storage["gcs_bucket"])
             blob = bucket.blob(remote_name)
-            blob.chunk_size = 4 * 1024 * 1024
+            blob.chunk_size = 8 * 1024 * 1024  # 8MB chunk size
             blob.upload_from_file(queue_reader, num_retries=3, timeout=3600)
             blob.reload()
             stream_backup_to_storage.last_size_bytes = blob.size
@@ -638,9 +638,9 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     f"AccountKey={storage['azure_account_key']};"
                     f"EndpointSuffix=core.windows.net"
                 )
-                client = BlobServiceClient.from_connection_string(conn_str, max_single_get_size=4 * 1024 * 1024, max_chunk_get_size=4 * 1024 * 1024, connection_timeout=300, read_timeout=3600)
+                client = BlobServiceClient.from_connection_string(conn_str, max_single_get_size=8 * 1024 * 1024, max_chunk_get_size=8 * 1024 * 1024, connection_timeout=300, read_timeout=3600)
                 container = client.get_container_client(storage["azure_container"])
-                stream = container.download_blob(remote_name, max_concurrency=1, read_timeout=3600)
+                stream = container.download_blob(remote_name, max_concurrency=4, read_timeout=3600)
                 for chunk in stream.chunks():
                     if stop_event.is_set():
                         raise RuntimeError("Restore cancelled by user.")
@@ -658,7 +658,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 client = gcs.Client(credentials=creds)
                 bucket = client.bucket(storage["gcs_bucket"])
                 blob = bucket.blob(remote_name)
-                blob.chunk_size = 4 * 1024 * 1024
+                blob.chunk_size = 8 * 1024 * 1024
                 
                 progress_writer = ProgressWriter(stdin_stream, dl_tracker, stop_event=stop_event)
                 blob.download_to_file(progress_writer, timeout=3600)
@@ -727,7 +727,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         "mongodump",
         f"--uri={m['uri']}",
         "--archive",
-        "--numParallelCollections=1",
+        "--numParallelCollections=4",
         "--readPreference=secondaryPreferred",  # Offload reads to secondary replicas, reduces primary server load
     ]
     if collection and collection != "full":
