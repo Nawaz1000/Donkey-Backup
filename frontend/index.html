@@ -796,7 +796,7 @@ tr:hover td{background:rgba(255,255,255,0.015)}
         <option value="default">Default (Current Configuration / Auto-scales at Night)</option>
         <option value="extreme">Extreme (Absolute Max Speed, Unbounded CPU)</option>
         <option value="balanced">Balanced (4 CPU threads, 16MB chunks)</option>
-        <option value="safe">Safe (1 CPU thread, 4MB chunks)</option>
+        <option value="safe">Safe (2 CPU threads, 8MB chunks)</option>
       </select>
     </div>
     <div class="form-group" id="bk-incremental-group" style="display:none">
@@ -859,7 +859,7 @@ tr:hover td{background:rgba(255,255,255,0.015)}
         <option value="default">Default (Current Configuration / Auto-scales to Extreme at Night)</option>
         <option value="extreme">Extreme (Absolute Max Speed, Unbounded CPU)</option>
         <option value="balanced">Balanced (4 CPU threads, 16MB chunks)</option>
-        <option value="safe">Safe (1 CPU thread, 4MB chunks)</option>
+        <option value="safe">Safe (2 CPU threads, 8MB chunks)</option>
       </select>
     </div>
     <div class="form-group" id="sc-incremental-group" style="display:none">
@@ -964,7 +964,7 @@ tr:hover td{background:rgba(255,255,255,0.015)}
         <option value="default">Default (Balanced / Auto-scales at Night)</option>
         <option value="extreme">Extreme (Absolute Max Speed, Unbounded CPU)</option>
         <option value="balanced">Balanced (4 CPU threads, 16MB chunks)</option>
-        <option value="safe">Safe (1 CPU thread, 4MB chunks)</option>
+        <option value="safe">Safe (2 CPU threads, 8MB chunks)</option>
       </select>
     </div>
 
@@ -1632,7 +1632,8 @@ function simulateProgress(backupId, label) {
 async function cancelJob(id, type) {
   if(!confirm('Are you sure you want to STOP this running job?')) return;
   try {
-    const res = await apiFetch(`/${type}/${id}/cancel`, {method:'POST'});
+    const url = type === 'backups' ? `/backups/${id}/cancel` : `/backups/restores/${id}/cancel`;
+    const res = await apiFetch(url, {method:'POST'});
     if(res.success) {
       toast('Job cancelled successfully.', 'success');
       if (type === 'backups') loadBackups();

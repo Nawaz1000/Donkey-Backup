@@ -379,7 +379,7 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
 
 def get_speed_settings(profile: str):
     if profile == "safe":
-        return {"threads": 1, "chunk_size": 4 * 1024 * 1024, "queue_max": 16, "concurrency": 1, "mongo_parallel": 1}
+        return {"threads": 2, "chunk_size": 8 * 1024 * 1024, "queue_max": 16, "concurrency": 2, "mongo_parallel": 2}
     elif profile == "balanced":
         return {"threads": 4, "chunk_size": 16 * 1024 * 1024, "queue_max": 16, "concurrency": 4, "mongo_parallel": 4}
     else: # extreme or default
@@ -805,15 +805,24 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
             pass
             
     settings = get_speed_settings(speed_profile)
+    workers = max(10, settings['threads'] * 4)
+    batch_size = 500
+    write_concern = "{w: 1}"
+    if speed_profile == "extreme":
+        workers = 500  # Massive worker pool per collection
+        batch_size = 100000  # Max batch size limit
+        write_concern = "{w: 0, j: false}"  # Disable write acknowledgment AND journal wait for fire-and-forget inserts
+        
     cmd = [
         "mongorestore",
         f"--uri={m['uri']}",
         "--archive",
         f"--numParallelCollections={settings['mongo_parallel']}",
-        f"--numInsertionWorkersPerCollection={max(10, settings['threads'] * 4)}",
-        "--batchSize=500",
+        f"--numInsertionWorkersPerCollection={workers}",
+        f"--batchSize={batch_size}",
         "--bypassDocumentValidation",
-        "--writeConcern={w: 1}",
+        f"--writeConcern={write_concern}",
+        "--maintainInsertionOrder=false",
         "--verbose=1",
     ]
 
@@ -965,7 +974,19 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
             decompression_cmd = ["gzip", "-d", "-c"]
             
     env = pg_env(db)
-    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c synchronous_commit=on"
+    
+    # Base safe settings
+    sync_commit = "on"
+    work_mem = "16MB"
+    maint_work_mem = "64MB"
+    
+    if speed_profile == "extreme":
+        sync_commit = "off"
+        work_mem = "256MB"
+        maint_work_mem = "2GB"
+        cmd += ["--disable-triggers"] # Redundant but safe
+        
+    env["PGOPTIONS"] = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit}"
         
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile)
 

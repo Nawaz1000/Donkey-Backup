@@ -284,7 +284,7 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
     return restore
 
 
-@router.post("/backups/{backup_id}/cancel")
+@router.post("/{backup_id}/cancel")
 def cancel_backup(backup_id: str, user=Depends(get_current_user)):
     backups = read_json("data/backups.json")
     for b in backups:
