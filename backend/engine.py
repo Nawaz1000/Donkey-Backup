@@ -822,7 +822,6 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         f"--batchSize={batch_size}",
         "--bypassDocumentValidation",
         f"--writeConcern={write_concern}",
-        "--maintainInsertionOrder=false",
         "--verbose=1",
     ]
 
