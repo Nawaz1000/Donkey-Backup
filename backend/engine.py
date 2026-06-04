@@ -26,8 +26,10 @@ logging.basicConfig(
 log = logging.getLogger("backupvault")
 
 ACTIVE_PROCESSES = {}
+ACTIVE_STOP_EVENTS = {}
 
 def cancel_job(job_id: str) -> bool:
+    found = False
     if job_id in ACTIVE_PROCESSES:
         for p in ACTIVE_PROCESSES[job_id]:
             try:
@@ -35,8 +37,14 @@ def cancel_job(job_id: str) -> bool:
                 p.kill()
             except Exception:
                 pass
-        return True
-    return False
+        found = True
+    if job_id in ACTIVE_STOP_EVENTS:
+        try:
+            ACTIVE_STOP_EVENTS[job_id].set()
+            found = True
+        except Exception:
+            pass
+    return found
 
 
 
@@ -159,11 +167,14 @@ class ProgressTracker:
 
 
 class ProgressWriter:
-    def __init__(self, dest_stream, tracker: ProgressTracker = None):
+    def __init__(self, dest_stream, tracker: ProgressTracker = None, stop_event=None):
         self.dest_stream = dest_stream
         self.tracker = tracker
+        self.stop_event = stop_event
         
     def write(self, b):
+        if self.stop_event and self.stop_event.is_set():
+            raise RuntimeError("Restore cancelled by user.")
         self.dest_stream.write(b)
         if self.tracker:
             self.tracker.update_bytes(len(b))
@@ -468,6 +479,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     # Scale chunk size and queue capacity for higher throughput (4MB chunk, 64 capacity = 256MB buffer)
     q = queue.Queue(maxsize=64)
     stop_event = threading.Event()
+    if tracker:
+        ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
     
     reader_tracker = tracker if (not compression_cmd and not is_mongo) else None
     
@@ -556,8 +569,10 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
     write_log(log_path, f"INFO  Starting streaming restore from {storage['type']}: {remote_name}")
     
     processes = []
+    stop_event = threading.Event()
     if tracker:
         ACTIVE_PROCESSES[tracker.job_id] = processes
+        ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
     stderr_thread = None
     
     is_mongo = "mongorestore" in cmd[0]
@@ -627,6 +642,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 container = client.get_container_client(storage["azure_container"])
                 stream = container.download_blob(remote_name, max_concurrency=1, read_timeout=3600)
                 for chunk in stream.chunks():
+                    if stop_event.is_set():
+                        raise RuntimeError("Restore cancelled by user.")
                     stdin_stream.write(chunk)
                     if dl_tracker:
                         dl_tracker.update_bytes(len(chunk))
@@ -643,7 +660,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 blob = bucket.blob(remote_name)
                 blob.chunk_size = 4 * 1024 * 1024
                 
-                progress_writer = ProgressWriter(stdin_stream, dl_tracker)
+                progress_writer = ProgressWriter(stdin_stream, dl_tracker, stop_event=stop_event)
                 blob.download_to_file(progress_writer, timeout=3600)
                 stdin_stream.close()
             else:
@@ -938,11 +955,13 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
 # ─── SOLR BACKUP & RESTORE ───────────────────────────────────────────────────
 
 def get_solr_base_url(host: str, port: int) -> str:
+    host = host.strip()
     if host.startswith("http://") or host.startswith("https://"):
         from urllib.parse import urlparse
         parsed = urlparse(host)
         return f"{parsed.scheme}://{parsed.netloc}"
-    return f"http://{host}:{port}"
+    scheme = "https" if port == 443 else "http"
+    return f"{scheme}://{host}:{port}"
 
 
 def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None):
@@ -997,6 +1016,25 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
         
     coll = collections_to_backup[0]
     
+    # Fetch total size to enable progress percentage
+    if tracker:
+        try:
+            context = ssl._create_unverified_context()
+            headers = {"Authorization": auth_str} if auth_str != "None" else {}
+            core_url = f"{solr_base_url}/solr/admin/cores?action=STATUS&wt=json"
+            req_cores = urllib.request.Request(core_url, headers=headers)
+            with urllib.request.urlopen(req_cores, context=context, timeout=5) as response:
+                data = json.loads(response.read().decode())
+                total_bytes = 0
+                for core_name, core_info in data.get("status", {}).items():
+                    coll_name = core_info.get("cloud", {}).get("collection", core_name)
+                    if coll_name == coll:
+                        total_bytes += core_info.get("index", {}).get("sizeInBytes", 0)
+                if total_bytes > 0:
+                    tracker.total_size = total_bytes
+        except Exception as e:
+            write_log(log_path, f"WARN  Could not fetch Solr index size: {e}")
+    
     cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "solr_helper.py"), "dump", solr_base_url, coll, auth_str]
     
     stream_backup_to_storage(cmd, {}, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
@@ -1027,6 +1065,30 @@ def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str,
         auth_str = f"Basic {base64.b64encode(auth_raw.encode()).decode()}"
 
     write_log(log_path, f"INFO  Starting HTTP-based Solr restore to collection '{target_collection}'")
+
+    if not drop_existing:
+        write_log(log_path, f"INFO  Creating new Solr collection/core: '{target_collection}'")
+        try:
+            import urllib.request
+            import ssl
+            context = ssl._create_unverified_context()
+            headers = {"Authorization": auth_str} if auth_str != "None" else {}
+            
+            # Try collections API first
+            coll_url = f"{solr_base_url}/solr/admin/collections?action=CREATE&name={target_collection}&numShards=1&wt=json"
+            req = urllib.request.Request(coll_url, headers=headers)
+            try:
+                with urllib.request.urlopen(req, context=context, timeout=15) as resp:
+                    pass
+            except Exception:
+                # Fallback to Core API
+                core_url = f"{solr_base_url}/solr/admin/cores?action=CREATE&name={target_collection}&wt=json"
+                req2 = urllib.request.Request(core_url, headers=headers)
+                with urllib.request.urlopen(req2, context=context, timeout=15) as resp2:
+                    pass
+            write_log(log_path, f"INFO  Successfully created new Solr collection/core.")
+        except Exception as e:
+            write_log(log_path, f"WARN  Failed to create new Solr collection. It may already exist or API not supported: {e}")
 
     comp_info = get_compressor_info(log_path)
     decompression_cmd = comp_info.get("decompress_cmd")

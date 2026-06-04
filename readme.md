@@ -120,7 +120,7 @@ backupvault/
   - **Detailed Database Info in History Tables:** Backup and Restore tables now display the connection name, actual database name, and collection/table name for full visibility into what was backed up or restored.
   - **Storage Connection Management:** In-UI Storage editor to easily update storage credentials and paths without deleting them.
   - "Total Restores" added to the main Dashboard analytics.
-  - Remote cloud storage object deletion directly from the BackupVault dashboard with a dedicated "Delete from Bucket" button.
+  - **Remote Deletion:** Remote cloud storage object deletion directly from the BackupVault dashboard with a dedicated "Delete from Bucket" button. Features robust error reporting directly to the UI if Azure/GCS credentials expire or the file doesn't exist.
   - Restoring external backups natively by auto-fetching existing backup files straight from Cloud buckets without requiring local history.
   - Live progress card state persistence — progress bars instantly resume tracking background jobs even across hard browser refreshes.
   - Support for deleting restore history from the UI.
@@ -132,12 +132,15 @@ backupvault/
   - Completely bypasses Solr's filesystem dependency. Uses a custom Python HTTP-streaming pipeline that iteratively fetches documents via `/select` (with `cursorMark` pagination) and restores them in optimal batches using `/update`.
   - No shared volume mounts or `/tmp/backupvault` configuration required. You only need the Solr URL, Username, and Password.
   - Dynamically discovers the unique key for pagination directly from the Solr schema. Automatically compresses payloads on the fly via `zstd` or `pigz` and streams directly to Cloud Storage.
-  - Features real-time live log output mapping progress metrics directly to the UI during both dump and restore operations.
-  - Fully supports restoring existing backups directly into new, dynamically named Solr collections directly from the UI.
+  - **Dynamic URL Formatting:** Simply entering `localhost` or an IP will automatically resolve to standard HTTP URLs (pre-pending `http://`).
+  - **Accurate Backup Progress Bar:** Calculates exact progress percentages by fetching actual byte sizes from the Solr Cores API before the stream begins.
+  - Fully supports restoring existing backups directly into new, dynamically named Solr collections. It natively auto-creates new target Solr collections if they don't already exist prior to dumping data.
 - **Job Management:**
-  - Includes a global "Stop Job" functionality that allows users to instantly terminate active backup and restore background processes from the UI. Safely sends forceful termination signals to prevent hanging streams or runaway I/O tasks.
+  - Includes a global "Stop Job" functionality that allows users to instantly terminate active backup and restore background processes from the UI. 
+  - Safely sets threading stop events (`ACTIVE_STOP_EVENTS`) to unblock cloud streaming pipes instantly, alongside forceful termination signals to prevent hanging streams or runaway I/O tasks.
 - **Webhook Notifications:**
   - Configurable alerts for backup/restore success and failures directly to Slack, Microsoft Teams (using modern Adaptive Cards for Power Automate Workflows), and Telegram.
+  - Fault-tolerant Webhook Pipeline: A failure to send to one provider (like Slack) will no longer abort notifications to other providers (like Telegram). Detailed HTTP error logs are now injected directly into the active job logs for rapid debugging.
   - Custom User-Agent headers to prevent gateway firewalls from blocking notifications.
   - Instant Webhook testing on the Settings page to verify delivery.
   - Per-backup preference toggle to opt-out of notification dispatches for specific manual runs.

@@ -8,6 +8,15 @@ from utils import get_current_user, read_json, write_json, parse_mongo_uri
 router = APIRouter()
 
 
+def get_solr_base_url(host: str, port: int) -> str:
+    host = host.strip()
+    if host.startswith("http://") or host.startswith("https://"):
+        from urllib.parse import urlparse
+        parsed = urlparse(host)
+        return f"{parsed.scheme}://{parsed.netloc}"
+    scheme = "https" if port == 443 else "http"
+    return f"{scheme}://{host}:{port}"
+
 def sanitize_mongo_uri(uri: str) -> str:
     from urllib.parse import quote
     try:
@@ -192,12 +201,7 @@ def list_db_names(db_id: str, user=Depends(get_current_user)):
             import ssl
             
             host = db["host"]
-            if host.startswith("http://") or host.startswith("https://"):
-                from urllib.parse import urlparse
-                parsed = urlparse(host)
-                solr_base_url = f"{parsed.scheme}://{parsed.netloc}"
-            else:
-                solr_base_url = f"http://{host}:{db['port']}"
+            solr_base_url = get_solr_base_url(host, db['port'])
                 
             context = ssl._create_unverified_context()
             
@@ -293,12 +297,7 @@ def list_collections(db_id: str, database: str = "", user=Depends(get_current_us
             import base64
             
             host = db["host"]
-            if host.startswith("http://") or host.startswith("https://"):
-                from urllib.parse import urlparse
-                parsed = urlparse(host)
-                solr_base_url = f"{parsed.scheme}://{parsed.netloc}"
-            else:
-                solr_base_url = f"http://{host}:{db['port']}"
+            solr_base_url = get_solr_base_url(host, db['port'])
                 
             if not target_db or target_db == "default":
                 return {"collections": []}
@@ -393,12 +392,7 @@ def test_connection(db_id: str, user=Depends(get_current_user)):
             import base64
             
             host = db["host"]
-            if host.startswith("http://") or host.startswith("https://"):
-                from urllib.parse import urlparse
-                parsed = urlparse(host)
-                solr_base_url = f"{parsed.scheme}://{parsed.netloc}"
-            else:
-                solr_base_url = f"http://{host}:{db['port']}"
+            solr_base_url = get_solr_base_url(host, db['port'])
                 
             url = f"{solr_base_url}/solr/admin/info/system?wt=json"
             req = urllib.request.Request(url)

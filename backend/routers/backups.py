@@ -142,6 +142,7 @@ def delete_backup(backup_id: str, delete_from_remote: bool = False, user=Depends
                     blob.delete()
         except Exception as e:
             print(f"Failed to delete remote backup: {e}")
+            raise HTTPException(400, f"Failed to delete remote backup: {str(e)}")
 
     backups = [b for b in backups if b["id"] != backup_id]
     write_json("data/backups.json", backups)

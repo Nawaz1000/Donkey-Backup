@@ -126,13 +126,7 @@ def send_notification(title: str, message: str, is_error: bool = False, log_path
                     pass
             payload = json.dumps({"text": text}).encode('utf-8')
             req = urllib.request.Request(settings["slack_webhook"], data=payload, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if log_path:
-                    try:
-                        from engine import write_log
-                        write_log(log_path, f"INFO  Slack notification sent successfully (status: {resp.status})")
-                    except Exception:
-                        pass
+            _send_single_webhook("Slack", req, log_path)
             
         # Teams
         if settings.get("teams_webhook"):
@@ -147,13 +141,7 @@ def send_notification(title: str, message: str, is_error: bool = False, log_path
             }
             payload = json.dumps(teams_payload).encode('utf-8')
             req = urllib.request.Request(settings["teams_webhook"], data=payload, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if log_path:
-                    try:
-                        from engine import write_log
-                        write_log(log_path, f"INFO  Teams notification sent successfully (status: {resp.status})")
-                    except Exception:
-                        pass
+            _send_single_webhook("Teams", req, log_path)
             
         # Telegram
         if settings.get("telegram_webhook"):
@@ -167,13 +155,7 @@ def send_notification(title: str, message: str, is_error: bool = False, log_path
             connector = "&" if "?" in tg_url else "?"
             url = tg_url + connector + "text=" + urllib.parse.quote(text)
             req = urllib.request.Request(url, headers={"User-Agent": "BackupVault/1.0"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if log_path:
-                    try:
-                        from engine import write_log
-                        write_log(log_path, f"INFO  Telegram notification sent successfully (status: {resp.status})")
-                    except Exception:
-                        pass
+            _send_single_webhook("Telegram", req, log_path)
     except Exception as e:
         msg = f"Failed to send notification: {e}"
         print(msg)
@@ -183,6 +165,27 @@ def send_notification(title: str, message: str, is_error: bool = False, log_path
                 write_log(log_path, f"ERROR {msg}")
             except Exception:
                 pass
+
+def _send_single_webhook(name, req, log_path, timeout=5):
+    try:
+        import urllib.error
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if log_path:
+                from engine import write_log
+                write_log(log_path, f"INFO  {name} notification sent successfully (status: {resp.status})")
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode('utf-8', errors='ignore')
+        msg = f"WARN  {name} notification failed with HTTP {e.code}: {err_msg}"
+        print(msg)
+        if log_path:
+            from engine import write_log
+            write_log(log_path, msg)
+    except Exception as e:
+        msg = f"WARN  {name} notification failed: {e}"
+        print(msg)
+        if log_path:
+            from engine import write_log
+            write_log(log_path, msg)
 
 
 def parse_mongo_uri(db_or_uri) -> dict:
