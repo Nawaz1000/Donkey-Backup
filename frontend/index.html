@@ -958,6 +958,16 @@ tr:hover td{background:rgba(255,255,255,0.015)}
       </select>
     </div>
 
+    <div class="form-group">
+      <label>Speed & Resource Profile</label>
+      <select id="rs-speed-profile">
+        <option value="default">Default (Balanced / Auto-scales at Night)</option>
+        <option value="extreme">Extreme (Absolute Max Speed, Unbounded CPU)</option>
+        <option value="balanced">Balanced (4 CPU threads, 16MB chunks)</option>
+        <option value="safe">Safe (1 CPU thread, 4MB chunks)</option>
+      </select>
+    </div>
+
     <div id="rs-existing-fields" class="form-group">
       <label>Target Database Name <span style="color:var(--muted);font-size:11px">(fetched from server)</span></label>
       <select id="rs-target-dbname">
@@ -1910,7 +1920,8 @@ async function runRestore() {
       target_database_id: targetDbId,
       new_database: isNew,
       new_database_name: isNew ? targetDbname : null,
-      indexing_mode: v('rs-indexing-mode')
+      indexing_mode: v('rs-indexing-mode'),
+      speed_profile: v('rs-speed-profile') || 'default'
     };
     
     if (isExternal) {

@@ -82,8 +82,11 @@ backupvault/
 - **High-Performance Zero-Copy `QueueReader`:**
   - Optimized queue and buffer management using memory pointer offsets and Python `memoryview` stream wrappers.
   - Completely eliminates array slicing memory copy overhead, reducing Python process CPU utilization to near 0% and maximizing upload throughput.
-- **Ultra-Fast Dynamic CPU Scaling:**
-  - Dynamically scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines using **all available CPU cores** (unbounded). Additionally uses the `--fast=3` zstd acceleration profile to ensure CPU compression never bottlenecks the network.
+- **Ultra-Fast Dynamic Resource Scaling & Speed Profiles:**
+  - Dynamically scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression/decompression pipelines, Azure/GCS chunk sizes, network concurrency limits, and MongoDB parallel insertion workers.
+  - Granular API and UI options (Default, Balanced, Extreme, Safe) allow fine-tuning CPU usage during backups and restores to protect production instances during the day.
+- **Night-Time Auto-Scaling:**
+  - Background scheduler automatically detects night-time windows (12:00 AM - 6:00 AM) and seamlessly upgrades "Default" schedules to the absolute maximum "Extreme" performance limits to completely saturate the network when application traffic is lowest.
 - **Disk-Flush Backpressure (OOM Crash Protection):**
   - **MongoDB:** Uses `w: 1` with 10 insertion workers, creating a balanced memory-acknowledgment stream. This allows `mongorestore` to insert data at maximum speed while WiredTiger naturally manages disk eviction in the background, minimizing memory bloat and maximizing insertion speed.
   - **PostgreSQL:** Throttles safely with parallel workers (`--jobs=4`), enforcing memory limits (`maintenance_work_mem=64MB`), and using `synchronous_commit=on` to naturally backpressure the restore without crashes.

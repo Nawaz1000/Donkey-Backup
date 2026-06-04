@@ -28,6 +28,7 @@ class RestoreRequest(BaseModel):
     new_database: bool = False
     new_database_name: Optional[str] = None
     indexing_mode: Literal["with_index", "without_index", "only_index"] = "with_index"
+    speed_profile: Literal["default", "safe", "balanced", "extreme"] = "default"
 
 @router.get("/")
 def list_backups(user=Depends(get_current_user)):
@@ -270,6 +271,7 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
         "new_database": req.new_database,
         "new_database_name": req.new_database_name if req.new_database else None,
         "indexing_mode": req.indexing_mode,
+        "speed_profile": req.speed_profile,
         "status": "running",
         "error": None,
         "started_at": datetime.utcnow().isoformat(),

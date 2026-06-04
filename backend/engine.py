@@ -576,8 +576,10 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     return remote_path
 
 
-def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, decompression_cmd: list = None, tracker: ProgressTracker = None):
-    write_log(log_path, f"INFO  Starting streaming restore from {storage['type']}: {remote_name}")
+def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, decompression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default"):
+    write_log(log_path, f"INFO  Starting streaming restore from {storage['type']}: {remote_name} (Profile: {speed_profile})")
+    
+    settings = get_speed_settings(speed_profile)
     
     processes = []
     stop_event = threading.Event()
@@ -649,9 +651,9 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     f"AccountKey={storage['azure_account_key']};"
                     f"EndpointSuffix=core.windows.net"
                 )
-                client = BlobServiceClient.from_connection_string(conn_str, max_single_get_size=64 * 1024 * 1024, max_chunk_get_size=64 * 1024 * 1024, connection_timeout=300, read_timeout=3600)
+                client = BlobServiceClient.from_connection_string(conn_str, max_single_get_size=settings["chunk_size"], max_chunk_get_size=settings["chunk_size"], connection_timeout=300, read_timeout=3600)
                 container = client.get_container_client(storage["azure_container"])
-                stream = container.download_blob(remote_name, max_concurrency=32, read_timeout=3600)
+                stream = container.download_blob(remote_name, max_concurrency=settings["concurrency"], read_timeout=3600)
                 for chunk in stream.chunks():
                     if stop_event.is_set():
                         raise RuntimeError("Restore cancelled by user.")
@@ -669,7 +671,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 client = gcs.Client(credentials=creds)
                 bucket = client.bucket(storage["gcs_bucket"])
                 blob = bucket.blob(remote_name)
-                blob.chunk_size = 64 * 1024 * 1024
+                blob.chunk_size = settings["chunk_size"]
                 
                 progress_writer = ProgressWriter(stdin_stream, dl_tracker, stop_event=stop_event)
                 blob.download_to_file(progress_writer, timeout=3600)
@@ -779,7 +781,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
 
 # ─── MONGODB RESTORE ─────────────────────────────────────────────────────────
 
-def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None):
+def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default"):
     m = parse_mongo_uri(db)
     dbname = m["dbname"]
     if not dbname: raise ValueError("Database name is required for restore.")
@@ -802,12 +804,13 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         except Exception as e:
             pass
             
+    settings = get_speed_settings(speed_profile)
     cmd = [
         "mongorestore",
         f"--uri={m['uri']}",
         "--archive",
-        "--numParallelCollections=1",
-        "--numInsertionWorkersPerCollection=10",
+        f"--numParallelCollections={settings['mongo_parallel']}",
+        f"--numInsertionWorkersPerCollection={max(10, settings['threads'] * 4)}",
         "--batchSize=500",
         "--bypassDocumentValidation",
         "--writeConcern={w: 1}",
@@ -828,7 +831,8 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     if drop_existing:
         cmd.append("--drop")
 
-    decompression_threads = 1
+    settings = get_speed_settings(speed_profile)
+    decompression_threads = settings["threads"]
     decompression_cmd = None
     if compression == "zstd":
         decompression_cmd = ["zstd", "-d", "-c", f"--threads={decompression_threads}"]
@@ -845,7 +849,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     env = os.environ.copy()
     env["GOGC"] = "100"
     env["GOMAXPROCS"] = "1"
-    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
+    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile)
 
 
 # ─── POSTGRESQL BACKUP ───────────────────────────────────────────────────────
@@ -924,7 +928,7 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
 
 # ─── POSTGRESQL RESTORE ──────────────────────────────────────────────────────
 
-def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None):
+def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default"):
     dbname = db.get("database_name", "").strip()
     if new_database:
         create_cmd = [
@@ -950,19 +954,20 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
     elif indexing_mode == "only_index":
         cmd += ["--section=post-data"]
         
+    settings = get_speed_settings(speed_profile)
     decompression_cmd = None
     if compression == "zstd":
-        decompression_cmd = ["zstd", "-d", "-c", "--threads=4"]
+        decompression_cmd = ["zstd", "-d", "-c", f"--threads={settings['threads']}"]
     elif compression in ("pigz", "gzip"):
         if shutil.which("pigz"):
-            decompression_cmd = ["pigz", "-d", "-c", "-p", "4"]
+            decompression_cmd = ["pigz", "-d", "-c", "-p", str(settings['threads'])]
         elif shutil.which("gzip"):
             decompression_cmd = ["gzip", "-d", "-c"]
             
     env = pg_env(db)
     env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c synchronous_commit=on"
         
-    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
+    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile)
 
 # ─── SOLR BACKUP & RESTORE ───────────────────────────────────────────────────
 
@@ -1055,7 +1060,7 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
     return f"{storage['type']}://{remote_name}"
 
 
-def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = False, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None):
+def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = False, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default"):
     import base64
     import sys
     
@@ -1102,7 +1107,7 @@ def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str,
         except Exception as e:
             write_log(log_path, f"WARN  Failed to create new Solr collection. It may already exist or API not supported: {e}")
 
-    comp_info = get_compressor_info("default", log_path)
+    comp_info = get_compressor_info(speed_profile, log_path)
     decompression_cmd = comp_info.get("decompress_cmd")
 
     if not decompression_cmd:
@@ -1116,7 +1121,7 @@ def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str,
             
     cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "solr_helper.py"), "restore", solr_base_url, target_collection, auth_str]
     
-    stream_restore_from_storage(cmd, {}, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
+    stream_restore_from_storage(cmd, {}, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile)
     write_log(log_path, "INFO  Solr restore streamed successfully via HTTP API.")
 
 # ─── STATE HELPERS ───────────────────────────────────────────────────────────
@@ -1339,11 +1344,11 @@ def do_restore(restore_id: str):
         indexing_mode = restore.get("indexing_mode", "with_index")
 
         if target_db["type"] == "mongodb":
-            run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker)
+            run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
         elif target_db["type"] == "postgresql":
-            run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker)
+            run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
         elif target_db["type"] == "solr":
-            run_solr_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker)
+            run_solr_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
         else:
             return fail(f"Unsupported DB type: {target_db['type']}")
 
