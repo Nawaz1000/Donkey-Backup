@@ -18,6 +18,7 @@ class BackupCreate(BaseModel):
     incremental_field: Optional[str] = None
     indexing_mode: Literal["with_index", "without_index", "only_index"] = "with_index"
     send_notifications: Optional[bool] = True
+    speed_profile: Literal["default", "safe", "balanced", "extreme"] = "default"
 
 class RestoreRequest(BaseModel):
     backup_id: Optional[str] = None
@@ -72,6 +73,7 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
         "incremental_field": req.incremental_field,
         "indexing_mode": req.indexing_mode,
         "send_notifications": req.send_notifications,
+        "speed_profile": req.speed_profile,
         "status": "running",
         "size_mb": None,
         "remote_path": None,

@@ -83,6 +83,11 @@ async def scheduler_loop():
                     s["last_run"] = now.isoformat()
                     modified = True
                     
+                    profile = s.get("speed_profile", "default")
+                    if profile == "default" and 0 <= now.hour < 6:
+                        profile = "extreme"
+                        print("Night-time window detected. Overriding speed_profile to 'extreme'.")
+                    
                     backups = read_json("data/backups.json")
                     backup = {
                         "id": str(uuid.uuid4()),
@@ -93,6 +98,7 @@ async def scheduler_loop():
                         "backup_method": method,
                         "incremental_field": s.get("incremental_field", None),
                         "send_notifications": True,
+                        "speed_profile": profile,
                         "status": "running",
                         "size_mb": None,
                         "remote_path": None,

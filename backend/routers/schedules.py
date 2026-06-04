@@ -16,6 +16,7 @@ class ScheduleCreate(BaseModel):
     enabled: bool = True
     backup_method: Literal["full", "incremental", "differential"] = "full"
     incremental_field: Optional[str] = None
+    speed_profile: Literal["default", "safe", "balanced", "extreme"] = "default"
 
 @router.get("/")
 def list_schedules(user=Depends(get_current_user)):
@@ -48,6 +49,7 @@ def create_schedule(req: ScheduleCreate, user=Depends(get_current_user)):
         "enabled": req.enabled,
         "backup_method": req.backup_method,
         "incremental_field": req.incremental_field,
+        "speed_profile": req.speed_profile,
         "created_at": datetime.utcnow().isoformat(),
         "last_run": None,
         "next_run": datetime.utcnow().isoformat(),

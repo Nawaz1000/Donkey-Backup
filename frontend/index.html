@@ -790,6 +790,15 @@ tr:hover td{background:rgba(255,255,255,0.015)}
         <option value="only_index">Only Indexes (Schema Only)</option>
       </select>
     </div>
+    <div class="form-group">
+      <label>Speed & Resource Profile</label>
+      <select id="bk-speed-profile">
+        <option value="default">Default (Current Configuration / Auto-scales at Night)</option>
+        <option value="extreme">Extreme (Absolute Max Speed, Unbounded CPU)</option>
+        <option value="balanced">Balanced (4 CPU threads, 16MB chunks)</option>
+        <option value="safe">Safe (1 CPU thread, 4MB chunks)</option>
+      </select>
+    </div>
     <div class="form-group" id="bk-incremental-group" style="display:none">
       <label>Incremental Field Name</label>
       <input type="text" id="bk-incremental-field" placeholder="e.g. updated_at"/>
@@ -842,6 +851,15 @@ tr:hover td{background:rgba(255,255,255,0.015)}
         <option value="full">Full Backup</option>
         <option value="incremental">Incremental Backup</option>
         <option value="differential">Differential Backup</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Speed & Resource Profile</label>
+      <select id="sc-speed-profile">
+        <option value="default">Default (Current Configuration / Auto-scales to Extreme at Night)</option>
+        <option value="extreme">Extreme (Absolute Max Speed, Unbounded CPU)</option>
+        <option value="balanced">Balanced (4 CPU threads, 16MB chunks)</option>
+        <option value="safe">Safe (1 CPU thread, 4MB chunks)</option>
       </select>
     </div>
     <div class="form-group" id="sc-incremental-group" style="display:none">
@@ -1515,17 +1533,18 @@ async function runBackup() {
   if(type === 'collection' && dbname !== 'all_collections' && !collection){ toast('Select a collection/schema','error'); return; }
   
   const indexingMode = v('bk-indexing-mode');
+  const speedProfile = v('bk-speed-profile') || 'default';
   const sendNotifications = document.getElementById('bk-send-notifications') ? document.getElementById('bk-send-notifications').checked : true;
   
   try { await apiFetch(`/databases/${dbId}`, {method:'PATCH', body: JSON.stringify({database_name: dbname})}); } catch(e){}
-  await startBackupNow(dbId, v('bk-storage'), label, collection, indexingMode, sendNotifications);
+  await startBackupNow(dbId, v('bk-storage'), label, collection, indexingMode, sendNotifications, speedProfile);
   closeModal('backup-modal');
 }
 
-async function startBackupNow(dbId, storageId, label, collection='', indexingMode='with_index', sendNotifications=true) {
+async function startBackupNow(dbId, storageId, label, collection='', indexingMode='with_index', sendNotifications=true, speedProfile='default') {
   try {
     const b = await apiFetch('/backups/',{method:'POST',body:JSON.stringify({
-      database_id:dbId, storage_id:storageId, label, collection, indexing_mode: indexingMode, send_notifications: sendNotifications
+      database_id:dbId, storage_id:storageId, label, collection, indexing_mode: indexingMode, send_notifications: sendNotifications, speed_profile: speedProfile
     })});
     toast('Backup started!','info');
     showPage('backups');
@@ -1690,7 +1709,8 @@ async function addSchedule() {
       name:v('sc-name'),database_id:v('sc-db'),storage_id:v('sc-storage'),
       frequency:freq,time:timeStr,enabled:true,
       backup_method: freq === 'weekly_mixed' ? 'full' : method,
-      incremental_field: v('sc-incremental-field') || null
+      incremental_field: v('sc-incremental-field') || null,
+      speed_profile: v('sc-speed-profile') || 'default'
     })});
     closeModal('schedule-modal');
     toast('Schedule created!','success');

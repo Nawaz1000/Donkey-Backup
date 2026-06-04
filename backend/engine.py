@@ -377,13 +377,23 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
         q.put(None)
 
 
-def get_compressor_info(log_path: str = None) -> dict:
-    threads = max(1, min(8, os.cpu_count() - 1)) if hasattr(os, "cpu_count") and os.cpu_count() else 4
+def get_speed_settings(profile: str):
+    if profile == "safe":
+        return {"threads": 1, "chunk_size": 4 * 1024 * 1024, "queue_max": 16, "concurrency": 1, "mongo_parallel": 1}
+    elif profile == "balanced":
+        return {"threads": 4, "chunk_size": 16 * 1024 * 1024, "queue_max": 16, "concurrency": 4, "mongo_parallel": 4}
+    else: # extreme or default
+        return {"threads": max(1, os.cpu_count() - 1) if hasattr(os, "cpu_count") and os.cpu_count() else 8,
+                "chunk_size": 64 * 1024 * 1024, "queue_max": 16, "concurrency": 32, "mongo_parallel": 32}
+
+def get_compressor_info(profile: str = "default", log_path: str = None) -> dict:
+    settings = get_speed_settings(profile)
+    threads = settings["threads"]
     if shutil.which("zstd"):
         if log_path:
-            write_log(log_path, f"INFO  Using Zstandard (zstd) with {threads} threads for optimized speed.")
+            write_log(log_path, f"INFO  Using Zstandard (zstd) with {threads} threads for {profile} profile.")
         return {
-            "cmd": ["zstd", "-1", f"--threads={threads}"],
+            "cmd": ["zstd", "--fast=3", f"--threads={threads}"] if profile in ("extreme", "default") else ["zstd", "-1", f"--threads={threads}"],
             "ext": "zst",
             "type": "zstd"
         }
@@ -391,7 +401,7 @@ def get_compressor_info(log_path: str = None) -> dict:
         if log_path:
             write_log(log_path, f"INFO  Using pigz (parallel gzip) with {threads} threads for optimized speed.")
         return {
-            "cmd": ["pigz", "-1", "-p", str(threads)],
+                "cmd": ["pigz", "-1", "-p", str(threads)],
             "ext": "gz",
             "type": "pigz"
         }
@@ -406,8 +416,10 @@ def get_compressor_info(log_path: str = None) -> dict:
     return None
 
 
-def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, compression_cmd: list = None, tracker: ProgressTracker = None) -> str:
-    write_log(log_path, f"INFO  Starting streaming backup to {storage['type']}: {remote_name}")
+def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, compression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default") -> str:
+    write_log(log_path, f"INFO  Starting streaming backup to {storage['type']}: {remote_name} (Profile: {speed_profile})")
+    
+    settings = get_speed_settings(speed_profile)
     
     processes = []
     if tracker:
@@ -476,8 +488,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 pass
         raise RuntimeError(f"Failed to start subprocesses: {e}")
 
-    # Extreme Throughput Mode: 32MB chunks, queue of 32 = 1GB buffer for maximum network saturation
-    q = queue.Queue(maxsize=32)
+    q = queue.Queue(maxsize=settings["queue_max"])
     stop_event = threading.Event()
     if tracker:
         ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
@@ -486,7 +497,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     
     reader_thread = threading.Thread(
         target=reader_thread_fn,
-        args=(stdout_stream, q, stop_event, 32 * 1024 * 1024, reader_tracker)  # 32MB chunks
+        args=(stdout_stream, q, stop_event, settings["chunk_size"], reader_tracker)
     )
     reader_thread.daemon = True
     reader_thread.start()
@@ -502,13 +513,13 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 f"AccountKey={storage['azure_account_key']};"
                 f"EndpointSuffix=core.windows.net"
             )
-            client = BlobServiceClient.from_connection_string(conn_str, max_block_size=32 * 1024 * 1024, connection_timeout=300, read_timeout=3600)
+            client = BlobServiceClient.from_connection_string(conn_str, max_block_size=settings["chunk_size"], connection_timeout=300, read_timeout=3600)
             container = client.get_container_client(storage["azure_container"])
             container.upload_blob(
                 name=remote_name, 
                 data=queue_reader, 
                 overwrite=True,
-                max_concurrency=16,
+                max_concurrency=settings["concurrency"],
                 read_timeout=3600
             )
             blob_props = container.get_blob_client(remote_name).get_blob_properties()
@@ -524,7 +535,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
             client = gcs.Client(credentials=creds)
             bucket = client.bucket(storage["gcs_bucket"])
             blob = bucket.blob(remote_name)
-            blob.chunk_size = 32 * 1024 * 1024  # 32MB chunk size
+            blob.chunk_size = settings["chunk_size"]
             blob.upload_from_file(queue_reader, num_retries=3, timeout=3600)
             blob.reload()
             stream_backup_to_storage.last_size_bytes = blob.size
@@ -638,9 +649,9 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     f"AccountKey={storage['azure_account_key']};"
                     f"EndpointSuffix=core.windows.net"
                 )
-                client = BlobServiceClient.from_connection_string(conn_str, max_single_get_size=32 * 1024 * 1024, max_chunk_get_size=32 * 1024 * 1024, connection_timeout=300, read_timeout=3600)
+                client = BlobServiceClient.from_connection_string(conn_str, max_single_get_size=64 * 1024 * 1024, max_chunk_get_size=64 * 1024 * 1024, connection_timeout=300, read_timeout=3600)
                 container = client.get_container_client(storage["azure_container"])
-                stream = container.download_blob(remote_name, max_concurrency=16, read_timeout=3600)
+                stream = container.download_blob(remote_name, max_concurrency=32, read_timeout=3600)
                 for chunk in stream.chunks():
                     if stop_event.is_set():
                         raise RuntimeError("Restore cancelled by user.")
@@ -658,7 +669,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 client = gcs.Client(credentials=creds)
                 bucket = client.bucket(storage["gcs_bucket"])
                 blob = bucket.blob(remote_name)
-                blob.chunk_size = 32 * 1024 * 1024
+                blob.chunk_size = 64 * 1024 * 1024
                 
                 progress_writer = ProgressWriter(stdin_stream, dl_tracker, stop_event=stop_event)
                 blob.download_to_file(progress_writer, timeout=3600)
@@ -687,7 +698,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
 
 # ─── MONGODB BACKUP ──────────────────────────────────────────────────────────
 
-def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None) -> str:
+def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default") -> str:
     m = parse_mongo_uri(db)
     dbname = m["dbname"]
     if not dbname: raise ValueError("Database name is required.")
@@ -716,18 +727,19 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
                 json.dump(indexes, f)
             
             cmd = ["cat", tmp_json] if os.name != 'nt' else ["cmd", "/c", "type", tmp_json]
-            res = stream_backup_to_storage(cmd, os.environ.copy(), storage, remote_name, log_path, tracker=tracker)
+            res = stream_backup_to_storage(cmd, os.environ.copy(), storage, remote_name, log_path, tracker=tracker, speed_profile=speed_profile)
             os.remove(tmp_json)
             client.close()
             return res
         except Exception as e:
             raise RuntimeError(f"Failed to backup MongoDB indexes: {e}")
 
+    settings = get_speed_settings(speed_profile)
     cmd = [
         "mongodump",
         f"--uri={m['uri']}",
         "--archive",
-        "--numParallelCollections=16",
+        f"--numParallelCollections={settings['mongo_parallel']}",
         "--readPreference=secondaryPreferred",  # Offload reads to secondary replicas, reduces primary server load
     ]
     if collection and collection != "full":
@@ -749,7 +761,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         else:
             write_log(log_path, f"INFO  No previous successful {'Full ' if backup_method == 'differential' else ''}backup found. Falling back to Full Backup.")
             
-    comp_info = get_compressor_info(log_path)
+    comp_info = get_compressor_info(speed_profile, log_path)
     compression_cmd = None
     if comp_info:
         compression_cmd = comp_info["cmd"]
@@ -762,7 +774,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     env = os.environ.copy()
     env["GOGC"] = "100"
     env["GOMAXPROCS"] = "1"
-    return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
+    return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
 
 
 # ─── MONGODB RESTORE ─────────────────────────────────────────────────────────
@@ -838,7 +850,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
 
 # ─── POSTGRESQL BACKUP ───────────────────────────────────────────────────────
 
-def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None) -> str:
+def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default") -> str:
     dbname = db.get("database_name", "").strip()
     collection = backup_info.get("collection", "full")
     backup_method = backup_info.get("backup_method", "full")
@@ -892,7 +904,7 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
     elif collection and collection != "full":
         cmd += [f"--table={collection}"]
         
-    comp_info = get_compressor_info(log_path)
+    comp_info = get_compressor_info(speed_profile, log_path)
     compression_cmd = None
     if comp_info:
         compression_cmd = comp_info["cmd"]
@@ -907,7 +919,7 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
     env = pg_env(db)
     env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
         
-    return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
+    return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
 
 
 # ─── POSTGRESQL RESTORE ──────────────────────────────────────────────────────
@@ -964,7 +976,7 @@ def get_solr_base_url(host: str, port: int) -> str:
     return f"{scheme}://{host}:{port}"
 
 
-def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None):
+def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default") -> str:
     import base64
     import urllib.request
     import json
@@ -1008,7 +1020,7 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
     write_log(log_path, f"INFO  Starting HTTP-based Solr backup for collections: {collections_to_backup}")
 
     # Use gzip compression for JSON lines
-    comp_info = get_compressor_info(log_path)
+    comp_info = get_compressor_info(speed_profile, log_path)
     compression_cmd = comp_info["cmd"] if comp_info else ["gzip", "-c"]
 
     if len(collections_to_backup) > 1:
@@ -1037,7 +1049,7 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
     
     cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "solr_helper.py"), "dump", solr_base_url, coll, auth_str]
     
-    stream_backup_to_storage(cmd, {}, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker)
+    stream_backup_to_storage(cmd, {}, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
     write_log(log_path, "INFO  Solr backup streamed successfully via HTTP API.")
         
     return f"{storage['type']}://{remote_name}"
@@ -1090,7 +1102,7 @@ def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str,
         except Exception as e:
             write_log(log_path, f"WARN  Failed to create new Solr collection. It may already exist or API not supported: {e}")
 
-    comp_info = get_compressor_info(log_path)
+    comp_info = get_compressor_info("default", log_path)
     decompression_cmd = comp_info.get("decompress_cmd")
 
     if not decompression_cmd:
@@ -1171,7 +1183,9 @@ def do_backup(backup_id: str):
         if backup.get("send_notifications", True):
             send_notification("Backup Started \u23f3", f"Backup for {collection if collection != 'full' else db.get('name')} in {storage.get('name')} started at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}", is_error=False, log_path=log_path)
 
-        comp_info = get_compressor_info(log_path)
+        speed_profile = backup.get("speed_profile", "default")
+        
+        comp_info = get_compressor_info(speed_profile, log_path)
         ext = comp_info["ext"] if comp_info else "gz"
         compression = comp_info["type"] if comp_info else "native"
         
@@ -1198,13 +1212,13 @@ def do_backup(backup_id: str):
 
         source_dbname = None
         if db["type"] == "mongodb":
-            remote_path = run_mongo_backup(db, backup, storage, remote_name, log_path, indexing_mode=indexing_mode, tracker=tracker)
+            remote_path = run_mongo_backup(db, backup, storage, remote_name, log_path, indexing_mode=indexing_mode, tracker=tracker, speed_profile=speed_profile)
             m = parse_mongo_uri(db)
             source_dbname = m["dbname"]
         elif db["type"] == "postgresql":
-            remote_path = run_pg_backup(db, backup, storage, remote_name, log_path, indexing_mode=indexing_mode, tracker=tracker)
+            remote_path = run_pg_backup(db, backup, storage, remote_name, log_path, indexing_mode=indexing_mode, tracker=tracker, speed_profile=speed_profile)
         elif db["type"] == "solr":
-            remote_path = run_solr_backup(db, backup, storage, remote_name, log_path, indexing_mode=indexing_mode, tracker=tracker)
+            remote_path = run_solr_backup(db, backup, storage, remote_name, log_path, indexing_mode=indexing_mode, tracker=tracker, speed_profile=speed_profile)
         else:
             return fail(f"Unsupported DB type: {db['type']}")
 
