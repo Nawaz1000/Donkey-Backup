@@ -811,7 +811,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     if speed_profile == "extreme":
         workers = 500  # Massive worker pool per collection
         batch_size = 100000  # Max batch size limit
-        write_concern = "{w: 0, j: false}"  # Disable write acknowledgment AND journal wait for fire-and-forget inserts
+        write_concern = "{w: 1}"  # Must be w:1 because DDL operations like --drop and index creation fail with w:0
         
     cmd = [
         "mongorestore",
