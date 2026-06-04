@@ -1012,7 +1012,11 @@ def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str,
     solr_host = db["host"]
     solr_port = db["port"]
     
-    if not collection or collection in ("default", "full", "all_collections"):
+    target_collection = db.get("database_name")
+    if not target_collection or target_collection in ("default", "full", "all_collections"):
+        target_collection = collection
+        
+    if not target_collection or target_collection in ("default", "full", "all_collections"):
         raise RuntimeError("A specific collection name is required for Solr HTTP restore.")
         
     solr_base_url = get_solr_base_url(solr_host, solr_port)
@@ -1022,7 +1026,7 @@ def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str,
         auth_raw = f"{db['username']}:{db['password']}"
         auth_str = f"Basic {base64.b64encode(auth_raw.encode()).decode()}"
 
-    write_log(log_path, f"INFO  Starting HTTP-based Solr restore to collection '{collection}'")
+    write_log(log_path, f"INFO  Starting HTTP-based Solr restore to collection '{target_collection}'")
 
     comp_info = get_compressor_info(log_path)
     decompression_cmd = comp_info.get("decompress_cmd")
@@ -1036,7 +1040,7 @@ def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str,
             else:
                 decompression_cmd = ["gzip", "-d", "-c"]
             
-    cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "solr_helper.py"), "restore", solr_base_url, collection, auth_str]
+    cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "solr_helper.py"), "restore", solr_base_url, target_collection, auth_str]
     
     stream_restore_from_storage(cmd, {}, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker)
     write_log(log_path, "INFO  Solr restore streamed successfully via HTTP API.")

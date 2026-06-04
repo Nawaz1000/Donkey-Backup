@@ -133,6 +133,7 @@ backupvault/
   - No shared volume mounts or `/tmp/backupvault` configuration required. You only need the Solr URL, Username, and Password.
   - Dynamically discovers the unique key for pagination directly from the Solr schema. Automatically compresses payloads on the fly via `zstd` or `pigz` and streams directly to Cloud Storage.
   - Features real-time live log output mapping progress metrics directly to the UI during both dump and restore operations.
+  - Fully supports restoring existing backups directly into new, dynamically named Solr collections directly from the UI.
 - **Job Management:**
   - Includes a global "Stop Job" functionality that allows users to instantly terminate active backup and restore background processes from the UI. Safely sends forceful termination signals to prevent hanging streams or runaway I/O tasks.
 - **Webhook Notifications:**
