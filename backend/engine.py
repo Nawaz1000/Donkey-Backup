@@ -809,15 +809,15 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     batch_size = 500
     write_concern = "{w: 1}"
     if speed_profile == "extreme":
-        workers = 500  # Massive worker pool per collection
-        batch_size = 100000  # Max batch size limit
-        write_concern = "{w: 1}"  # Must be w:1 because DDL operations like --drop and index creation fail with w:0
+        workers = 32  # Dialed back from 500 to prevent 18GB memory spike
+        batch_size = 5000  # Safe but fast batch size
+        write_concern = "{w: 1}"
         
     cmd = [
         "mongorestore",
         f"--uri={m['uri']}",
         "--archive",
-        f"--numParallelCollections={settings['mongo_parallel']}",
+        f"--numParallelCollections={min(settings['mongo_parallel'], 4)}",
         f"--numInsertionWorkersPerCollection={workers}",
         f"--batchSize={batch_size}",
         "--bypassDocumentValidation",
@@ -981,8 +981,8 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
     
     if speed_profile == "extreme":
         sync_commit = "off"
-        work_mem = "256MB"
-        maint_work_mem = "2GB"
+        work_mem = "64MB"
+        maint_work_mem = "1GB"
         cmd += ["--disable-triggers"] # Redundant but safe
         
     env["PGOPTIONS"] = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit}"
