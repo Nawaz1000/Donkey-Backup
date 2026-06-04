@@ -83,12 +83,13 @@ backupvault/
   - Optimized queue and buffer management using memory pointer offsets and Python `memoryview` stream wrappers.
   - Completely eliminates array slicing memory copy overhead, reducing Python process CPU utilization to near 0% and maximizing upload throughput.
 - **Ultra-Fast Dynamic CPU Scaling:**
-  - Dynamically scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines up to 4 parallel threads, dramatically accelerating backup speeds while protecting host system resources.
+  - Dynamically scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines up to a safe maximum of **4 parallel threads**. This dramatically accelerates massive gigabyte backup speeds while intentionally leaving remaining CPU cores free for your database and other production applications.
 - **Disk-Flush Backpressure (OOM Crash Protection):**
   - **MongoDB:** Uses `w: 1` with 10 insertion workers, creating a balanced memory-acknowledgment stream. This allows `mongorestore` to insert data at maximum speed while WiredTiger naturally manages disk eviction in the background, minimizing memory bloat and maximizing insertion speed.
   - **PostgreSQL:** Throttles safely with parallel workers (`--jobs=4`), enforcing memory limits (`maintenance_work_mem=64MB`), and using `synchronous_commit=on` to naturally backpressure the restore without crashes.
-- **Bounded RAM Footprint (< 256MB):**
-  - Downloads and uploads GCS/Azure objects sequentially (`max_concurrency=1`) with `4MB` chunk sizes. This prevents parallel chunk buffering in memory when the database engine is writing slowly, strictly keeping RAM consumption under 256MB.
+- **Massive Streaming Throughput (16MB Chunks & 8x Concurrency):**
+  - Downloads and uploads GCS/Azure objects using massively parallel **16MB** data blocks.
+  - Azure pipelines natively leverage `max_concurrency=8` allowing the system to push 8 separate 16MB network streams simultaneously. This completely unbottlenecks high-latency connections, allowing 12GB+ backups to finish in minutes.
 - **Robust Connection Options Parsing:**
   - Implements an advanced, case-insensitive URI parser that detects database options from both query parameters and path-based segments (such as `...:27017/authMechanism=...`), auto-corrects them, and connects securely using keyword argument credentials to bypass PyMongo URI decoding limitations with special characters (like `!`).
 - **Verbosity & Notification Logging:**
@@ -135,6 +136,8 @@ backupvault/
   - **Dynamic URL Formatting:** Simply entering `localhost` or an IP will automatically resolve to standard HTTP URLs (pre-pending `http://`).
   - **Accurate Backup Progress Bar:** Calculates exact progress percentages by fetching actual byte sizes from the Solr Cores API before the stream begins.
   - Fully supports restoring existing backups directly into new, dynamically named Solr collections. It natively auto-creates new target Solr collections if they don't already exist prior to dumping data.
+  - **Schema Preservation:** Automatically extracts your exact schema (including custom `metaphone`, `string`, and `text` field types, dynamic fields, and copy fields) via the `/schema` API during a backup. Restores intelligently parse and apply this exact schema to new collections *before* data ingestion, perfectly mirroring your original query configurations.
+  - **Extreme API Batching:** Drastically slashes HTTP network overhead by extracting `20,000` documents per `/select` batch and pushing `5,000` documents per `/update` batch. Features a zero-latency `bytearray` stream buffer to maximize Solr pipeline speeds.
 - **Job Management:**
   - Includes a global "Stop Job" functionality that allows users to instantly terminate active backup and restore background processes from the UI. 
   - Safely sets threading stop events (`ACTIVE_STOP_EVENTS`) to unblock cloud streaming pipes instantly, alongside forceful termination signals to prevent hanging streams or runaway I/O tasks.
