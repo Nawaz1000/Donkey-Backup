@@ -83,13 +83,13 @@ backupvault/
   - Optimized queue and buffer management using memory pointer offsets and Python `memoryview` stream wrappers.
   - Completely eliminates array slicing memory copy overhead, reducing Python process CPU utilization to near 0% and maximizing upload throughput.
 - **Ultra-Fast Dynamic CPU Scaling:**
-  - Dynamically scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines up to a safe maximum of **4 parallel threads**. This dramatically accelerates massive gigabyte backup speeds while intentionally leaving remaining CPU cores free for your database and other production applications.
+  - Dynamically scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression pipelines up to a safe maximum of **8 parallel threads**. This dramatically accelerates massive gigabyte backup speeds while intentionally leaving remaining CPU cores free for your database and other production applications.
 - **Disk-Flush Backpressure (OOM Crash Protection):**
   - **MongoDB:** Uses `w: 1` with 10 insertion workers, creating a balanced memory-acknowledgment stream. This allows `mongorestore` to insert data at maximum speed while WiredTiger naturally manages disk eviction in the background, minimizing memory bloat and maximizing insertion speed.
   - **PostgreSQL:** Throttles safely with parallel workers (`--jobs=4`), enforcing memory limits (`maintenance_work_mem=64MB`), and using `synchronous_commit=on` to naturally backpressure the restore without crashes.
-- **Massive Streaming Throughput (16MB Chunks & 8x Concurrency):**
-  - Downloads and uploads GCS/Azure objects using massively parallel **16MB** data blocks.
-  - Azure pipelines natively leverage `max_concurrency=8` allowing the system to push 8 separate 16MB network streams simultaneously. This completely unbottlenecks high-latency connections, allowing 12GB+ backups to finish in minutes.
+- **Extreme Streaming Throughput (32MB Chunks & 16x Concurrency):**
+  - Downloads and uploads GCS/Azure objects using massively parallel **32MB** data blocks with a 1GB memory buffer to maximize network saturation.
+  - Azure pipelines natively leverage `max_concurrency=16` allowing the system to push 16 separate 32MB network streams simultaneously. This completely unbottlenecks high-latency connections, allowing massive 50GB+ backups to finish in extremely short timeframes (e.g. 5 minutes).
 - **Robust Connection Options Parsing:**
   - Implements an advanced, case-insensitive URI parser that detects database options from both query parameters and path-based segments (such as `...:27017/authMechanism=...`), auto-corrects them, and connects securely using keyword argument credentials to bypass PyMongo URI decoding limitations with special characters (like `!`).
 - **Verbosity & Notification Logging:**
