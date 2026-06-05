@@ -609,9 +609,12 @@ input:checked + .slider:before { transform: translateX(18px); background-color: 
           </div>
           <div class="backup-right">
             <div class="card" style="border:none; background:var(--surface);">
-              <div class="card-header" style="border-bottom:none; padding:20px 24px 10px 24px;">
-                <div class="card-title" style="font-size:15px; font-weight:600;"><i data-lucide="database" style="display:none"></i> Connected Databases</div>
-                <div style="font-size:12px; color:var(--text2); margin-top:4px;" id="inline-db-count">0 databases online</div>
+              <div class="card-header" style="border-bottom:none; padding:20px 24px 10px 24px; display:flex; justify-content:space-between; align-items:flex-start;">
+                <div>
+                  <div class="card-title" style="font-size:15px; font-weight:600;"><i data-lucide="database" style="display:none"></i> Connected Databases</div>
+                  <div style="font-size:12px; color:var(--text2); margin-top:4px;" id="inline-db-count">0 databases online</div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="openModal('db-modal')"><i data-lucide="plus" style="width:14px;height:14px"></i> Add Database</button>
               </div>
               <div style="padding:0 24px 24px 24px;" class="db-list" id="inline-db-list">
                 <!-- Dynamically populated -->
