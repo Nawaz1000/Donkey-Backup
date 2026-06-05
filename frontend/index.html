@@ -2106,15 +2106,15 @@ function renderHistoryTable() {
   const endIdx = Math.min(startIdx + HISTORY_ITEMS_PER_PAGE, total);
   const itemsToShow = filteredHistoryItems.slice(startIdx, endIdx);
   
-  document.getElementById('history-pagination-info').innerText = total > 0 ? \`Showing \${startIdx + 1}-\${endIdx} of \${total} results\` : 'Showing 0 results';
+  document.getElementById('history-pagination-info').innerText = total > 0 ? `Showing ${startIdx + 1}-${endIdx} of ${total} results` : 'Showing 0 results';
   
   const totalPages = Math.ceil(total / HISTORY_ITEMS_PER_PAGE) || 1;
-  let pagHtml = \`<button class="btn btn-icon" style="background:transparent; border:none; padding:6px 12px; font-weight:600; color:var(--text2); cursor:\${historyCurrentPage===1?'not-allowed':'pointer'}; opacity:\${historyCurrentPage===1?0.5:1};" onclick="changeHistoryPage(-1)" \${historyCurrentPage === 1 ? 'disabled' : ''}><i data-lucide="chevron-left" style="width:14px;height:14px;display:inline-block;vertical-align:middle;"></i> Previous</button>\`;
+  let pagHtml = `<button class="btn btn-icon" style="background:transparent; border:none; padding:6px 12px; font-weight:600; color:var(--text2); cursor:${historyCurrentPage===1?'not-allowed':'pointer'}; opacity:${historyCurrentPage===1?0.5:1};" onclick="changeHistoryPage(-1)" ${historyCurrentPage === 1 ? 'disabled' : ''}><i data-lucide="chevron-left" style="width:14px;height:14px;display:inline-block;vertical-align:middle;"></i> Previous</button>`;
   for(let i=1; i<=totalPages; i++) {
     const active = i === historyCurrentPage ? 'background:#fff; color:#000;' : 'background:rgba(255,255,255,0.05); color:var(--text);';
-    pagHtml += \`<button style="\${active} border:none; border-radius:4px; padding:6px 12px; font-weight:600; cursor:pointer;" onclick="setHistoryPage(\${i})">\${i}</button>\`;
+    pagHtml += `<button style="${active} border:none; border-radius:4px; padding:6px 12px; font-weight:600; cursor:pointer;" onclick="setHistoryPage(${i})">${i}</button>`;
   }
-  pagHtml += \`<button class="btn btn-icon" style="background:transparent; border:none; padding:6px 12px; font-weight:600; color:var(--text2); cursor:\${historyCurrentPage===totalPages?'not-allowed':'pointer'}; opacity:\${historyCurrentPage===totalPages?0.5:1};" onclick="changeHistoryPage(1)" \${historyCurrentPage === totalPages ? 'disabled' : ''}>Next <i data-lucide="chevron-right" style="width:14px;height:14px;display:inline-block;vertical-align:middle;"></i></button>\`;
+  pagHtml += `<button class="btn btn-icon" style="background:transparent; border:none; padding:6px 12px; font-weight:600; color:var(--text2); cursor:${historyCurrentPage===totalPages?'not-allowed':'pointer'}; opacity:${historyCurrentPage===totalPages?0.5:1};" onclick="changeHistoryPage(1)" ${historyCurrentPage === totalPages ? 'disabled' : ''}>Next <i data-lucide="chevron-right" style="width:14px;height:14px;display:inline-block;vertical-align:middle;"></i></button>`;
   document.getElementById('history-pagination-controls').innerHTML = pagHtml;
   
   tbody.innerHTML = itemsToShow.map((item, idx) => {
@@ -2131,23 +2131,23 @@ function renderHistoryTable() {
     if (item.status === 'completed') statusBadgeHtml = '<span class="badge badge-green" style="background:var(--accent); color:#000; font-weight:600; padding:4px 8px;">Completed</span>';
     else if (item.status === 'failed') statusBadgeHtml = '<span class="badge badge-red" style="background:var(--danger); color:#fff; font-weight:600; padding:4px 8px;">Failed</span>';
     else if (item.status === 'running') statusBadgeHtml = '<span class="badge badge-orange" style="background:rgba(255,255,255,0.1); color:#fff; font-weight:600; border:1px solid rgba(255,255,255,0.2); padding:4px 8px;">Running</span>';
-    else statusBadgeHtml = \`<span class="badge" style="background:rgba(255,255,255,0.05); color:var(--text2); padding:4px 8px;">\${item.status}</span>\`;
+    else statusBadgeHtml = `<span class="badge" style="background:rgba(255,255,255,0.05); color:var(--text2); padding:4px 8px;">${item.status}</span>`;
     
-    return \`
+    return `
     <tr>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">\${startIdx + idx + 1}</td>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); font-weight:600;"><i data-lucide="database" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;color:var(--text2);"></i> \${dbName}</td>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);"><span style="background:rgba(255,255,255,0.05); padding:4px 8px; border-radius:4px; font-size:11px; border:1px solid rgba(255,255,255,0.1);">\${typeLabel}</span></td>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">\${sizeStr}</td>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">\${opStr}</td>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">\${durStr}</td>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">\${fmtDate(item.timestamp)}</td>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);">\${statusBadgeHtml}</td>
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${startIdx + idx + 1}</td>
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); font-weight:600;"><i data-lucide="database" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;color:var(--text2);"></i> ${dbName}</td>
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);"><span style="background:rgba(255,255,255,0.05); padding:4px 8px; border-radius:4px; font-size:11px; border:1px solid rgba(255,255,255,0.1);">${typeLabel}</span></td>
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${sizeStr}</td>
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${opStr}</td>
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${durStr}</td>
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${fmtDate(item.timestamp)}</td>
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);">${statusBadgeHtml}</td>
       <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);">
-        <button class="btn btn-icon" title="View Details" style="background:transparent; border:none; color:var(--text2); cursor:pointer;" onclick="alert('Operation Details\\n\\nID: \${item.id}\\nMessage: \${item.error||item.status}\\nDate: \${fmtDate(item.timestamp)}')"><i data-lucide="eye" style="width:16px;height:16px;"></i></button>
+        <button class="btn btn-icon" title="View Details" style="background:transparent; border:none; color:var(--text2); cursor:pointer;" onclick="alert('Operation Details\\n\\nID: ${item.id}\\nMessage: ${item.error||item.status}\\nDate: ${fmtDate(item.timestamp)}')"><i data-lucide="eye" style="width:16px;height:16px;"></i></button>
       </td>
-    </tr>\`;
-  }).join('') || \`<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text2);">No records found.</td></tr>\`;
+    </tr>`;
+  }).join('') || `<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text2);">No records found.</td></tr>`;
   
   lucide.createIcons();
 }
@@ -2163,11 +2163,11 @@ function setHistoryPage(page) {
 }
 
 function exportHistoryLog() {
-  let csv = 'ID,Database,Type,Operation,Size(MB),Duration(s),Status,Timestamp\\n';
+  let csv = 'ID,Database,Type,Operation,Size(MB),Duration(s),Status,Timestamp\n';
   filteredHistoryItems.forEach(item => {
     const dbName = item.is_restore ? (item.target_connection_name || item.target_database_name) : (item.connection_name || item.database_name);
     const opStr = item.is_restore ? 'Restore' : 'Backup';
-    csv += \`\${item.id},\${dbName},\${item.backup_method||'full'},\${opStr},\${item.size_mb||''},\${item.duration_seconds||''},\${item.status},\${new Date(item.timestamp).toISOString()}\\n\`;
+    csv += `${item.id},${dbName},${item.backup_method||'full'},${opStr},${item.size_mb||''},${item.duration_seconds||''},${item.status},${new Date(item.timestamp).toISOString()}\n`;
   });
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
