@@ -389,19 +389,11 @@ tr:hover td{background:rgba(255,255,255,0.015)}
           </div>
           <div class="stat-card" style="padding:24px; background:var(--surface);">
             <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px;">
-              <div class="stat-label" style="text-transform:none; letter-spacing:0; color:var(--text2); font-weight:500; font-size:13px; margin:0;">Storage Used</div>
-              <i data-lucide="hard-drive" style="color:var(--text2); width:18px; height:18px;"></i>
+              <div class="stat-label" style="text-transform:none; letter-spacing:0; color:var(--text2); font-weight:500; font-size:13px; margin:0;">Restore Completed</div>
+              <i data-lucide="rotate-ccw" style="color:var(--text2); width:18px; height:18px;"></i>
             </div>
-            <div class="stat-value" style="font-size:28px; margin-bottom:8px;"><span id="stat-size">—</span> TB</div>
-            <div class="stat-sub" style="font-size:12px; margin:0;">of 2 TB available</div>
-          </div>
-          <div class="stat-card" style="padding:24px; background:var(--surface);">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px;">
-              <div class="stat-label" style="text-transform:none; letter-spacing:0; color:var(--text2); font-weight:500; font-size:13px; margin:0;">Next Scheduled</div>
-              <i data-lucide="clock" style="color:var(--text2); width:18px; height:18px;"></i>
-            </div>
-            <div class="stat-value" style="font-size:28px; margin-bottom:8px;">02:15</div>
-            <div class="stat-sub" style="font-size:12px; margin:0;">Daily full backup</div>
+            <div class="stat-value" id="stat-restores" style="font-size:28px; margin-bottom:8px;">—</div>
+            <div class="stat-sub" style="font-size:12px; margin:0;">total restores</div>
           </div>
         </div>
         
@@ -1160,10 +1152,9 @@ async function loadDashboard() {
       document.getElementById('stat-success').textContent = `${successRate}%`;
     }
     
-    const totalMb = stats.total_size_mb || 0;
-    const totalGb = (totalMb / 1024).toFixed(2);
-    if (document.getElementById('stat-size')) {
-      document.getElementById('stat-size').textContent = totalGb;
+    const totalRestores = stats.total_restores || 0;
+    if (document.getElementById('stat-restores')) {
+      document.getElementById('stat-restores').textContent = totalRestores;
     }
 
     const tbody = document.getElementById('recent-backups-table');
