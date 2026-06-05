@@ -302,6 +302,46 @@ tr:hover td{background:rgba(255,255,255,0.015)}
 
 /* ── Frequency badge styles ── */
 .freq-mixed{background:linear-gradient(135deg,var(--accent-dim),var(--accent2-dim));color:var(--accent);border:1px solid rgba(0,212,170,0.15)}
+
+/* ── Custom Radios ── */
+.radio-group { display: flex; gap: 12px; }
+.radio-card { flex: 1; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px 16px; background: rgba(255,255,255,0.02); cursor: pointer; display: flex; align-items: center; gap: 10px; transition: var(--transition); }
+.radio-card:hover { border-color: rgba(255,255,255,0.1); background: rgba(255,255,255,0.04); }
+.radio-card.active { border-color: #fff; background: rgba(255,255,255,0.08); }
+.radio-dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--muted); position: relative; display: flex; align-items: center; justify-content: center; }
+.radio-card.active .radio-dot { border-color: #fff; }
+.radio-card.active .radio-dot::after { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #fff; position: absolute; }
+.radio-label { font-size: 13px; font-weight: 500; color: var(--text2); }
+.radio-card.active .radio-label { color: #fff; font-weight: 600; }
+
+/* ── Custom Toggles ── */
+.toggle-card { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; background: rgba(255,255,255,0.02); }
+.toggle-info { display: flex; align-items: center; gap: 12px; flex: 1; }
+.toggle-icon { width: 32px; height: 32px; background: rgba(255,255,255,0.05); border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+.toggle-icon i { width: 16px; height: 16px; color: var(--text2); }
+.toggle-text h4 { font-size: 13px; font-weight: 600; color: #fff; margin-bottom: 2px; }
+.toggle-text p { font-size: 11px; color: var(--muted); }
+.switch { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.1); transition: .4s; border-radius: 22px; }
+.slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: #fff; transition: .4s; border-radius: 50%; }
+input:checked + .slider { background-color: #fff; }
+input:checked + .slider:before { transform: translateX(18px); background-color: #000; }
+
+/* ── Backup Page Layout ── */
+.backup-page-layout { display: flex; gap: 24px; }
+.backup-left { flex: 2; display: flex; flex-direction: column; gap: 24px; }
+.backup-right { flex: 1; display: flex; flex-direction: column; gap: 24px; }
+
+/* ── Database List ── */
+.db-list { display: flex; flex-direction: column; gap: 12px; }
+.db-item { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.db-item-left { display: flex; align-items: center; gap: 12px; }
+.db-item-icon { width: 36px; height: 36px; background: rgba(255,255,255,0.05); border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+.db-item-icon i { width: 16px; height: 16px; color: var(--text2); }
+.db-item-info h4 { font-size: 13px; font-weight: 600; color: #fff; margin-bottom: 4px; }
+.db-item-info .db-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.1); color: var(--text2); }
+.status-dot { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 8px var(--accent-glow); }
 </style>
 </head>
 <body>
@@ -317,28 +357,23 @@ tr:hover td{background:rgba(255,255,255,0.015)}
       </div>
     </div>
     <nav>
-      <div class="nav-section">Overview</div>
+      <div style="height:12px;"></div>
       <div class="nav-item active" onclick="showPage('dashboard')">
         <i data-lucide="layout-dashboard"></i> Dashboard
       </div>
-      <div class="nav-section">Management</div>
-      <div class="nav-item" onclick="showPage('databases')">
-        <i data-lucide="server"></i> Databases
-      </div>
-      <div class="nav-item" onclick="showPage('storage')">
-        <i data-lucide="cloud"></i> Storage
-      </div>
       <div class="nav-item" onclick="showPage('backups')">
-        <i data-lucide="hard-drive-download"></i> Backups
-      </div>
-      <div class="nav-item" onclick="showPage('schedules')">
-        <i data-lucide="calendar-clock"></i> Schedules
+        <i data-lucide="hard-drive"></i> Backup
       </div>
       <div class="nav-item" onclick="showPage('restores')">
-        <i data-lucide="rotate-ccw"></i> Restores
+        <i data-lucide="rotate-ccw"></i> Restore
       </div>
-      <div class="nav-section">Configuration</div>
-      <div class="nav-item" onclick="showPage('settings')">
+      <div class="nav-item" onclick="showPage('schedules')">
+        <i data-lucide="clock"></i> Schedule
+      </div>
+      <div class="nav-item" onclick="showPage('history')">
+        <i data-lucide="history"></i> History
+      </div>
+      <div class="nav-item" style="margin-top:24px;" onclick="showPage('settings')">
         <i data-lucide="settings"></i> Settings
       </div>
     </nav>
@@ -465,6 +500,141 @@ tr:hover td{background:rgba(255,255,255,0.015)}
 
       <!-- BACKUPS -->
       <div class="page" id="page-backups">
+        <div class="backup-page-layout">
+          <div class="backup-left">
+            <div class="card" style="border:none; background:var(--surface);">
+              <div class="card-header" style="border-bottom:none; padding:24px;">
+                <div>
+                  <div class="card-title" style="font-size:18px; margin-bottom:6px; font-weight:700;"><i data-lucide="zap" style="display:none"></i> New Backup</div>
+                  <div style="font-size:13px; color:var(--text2);">Configure and launch a database backup</div>
+                </div>
+              </div>
+              <div style="padding:0 24px 24px 24px;">
+                <div class="form-group mb-6">
+                  <label>Database</label>
+                  <select id="inline-bk-db" onchange="onInlineBackupDbChange()" style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                  </select>
+                </div>
+                <div class="form-group mb-6">
+                  <label>Backup Type</label>
+                  <div class="radio-group">
+                    <div class="radio-card active" onclick="selectRadio('bk-type-group', this, 'full')">
+                      <div class="radio-dot"></div>
+                      <div class="radio-label">Full Backup</div>
+                    </div>
+                    <div class="radio-card" onclick="selectRadio('bk-type-group', this, 'incremental')">
+                      <div class="radio-dot"></div>
+                      <div class="radio-label">Incremental</div>
+                    </div>
+                    <div class="radio-card" onclick="selectRadio('bk-type-group', this, 'differential')">
+                      <div class="radio-dot"></div>
+                      <div class="radio-label">Differential</div>
+                    </div>
+                  </div>
+                  <input type="hidden" id="inline-bk-type" value="full"/>
+                </div>
+                <div class="form-group mb-6">
+                  <label>Destination</label>
+                  <select id="inline-bk-storage" style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                  </select>
+                </div>
+                <div class="form-row mb-6">
+                  <div class="toggle-card">
+                    <div class="toggle-info">
+                      <div class="toggle-icon"><i data-lucide="file-archive"></i></div>
+                      <div class="toggle-text">
+                        <h4>Compression</h4>
+                        <p>Reduce backup size</p>
+                      </div>
+                    </div>
+                    <label class="switch">
+                      <input type="checkbox" id="inline-bk-compression" checked>
+                      <span class="slider"></span>
+                    </label>
+                  </div>
+                  <div class="toggle-card">
+                    <div class="toggle-info">
+                      <div class="toggle-icon"><i data-lucide="lock"></i></div>
+                      <div class="toggle-text">
+                        <h4>Encryption</h4>
+                        <p>AES-256 secure</p>
+                      </div>
+                    </div>
+                    <label class="switch">
+                      <input type="checkbox" id="inline-bk-encryption" checked>
+                      <span class="slider"></span>
+                    </label>
+                  </div>
+                </div>
+                
+                <!-- Advanced Options Toggle -->
+                <details style="margin-bottom:24px;">
+                  <summary style="cursor:pointer; color:var(--text2); font-size:13px; font-weight:500; outline:none; display:inline-flex; align-items:center; gap:6px;">Advanced Options <i data-lucide="chevron-down" style="width:14px;height:14px;"></i></summary>
+                  <div style="padding-top:16px; margin-top:12px; border-top:1px solid var(--border);">
+                    <div class="form-group mb-4">
+                      <label>Database Name</label>
+                      <select id="inline-bk-dbname" onchange="onInlineBackupDbnameChange()">
+                        <option value="">— select connection first —</option>
+                      </select>
+                    </div>
+                    <div class="form-group mb-4" id="inline-bk-collection-group" style="display:none">
+                      <label>Collection / Table</label>
+                      <select id="inline-bk-collection-select">
+                        <option value="">— select database name first —</option>
+                      </select>
+                    </div>
+                    <div class="form-group mb-4">
+                      <label>Indexing Mode</label>
+                      <select id="inline-bk-indexing-mode">
+                        <option value="with_index">Include Indexes (Default)</option>
+                        <option value="without_index">Exclude Indexes (Data Only)</option>
+                        <option value="only_index">Only Indexes (Schema Only)</option>
+                      </select>
+                    </div>
+                    <div class="form-group mb-4">
+                      <label>Speed Profile</label>
+                      <select id="inline-bk-speed-profile">
+                        <option value="default">Default</option>
+                        <option value="extreme">Extreme</option>
+                        <option value="balanced">Balanced</option>
+                        <option value="safe">Safe</option>
+                      </select>
+                    </div>
+                  </div>
+                </details>
+
+                <button class="btn btn-full" style="background:#ffffff; color:#000000; padding:14px; font-size:14px; box-shadow:0 4px 12px rgba(255,255,255,0.1); border-radius:var(--radius-sm);" onclick="runInlineBackup()"><i data-lucide="play" style="width:16px;height:16px;color:#000000"></i> Start Backup</button>
+              </div>
+            </div>
+          </div>
+          <div class="backup-right">
+            <div class="card" style="border:none; background:var(--surface);">
+              <div class="card-header" style="border-bottom:none; padding:20px 24px 10px 24px;">
+                <div class="card-title" style="font-size:15px; font-weight:600;"><i data-lucide="database" style="display:none"></i> Connected Databases</div>
+                <div style="font-size:12px; color:var(--text2); margin-top:4px;" id="inline-db-count">0 databases online</div>
+              </div>
+              <div style="padding:0 24px 24px 24px;" class="db-list" id="inline-db-list">
+                <!-- Dynamically populated -->
+              </div>
+            </div>
+            
+            <div class="card" style="border:none; background:var(--surface);">
+              <div class="card-header" style="border-bottom:none; padding:20px 24px 10px 24px;">
+                <div class="card-title" style="font-size:15px; font-weight:600;"><i data-lucide="activity" style="display:none"></i> Active Backups</div>
+                <div style="font-size:12px; color:var(--text2); margin-top:4px;">Currently running operations</div>
+              </div>
+              <div style="padding:0 24px 24px 24px;" id="inline-active-backup-container">
+                <div style="padding:24px; text-align:center; color:var(--text2); font-size:13px; background:rgba(255,255,255,0.02); border-radius:var(--radius-sm); border:1px solid var(--border);">
+                  No active operations
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- HISTORY (Old Backup History moved here) -->
+      <div class="page" id="page-history">
         <!-- Live progress card -->
         <div class="backup-live" id="backup-live-card">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
@@ -481,7 +651,6 @@ tr:hover td{background:rgba(255,255,255,0.015)}
             <div class="card-title"><i data-lucide="history"></i> Backup History</div>
             <div style="display:flex;gap:8px">
               <button class="btn btn-secondary btn-sm" onclick="loadBackups()"><i data-lucide="refresh-cw" style="width:14px;height:14px"></i> Refresh</button>
-              <button class="btn btn-primary btn-sm" onclick="openModal('backup-modal')"><i data-lucide="play" style="width:14px;height:14px"></i> Run Backup</button>
             </div>
           </div>
           <table>
@@ -1072,11 +1241,11 @@ function initApp() {
 // ---- NAVIGATION ----
 const pageIcons = {
   dashboard:'layout-dashboard',databases:'server',storage:'cloud',
-  backups:'hard-drive-download',schedules:'calendar-clock',restores:'rotate-ccw',settings:'settings'
+  backups:'hard-drive',schedules:'clock',restores:'rotate-ccw',history:'history',settings:'settings'
 };
 const pageTitles = {
   dashboard:'Dashboard',databases:'Databases',storage:'Storage Destinations',
-  backups:'Backup History',schedules:'Schedules',restores:'Restore History',settings:'Settings'
+  backups:'Backup',schedules:'Schedules',restores:'Restore',history:'Backup History',settings:'Settings'
 };
 
 function showPage(name) {
@@ -1099,10 +1268,144 @@ async function loadPage(name) {
   if(name==='dashboard') await loadDashboard();
   else if(name==='databases') await loadDatabases();
   else if(name==='storage') await loadStorage();
-  else if(name==='backups') await loadBackups();
+  else if(name==='backups') await loadBackupPage();
+  else if(name==='history') await loadBackups();
   else if(name==='schedules') await loadSchedules();
   else if(name==='restores') await loadRestores();
   else if(name==='settings') await loadSettings();
+}
+
+function selectRadio(groupName, element, value) {
+  document.querySelectorAll(`.radio-card[onclick*="${groupName}"]`).forEach(el => el.classList.remove('active'));
+  element.classList.add('active');
+  const hiddenInput = document.getElementById('inline-bk-type');
+  if (hiddenInput) hiddenInput.value = value;
+}
+
+const v = id => document.getElementById(id) ? document.getElementById(id).value : '';
+
+async function loadBackupPage() {
+  const dbs = await apiFetch('/databases/');
+  const sts = await apiFetch('/storage/');
+  const dbSelect = document.getElementById('inline-bk-db');
+  const stSelect = document.getElementById('inline-bk-storage');
+  
+  if(dbSelect) {
+    dbSelect.innerHTML = dbs.map(d=>`<option value="${d.id}" data-type="${d.type}">${d.name} \u2013 ${d.type==='postgresql'?'PostgreSQL':d.type==='mongodb'?'MongoDB':'Solr'}</option>`).join('');
+    if(dbs.length) onInlineBackupDbChange();
+  }
+  if(stSelect) {
+    stSelect.innerHTML = sts.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  }
+
+  // Populate right column - Connected DBs
+  const dbList = document.getElementById('inline-db-list');
+  const dbCount = document.getElementById('inline-db-count');
+  if(dbList) {
+    dbCount.textContent = `${dbs.length} databases online`;
+    dbList.innerHTML = dbs.map(d=>`
+      <div class="db-item">
+        <div class="db-item-left">
+          <div class="db-item-icon"><i data-lucide="database"></i></div>
+          <div class="db-item-info">
+            <h4>${d.name}</h4>
+            <span class="db-badge">${d.type==='postgresql'?'PostgreSQL':d.type==='mongodb'?'MongoDB':'Solr'}</span>
+          </div>
+        </div>
+        <div class="status-dot"></div>
+      </div>
+    `).join('');
+    lucide.createIcons();
+  }
+
+  // Active backups check
+  const backups = await apiFetch('/backups/');
+  const activeBackups = backups.filter(b => b.status === 'running');
+  const activeContainer = document.getElementById('inline-active-backup-container');
+  if(activeContainer) {
+    if(activeBackups.length > 0) {
+      activeContainer.innerHTML = activeBackups.map(b => `
+        <div style="padding:16px; background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:var(--radius-sm); margin-bottom:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <div style="font-weight:600; font-size:13px; display:flex; align-items:center; gap:8px;">
+              <i data-lucide="database" style="width:14px; height:14px; color:var(--text2);"></i> ${b.database_name || 'Database'}
+            </div>
+            <div style="background:rgba(0, 212, 170, 0.2); color:var(--accent); font-size:10px; font-weight:700; padding:4px 8px; border-radius:12px; display:flex; align-items:center; gap:4px;">
+              <i data-lucide="loader" style="width:10px; height:10px; animation: spin 2s linear infinite;"></i> Active
+            </div>
+          </div>
+          <div style="font-size:11px; color:var(--text2); margin-bottom:8px;">Backup in progress...</div>
+          <div class="progress-wrap" style="height:4px; margin-top:0; margin-bottom:8px;">
+            <div class="progress-bar" style="width:${b.progress_percentage || 0}%"></div>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text2);">
+            <span><i data-lucide="clock" style="width:10px; height:10px;"></i> Running</span>
+            <span>${b.progress_percentage || 0}%</span>
+          </div>
+        </div>
+      `).join('');
+      lucide.createIcons();
+    } else {
+      activeContainer.innerHTML = `<div style="padding:24px; text-align:center; color:var(--text2); font-size:13px; background:rgba(255,255,255,0.02); border-radius:var(--radius-sm); border:1px solid var(--border);">No active operations</div>`;
+    }
+  }
+}
+
+async function onInlineBackupDbChange() {
+  const dbId = v('inline-bk-db');
+  if(!dbId) return;
+  const dbnameEl = document.getElementById('inline-bk-dbname');
+  if(!dbnameEl) return;
+
+  dbnameEl.innerHTML = '<option>Loading...</option>';
+  try {
+    const r = await apiFetch(`/databases/${dbId}/databases`);
+    dbnameEl.innerHTML = r.databases.map(d=>`<option value="${d}">${d}</option>`).join('');
+    onInlineBackupDbnameChange();
+  } catch(e) {
+    dbnameEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
+  }
+}
+
+async function onInlineBackupDbnameChange() {
+  const dbId = v('inline-bk-db');
+  const dbname = v('inline-bk-dbname');
+  if(!dbId || !dbname) return;
+
+  const collEl = document.getElementById('inline-bk-collection-select');
+  if(!collEl) return;
+  collEl.innerHTML = '<option>Loading collections...</option>';
+  try {
+    const r = await apiFetch(`/databases/${dbId}/collections?database=${encodeURIComponent(dbname)}`);
+    collEl.innerHTML = r.collections.map(c=>`<option value="${c}">${c}</option>`).join('');
+  } catch(e) {
+    collEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
+  }
+}
+
+async function runInlineBackup() {
+  const dbId = v('inline-bk-db');
+  const dbname = v('inline-bk-dbname') || '';
+  const type = document.getElementById('inline-bk-type').value; // full, incremental, differential
+  const collection = (type !== 'full') ? v('inline-bk-collection-select') : '';
+  const label = `backup-${Date.now()}`;
+  
+  if(!dbId){ toast('Select a database connection','error'); return; }
+  
+  const indexingMode = v('inline-bk-indexing-mode') || 'with_index';
+  const speedProfile = v('inline-bk-speed-profile') || 'default';
+  
+  if (dbname) {
+    try { await apiFetch(`/databases/${dbId}`, {method:'PATCH', body: JSON.stringify({database_name: dbname})}); } catch(e){}
+  }
+  
+  try {
+    const b = await apiFetch('/backups/',{method:'POST',body:JSON.stringify({
+      database_id:dbId, storage_id:v('inline-bk-storage'), label, collection, indexing_mode: indexingMode, send_notifications: true, speed_profile: speedProfile
+    })});
+    toast('Backup started!','info');
+    loadBackupPage();
+  } catch(e) { toast(e.message,'error'); }
 }
 
 // ---- API HELPERS ----
