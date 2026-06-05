@@ -424,6 +424,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     processes = []
     if tracker:
         ACTIVE_PROCESSES[tracker.job_id] = processes
+        if tracker.job_id in ACTIVE_STOP_EVENTS and ACTIVE_STOP_EVENTS[tracker.job_id].is_set():
+            raise RuntimeError("Backup cancelled by user.")
     pipe_thread = None
     stderr_thread = None
     
@@ -489,8 +491,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
         raise RuntimeError(f"Failed to start subprocesses: {e}")
 
     q = queue.Queue(maxsize=settings["queue_max"])
-    stop_event = threading.Event()
-    if tracker:
+    stop_event = ACTIVE_STOP_EVENTS.get(tracker.job_id) if tracker else threading.Event()
+    if tracker and tracker.job_id not in ACTIVE_STOP_EVENTS:
         ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
     
     reader_tracker = tracker if (not compression_cmd and not is_mongo) else None
@@ -582,10 +584,13 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
     settings = get_speed_settings(speed_profile)
     
     processes = []
-    stop_event = threading.Event()
+    stop_event = ACTIVE_STOP_EVENTS.get(tracker.job_id) if tracker else threading.Event()
     if tracker:
         ACTIVE_PROCESSES[tracker.job_id] = processes
-        ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
+        if tracker.job_id not in ACTIVE_STOP_EVENTS:
+            ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
+        if stop_event.is_set():
+            raise RuntimeError("Restore cancelled by user.")
     stderr_thread = None
     
     is_mongo = "mongorestore" in cmd[0]
@@ -1167,6 +1172,7 @@ def update_restore(restore_id: str, **kwargs):
 # ─── MAIN BACKUP TASK ────────────────────────────────────────────────────────
 
 def do_backup(backup_id: str):
+    ACTIVE_STOP_EVENTS[backup_id] = threading.Event()
     start = datetime.utcnow()
     tmp_dir = os.path.join(BACKUP_TMP, backup_id)
     os.makedirs(tmp_dir, exist_ok=True)
@@ -1281,6 +1287,7 @@ def do_backup(backup_id: str):
 # ─── MAIN RESTORE TASK ───────────────────────────────────────────────────────
 
 def do_restore(restore_id: str):
+    ACTIVE_STOP_EVENTS[restore_id] = threading.Event()
     start = datetime.utcnow()
     tmp_dir = os.path.join(BACKUP_TMP, f"restore_{restore_id}")
     os.makedirs(tmp_dir, exist_ok=True)

@@ -290,12 +290,11 @@ def cancel_backup(backup_id: str, user=Depends(get_current_user)):
     for b in backups:
         if b["id"] == backup_id:
             if b.get("status") == "running":
-                if cancel_job(backup_id):
-                    b["status"] = "failed"
-                    b["error"] = "Cancelled by user"
-                    write_json("data/backups.json", backups)
-                    return {"success": True, "message": "Backup cancelled"}
-                return {"success": False, "message": "Could not cancel backup (process not found)"}
+                cancel_job(backup_id)
+                b["status"] = "failed"
+                b["error"] = "Cancelled by user"
+                write_json("data/backups.json", backups)
+                return {"success": True, "message": "Backup cancelled"}
             return {"success": False, "message": "Backup is not running"}
     raise HTTPException(404, "Backup not found")
 
@@ -308,11 +307,10 @@ def cancel_restore(restore_id: str, user=Depends(get_current_user)):
     for r in restores:
         if r["id"] == restore_id:
             if r.get("status") == "running":
-                if cancel_job(restore_id):
-                    r["status"] = "failed"
-                    r["error"] = "Cancelled by user"
-                    write_json("data/restores.json", restores)
-                    return {"success": True, "message": "Restore cancelled"}
-                return {"success": False, "message": "Could not cancel restore (process not found)"}
+                cancel_job(restore_id)
+                r["status"] = "failed"
+                r["error"] = "Cancelled by user"
+                write_json("data/restores.json", restores)
+                return {"success": True, "message": "Restore cancelled"}
             return {"success": False, "message": "Restore is not running"}
     raise HTTPException(404, "Restore not found")
