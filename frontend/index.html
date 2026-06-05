@@ -1282,7 +1282,6 @@ function selectRadio(groupName, element, value) {
   if (hiddenInput) hiddenInput.value = value;
 }
 
-const v = id => document.getElementById(id) ? document.getElementById(id).value : '';
 
 async function loadBackupPage() {
   const dbs = await apiFetch('/databases/');
