@@ -1149,14 +1149,22 @@ async function loadDashboard() {
     const recentFails = recent5.filter(b => b.status === 'failed').length;
     healthScore = Math.max(0, healthScore - (recentFails * 5));
 
-    document.getElementById('stat-total').textContent = total;
-    document.getElementById('stat-success').textContent = `${successRate}%`;
+    const dbsCount = stats.databases || 0;
+    if (document.getElementById('stat-dbs')) {
+      document.getElementById('stat-dbs').textContent = dbsCount;
+    }
+    if (document.getElementById('stat-completed')) {
+      document.getElementById('stat-completed').textContent = completed.toLocaleString();
+    }
+    if (document.getElementById('stat-success')) {
+      document.getElementById('stat-success').textContent = `${successRate}%`;
+    }
     
     const totalMb = stats.total_size_mb || 0;
-    const totalGb = (totalMb / 1024).toFixed(1);
-    document.getElementById('stat-size').textContent = totalGb;
-    
-    document.getElementById('stat-health').textContent = `${healthScore}/100`;
+    const totalGb = (totalMb / 1024).toFixed(2);
+    if (document.getElementById('stat-size')) {
+      document.getElementById('stat-size').textContent = totalGb;
+    }
 
     const tbody = document.getElementById('recent-backups-table');
     tbody.innerHTML = backups.slice(0,8).map(b=>{
