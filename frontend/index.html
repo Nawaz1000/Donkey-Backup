@@ -2141,10 +2141,10 @@ function renderHistoryTable() {
       <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${sizeStr}</td>
       <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${opStr}</td>
       <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${durStr}</td>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${fmtDate(item.timestamp)}</td>
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${fmtDate(new Date(item.timestamp).toISOString())}</td>
       <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);">${statusBadgeHtml}</td>
       <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);">
-        <button class="btn btn-icon" title="View Details" style="background:transparent; border:none; color:var(--text2); cursor:pointer;" onclick="alert('Operation Details\\n\\nID: ${item.id}\\nMessage: ${item.error||item.status}\\nDate: ${fmtDate(item.timestamp)}')"><i data-lucide="eye" style="width:16px;height:16px;"></i></button>
+        <button class="btn btn-icon" title="View Details" style="background:transparent; border:none; color:var(--text2); cursor:pointer;" onclick="alert('Operation Details\\n\\nID: ${item.id}\\nMessage: ${item.error||item.status}\\nDate: ${fmtDate(new Date(item.timestamp).toISOString())}')"><i data-lucide="eye" style="width:16px;height:16px;"></i></button>
       </td>
     </tr>`;
   }).join('') || `<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text2);">No records found.</td></tr>`;
