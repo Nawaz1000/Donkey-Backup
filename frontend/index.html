@@ -649,20 +649,74 @@ input:checked + .slider:before { transform: translateX(18px); background-color: 
           <div class="progress-label" id="live-pct">0%</div>
           <div id="live-logs" style="margin-top:14px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-xs);padding:12px 14px;font-family:'SF Mono','Cascadia Code',monospace;font-size:12px;max-height:140px;overflow-y:auto;line-height:1.9"></div>
         </div>
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title"><i data-lucide="history"></i> Backup History</div>
-            <div style="display:flex;gap:8px">
-              <button class="btn btn-secondary btn-sm" onclick="loadBackups()"><i data-lucide="refresh-cw" style="width:14px;height:14px"></i> Refresh</button>
+
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:24px;">
+          <div>
+            <h2 style="font-size:24px; font-weight:700; color:#fff; margin-bottom:4px;">History</h2>
+            <div style="font-size:14px; color:var(--text2);">Complete log of all backup and restore operations</div>
+          </div>
+          <button class="btn btn-secondary btn-sm" style="background:var(--surface); border:1px solid var(--border);" onclick="exportHistoryLog()"><i data-lucide="download" style="width:14px;height:14px;"></i> Export Log</button>
+        </div>
+
+        <div class="card" style="border:none; background:var(--surface); margin-bottom:24px; padding:20px;">
+          <div style="display:flex; gap:16px; align-items:center;">
+            <div style="flex:1; position:relative;">
+              <i data-lucide="search" style="position:absolute; left:14px; top:50%; transform:translateY(-50%); width:16px; height:16px; color:var(--text2);"></i>
+              <input type="text" id="history-search" placeholder="Search by database name..." style="width:100%; background:var(--bg); border:1px solid transparent; padding:12px 14px 12px 40px; border-radius:var(--radius-sm); color:#fff; font-size:13px; outline:none; box-sizing:border-box;" onkeyup="filterHistory()">
+            </div>
+            <select id="history-type-filter" style="background:var(--bg); border:1px solid transparent; padding:12px 16px; border-radius:var(--radius-sm); color:#fff; font-size:13px; outline:none; width:160px;" onchange="filterHistory()">
+              <option value="all">All Types</option>
+              <option value="backup">Backup</option>
+              <option value="restore">Restore</option>
+            </select>
+            <select id="history-status-filter" style="background:var(--bg); border:1px solid transparent; padding:12px 16px; border-radius:var(--radius-sm); color:#fff; font-size:13px; outline:none; width:160px;" onchange="filterHistory()">
+              <option value="all">All Status</option>
+              <option value="completed">Completed</option>
+              <option value="failed">Failed</option>
+              <option value="running">Running</option>
+            </select>
+            <select id="history-time-filter" style="background:var(--bg); border:1px solid transparent; padding:12px 16px; border-radius:var(--radius-sm); color:#fff; font-size:13px; outline:none; width:160px;" onchange="filterHistory()">
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="all">All time</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="card" style="border:none; background:var(--surface);">
+          <table style="width:100%; text-align:left; border-collapse:collapse;">
+            <thead>
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2); font-size:13px;">
+                <th style="padding:16px 24px; font-weight:500;">#</th>
+                <th style="padding:16px 24px; font-weight:500;">Database</th>
+                <th style="padding:16px 24px; font-weight:500;">Type</th>
+                <th style="padding:16px 24px; font-weight:500;">Size</th>
+                <th style="padding:16px 24px; font-weight:500;">Operation</th>
+                <th style="padding:16px 24px; font-weight:500;">Duration</th>
+                <th style="padding:16px 24px; font-weight:500;">Timestamp</th>
+                <th style="padding:16px 24px; font-weight:500;">Status</th>
+                <th style="padding:16px 24px; font-weight:500;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="history-table-body">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+          
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:20px 24px; border-top:1px solid rgba(255,255,255,0.05);">
+            <div style="font-size:13px; color:var(--text2);" id="history-pagination-info">Showing 0 results</div>
+            <div style="display:flex; gap:8px;" id="history-pagination-controls">
+              <!-- Pagination buttons injected here -->
             </div>
           </div>
-          <table>
-            <thead><tr><th>Label</th><th>Database</th><th>Storage</th><th>Status</th><th>Size (MB)</th><th>Duration</th><th>Date</th><th></th></tr></thead>
-            <tbody id="backups-table"></tbody>
-          </table>
         </div>
       </div>
 
+      <style>
+        .time-opt { padding:10px 20px; color:#333; cursor:pointer; text-align:center; font-weight:600; font-size:14px; transition:background 0.2s; }
+        .time-opt:hover { background:#f5f5f5; }
+        .time-opt.active { background:var(--accent); color:#fff; }
+      </style>
       <!-- SCHEDULES -->
       <div class="page" id="page-schedules">
         <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:24px;">
@@ -741,9 +795,23 @@ input:checked + .slider:before { transform: translateX(18px); background-color: 
                   </div>
                   <div class="form-group" style="flex:1;">
                     <label>Time</label>
-                    <div style="display:flex; align-items:center; background:var(--surface-solid); border:1px solid var(--border); border-radius:var(--radius-sm); padding:0 16px;">
-                      <i data-lucide="clock" style="width:16px; height:16px; color:var(--text2);"></i>
-                      <input type="time" id="inline-sc-time" value="02:15" style="background:transparent; border:none; padding:14px 12px; font-weight:500; color:#fff; outline:none; flex:1;">
+                    <div style="position:relative;" id="custom-time-picker">
+                      <div style="display:flex; align-items:center; background:var(--surface-solid); border:1px solid var(--border); border-radius:var(--radius-sm); padding:0 16px; cursor:pointer;" onclick="toggleTimeDropdown(event)">
+                        <i data-lucide="clock" style="width:16px; height:16px; color:var(--text2);"></i>
+                        <input type="hidden" id="inline-sc-time" value="02:15">
+                        <div id="inline-sc-time-display" style="padding:14px 12px; font-weight:700; color:#fff; flex:1;">02:15 AM</div>
+                      </div>
+                      <div id="time-dropdown" style="display:none; position:absolute; top:calc(100% + 8px); left:0; background:#fff; border-radius:4px; box-shadow:0 10px 30px rgba(0,0,0,0.5); z-index:100; flex-direction:row; overflow:hidden;">
+                        <!-- Hours -->
+                        <div style="display:flex; flex-direction:column; max-height:220px; overflow-y:auto; border-right:1px solid #eee; scrollbar-width:none;" id="time-hours"></div>
+                        <!-- Minutes -->
+                        <div style="display:flex; flex-direction:column; max-height:220px; overflow-y:auto; border-right:1px solid #eee; scrollbar-width:none;" id="time-minutes"></div>
+                        <!-- AM/PM -->
+                        <div style="display:flex; flex-direction:column; max-height:220px; overflow-y:auto;" id="time-ampm">
+                          <div class="time-opt time-ampm-opt active" onclick="selectTimeAmpm('AM', event)">AM</div>
+                          <div class="time-opt time-ampm-opt" onclick="selectTimeAmpm('PM', event)">PM</div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1374,6 +1442,7 @@ let currentUser = {id:'local',name:'Admin',email:'admin@local'};
 function initApp() {
   document.getElementById('app').style.display='flex';
   showPage('dashboard');
+  if(typeof initTimePicker === 'function') initTimePicker();
   lucide.createIcons();
 }
 
@@ -1973,39 +2042,26 @@ async function saveEditStorage() {
 }
 
 // ---- BACKUPS ----
+let allHistoryItems = [];
+let filteredHistoryItems = [];
+let historyCurrentPage = 1;
+const HISTORY_ITEMS_PER_PAGE = 8;
+
 async function loadBackups() {
-  const btn = document.querySelector("#page-backups .btn-secondary");
+  const btn = document.querySelector("#page-history .btn-secondary");
   if(btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Loading'; }
   try {
-    const backups = await apiFetch('/backups/');
-    const tbody = document.getElementById('backups-table');
-    tbody.innerHTML = backups.map(b=>`
-      <tr>
-        <td class="mono text-sm">${b.label}</td>
-        <td>
-          <div style="font-weight:600">${dbBadge(b.database_type)} ${b.connection_name || b.database_name}</div>
-          <div class="text-muted text-sm" style="margin-top:4px">DB: ${b.actual_db_name || 'All'}</div>
-          ${b.collection && b.collection !== 'full' ? `<div class="text-muted text-sm">Table/Coll: ${b.collection}</div>` : ''}
-        </td>
-        <td>${storageBadge(b.storage_type)} ${b.storage_name}</td>
-        <td>
-          ${statusBadge(b.status)}
-          ${b.status==='failed'&&b.error?`
-            <div style="color:var(--danger);font-size:11px;margin-top:6px;background:var(--danger-dim);border:1px solid rgba(239,68,68,0.15);border-radius:var(--radius-xs);padding:6px 8px;max-width:300px;word-break:break-word;white-space:pre-wrap;">
-              ${escHtml(b.error.split('\n').slice(0,3).join('\n'))}
-            </div>` : ''}
-        </td>
-        <td>${b.size_mb??'—'}</td>
-        <td>${formatDuration(b.duration_seconds)}</td>
-        <td class="text-muted text-sm">${fmtDate(b.created_at)}</td>
-        <td><div class="actions">
-          ${b.status==='running'?`<button class="btn btn-danger btn-sm btn-icon" onclick="cancelJob('${b.id}', 'backups')" title="Stop Job"><i data-lucide="square" style="width:14px;height:14px"></i></button>`:''}
-          ${b.status==='completed'?`<button class="btn btn-secondary btn-sm" onclick="openRestoreFromBackup('${b.id}','${b.label.replace(/'/g,"\\'")}')"><i data-lucide="rotate-ccw" style="width:13px;height:13px"></i> Restore</button>`:''}
-          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}', false)" title="Delete History"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
-          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}', true)" title="Delete from Cloud Storage"><i data-lucide="cloud-off" style="width:14px;height:14px"></i></button>
-        </div></td>
-      </tr>`).join('')||emptyRow(8,'No backups yet. Click "Run Backup" to start.');
-    lucide.createIcons();
+    const [backups, restores] = await Promise.all([
+      apiFetch('/backups/'),
+      apiFetch('/backups/restores')
+    ]);
+    
+    allHistoryItems = [
+      ...backups.map(b => ({ ...b, is_restore: false, timestamp: new Date(b.created_at).getTime() })),
+      ...restores.map(r => ({ ...r, is_restore: true, timestamp: new Date(r.started_at).getTime() }))
+    ].sort((a, b) => b.timestamp - a.timestamp);
+    
+    filterHistory();
     
     // Auto-resume live progress tracking for running backups
     const runningBackup = backups.find(b => b.status === 'running');
