@@ -620,19 +620,12 @@ input:checked + .slider:before { transform: translateX(18px); background-color: 
                 <!-- Dynamically populated -->
               </div>
             </div>
-            
-            <div class="card" style="border:none; background:var(--surface);">
-              <div class="card-header" style="border-bottom:none; padding:20px 24px 10px 24px;">
-                <div class="card-title" style="font-size:15px; font-weight:600;"><i data-lucide="activity" style="display:none"></i> Active Backups</div>
-                <div style="font-size:12px; color:var(--text2); margin-top:4px;">Currently running operations</div>
-              </div>
-              <div style="padding:0 24px 24px 24px;" id="inline-active-backup-container">
-                <div style="padding:24px; text-align:center; color:var(--text2); font-size:13px; background:rgba(255,255,255,0.02); border-radius:var(--radius-sm); border:1px solid var(--border);">
-                  No active operations
-                </div>
-              </div>
-            </div>
           </div>
+        </div>
+        
+        <!-- Full-Width Active Backups Section -->
+        <div id="inline-active-backup-container" style="margin-top:24px;">
+          <!-- Active operations will be injected here -->
         </div>
       </div>
 
@@ -883,29 +876,63 @@ input:checked + .slider:before { transform: translateX(18px); background-color: 
 
       <!-- RESTORES -->
       <div class="page" id="page-restores">
-        <!-- Live restore progress card -->
-        <div class="backup-live" id="restore-live-card">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-            <div style="font-weight:700;font-size:15px;display:flex;align-items:center;gap:10px"><i data-lucide="rotate-ccw" style="width:18px;height:18px;color:var(--accent2)"></i> Restore In Progress</div>
-            <span class="badge badge-orange" id="restore-pct-badge">0%</span>
-          </div>
-          <div style="font-size:13px;color:var(--muted);margin-bottom:10px" id="restore-live-label">—</div>
-          <div class="progress-wrap"><div class="progress-bar" id="restore-bar" style="width:0%"></div></div>
-          <div class="progress-label" id="restore-pct">0%</div>
-          <div id="restore-logs" style="margin-top:14px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-xs);padding:12px 14px;font-family:'SF Mono','Cascadia Code',monospace;font-size:12px;max-height:140px;overflow-y:auto;line-height:1.9"></div>
-        </div>
-        <div class="card" style="margin-bottom:24px">
-          <div class="card-header">
-            <div class="card-title"><i data-lucide="rotate-ccw"></i> Restore History</div>
-            <div style="display:flex;gap:8px">
-              <button class="btn btn-secondary btn-sm" onclick="loadRestores()"><i data-lucide="refresh-cw" style="width:14px;height:14px"></i> Refresh</button>
-              <button class="btn btn-primary btn-sm" onclick="openModal('restore-modal')"><i data-lucide="rotate-ccw" style="width:14px;height:14px"></i> New Restore</button>
+        <div class="backup-page-layout">
+          <div class="backup-left">
+            <div class="card" style="border:none; background:var(--surface);">
+              <div class="card-header" style="border-bottom:none; padding:24px;">
+                <div>
+                  <div class="card-title" style="font-size:18px; margin-bottom:6px; font-weight:700;"><i data-lucide="rotate-ccw" style="display:none"></i> New Restore</div>
+                  <div style="font-size:13px; color:var(--text2);">Configure and launch a database restore operation</div>
+                </div>
+              </div>
+              <div style="padding:0 24px 24px 24px;">
+                <div class="form-group mb-6">
+                  <label>Source Backup</label>
+                  <select id="inline-rs-backup" style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                  </select>
+                </div>
+                <div class="form-group mb-6">
+                  <label>Target Connection</label>
+                  <select id="inline-rs-target" onchange="onInlineRestoreTargetChange()" style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                  </select>
+                </div>
+                
+                <!-- Advanced Options Toggle -->
+                <details style="margin-bottom:24px;">
+                  <summary style="cursor:pointer; color:var(--text2); font-size:13px; font-weight:500; outline:none; display:inline-flex; align-items:center; gap:6px;">Advanced Options <i data-lucide="chevron-down" style="width:14px;height:14px;"></i></summary>
+                  <div style="padding-top:16px; margin-top:12px; border-top:1px solid var(--border);">
+                    <div class="form-group mb-4">
+                      <label>Target Database Name</label>
+                      <select id="inline-rs-dbname">
+                        <option value="">— select connection first —</option>
+                      </select>
+                    </div>
+                  </div>
+                </details>
+
+                <button class="btn btn-full" style="background:#ffffff; color:#000000; padding:14px; font-size:14px; box-shadow:0 4px 12px rgba(255,255,255,0.1); border-radius:var(--radius-sm);" onclick="runInlineRestore()"><i data-lucide="rotate-ccw" style="width:16px;height:16px;color:#000000"></i> Start Restore</button>
+              </div>
             </div>
           </div>
-          <table>
-            <thead><tr><th>Backup Label</th><th>Collection</th><th>Target Database</th><th>Status</th><th>Duration</th><th>Date</th><th>Actions</th></tr></thead>
-            <tbody id="restores-table"></tbody>
-          </table>
+          <div class="backup-right">
+            <div class="card" style="border:none; background:var(--surface);">
+              <div class="card-header" style="border-bottom:none; padding:20px 24px 10px 24px; display:flex; justify-content:space-between; align-items:flex-start;">
+                <div>
+                  <div class="card-title" style="font-size:15px; font-weight:600;"><i data-lucide="database" style="display:none"></i> Connected Databases</div>
+                  <div style="font-size:12px; color:var(--text2); margin-top:4px;" id="inline-rs-db-count">0 databases online</div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="openModal('db-modal')"><i data-lucide="plus" style="width:14px;height:14px"></i> Add Database</button>
+              </div>
+              <div style="padding:0 24px 24px 24px;" class="db-list" id="inline-rs-db-list">
+                <!-- Dynamically populated -->
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Full-Width Active Restores Section -->
+        <div id="inline-active-restore-container" style="margin-top:24px;">
+          <!-- Active operations will be injected here -->
         </div>
       </div>
 
@@ -1613,6 +1640,65 @@ async function runInlineBackup() {
     toast('Backup started!','info');
     loadBackupPage();
   } catch(e) { toast(e.message,'error'); }
+}
+
+async function runInlineRestore() {
+  const backupId = v('inline-rs-backup');
+  const targetDbId = v('inline-rs-target');
+  const targetDbname = v('inline-rs-dbname') || '';
+
+  if(!backupId){ toast('Select a backup to restore','error'); return; }
+  if(!targetDbId){ toast('Select a target database connection','error'); return; }
+  if(!targetDbname){ toast('Select a target database name','error'); return; }
+
+  if(!confirm(`Restore to "${targetDbname}"? Existing data will be overwritten.`)) return;
+
+  try {
+    const r = await apiFetch('/backups/restore', {
+      method:'POST', 
+      body:JSON.stringify({
+        backup_id: backupId,
+        target_database_id: targetDbId,
+        new_database: false,
+        new_database_name: targetDbname,
+        indexing_mode: 'with_index',
+        speed_profile: 'default'
+      })
+    });
+    toast('Restore started!', 'info');
+    trackActiveOperation('restore', r.id, `Restoring ${backupId.substring(0,8)}... to ${targetDbname}`);
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function onInlineRestoreTargetChange() {
+  const targetId = v('inline-rs-target');
+  if(!targetId) return;
+  const dbnameEl = document.getElementById('inline-rs-dbname');
+  if(!dbnameEl) return;
+
+  dbnameEl.innerHTML = '<option>Loading databases...</option>';
+  try {
+    const r = await apiFetch(`/databases/${targetId}/names`);
+    dbnameEl.innerHTML = r.names.map(n=>`<option value="${n}">${n}</option>`).join('');
+  } catch(e) {
+    dbnameEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
+  }
+}
+
+async function populateInlineRestoreSelects() {
+  try {
+    const [backups, dbs] = await Promise.all([
+      apiFetch('/backups/'),
+      apiFetch('/databases/')
+    ]);
+    const bEl = document.getElementById('inline-rs-backup');
+    if(bEl) bEl.innerHTML = backups.filter(b=>b.status==='completed').map(b=>`<option value="${b.id}">${b.label} (${b.database_name})</option>`).join('');
+    
+    const tEl = document.getElementById('inline-rs-target');
+    if(tEl) tEl.innerHTML = dbs.map(d=>`<option value="${d.id}">${d.name} (${d.type})</option>`).join('');
+    
+    if(dbs.length) onInlineRestoreTargetChange();
+  } catch(e) {}
 }
 
 // ---- API HELPERS ----
@@ -2325,71 +2411,102 @@ async function startBackupNow(dbId, storageId, label, collection='', indexingMod
   } catch(e) { toast(e.message,'error'); }
 }
 
-let progressInterval = null;
-function simulateProgress(backupId, label) {
-  const card = document.getElementById('backup-live-card');
-  const bar = document.getElementById('live-bar');
-  const pct = document.getElementById('live-pct');
-  const badge = document.getElementById('live-pct-badge');
-  const lbl = document.getElementById('live-label');
-  const logsEl = document.getElementById('live-logs');
+let activeOpInterval = null;
 
-  card.classList.add('active');
-  lbl.textContent = label;
-  logsEl.innerHTML = '<div style="color:var(--muted)">Starting backup...</div>';
+// Shared function to render full-width active job container
+function renderActiveJob(containerId, opType, jobId, label) {
+  const container = document.getElementById(containerId);
+  if(!container) return;
+  const icon = opType === 'restore' ? 'rotate-ccw' : 'zap';
+  const color = opType === 'restore' ? 'var(--accent2)' : 'var(--warn)';
+  
+  container.innerHTML = `
+    <div class="card" style="border:1px solid rgba(255,255,255,0.1); background:var(--surface);">
+      <div style="padding:24px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div style="font-size:18px; font-weight:700; display:flex; align-items:center; gap:10px;">
+            <i data-lucide="${icon}" style="width:20px;height:20px;color:${color}"></i> Active ${opType === 'restore' ? 'Restore' : 'Backup'}
+          </div>
+          <div style="font-size:13px; color:var(--text2); margin-top:6px;">${label || jobId}</div>
+        </div>
+        <span class="badge badge-orange" id="${opType}-pct-badge" style="font-size:16px; padding:6px 12px; border:1px solid rgba(255,255,255,0.2);">0%</span>
+      </div>
+      <div style="padding:24px;">
+        <div class="progress-wrap" style="height:12px; margin-bottom:8px; border-radius:6px; background:var(--surface-solid); overflow:hidden;">
+          <div class="progress-bar" id="${opType}-bar" style="width:0%; border-radius:6px; background:${color};"></div>
+        </div>
+        <div class="progress-label" id="${opType}-pct" style="display:none;">0%</div>
+        <div id="${opType}-logs" style="margin-top:20px; background:#0a0a0a; border:1px solid rgba(255,255,255,0.05); border-radius:var(--radius-sm); padding:16px; font-family:'SF Mono','Cascadia Code',monospace; font-size:13px; height:250px; overflow-y:auto; line-height:1.8; box-shadow:inset 0 2px 10px rgba(0,0,0,0.5);">
+          <div style="color:var(--text2)">Initializing operation...</div>
+        </div>
+      </div>
+    </div>
+  `;
+  lucide.createIcons();
+}
+
+function trackActiveOperation(opType, jobId, label) {
+  const containerId = opType === 'restore' ? 'inline-active-restore-container' : 'inline-active-backup-container';
+  const apiBase = opType === 'restore' ? '/backups/restores' : '/backups/';
+  const logApi = opType === 'restore' ? `/backups/restores/${jobId}/logs` : `/backups/${jobId}/logs`;
+  
+  renderActiveJob(containerId, opType, jobId, label);
+  
+  const bar = document.getElementById(`${opType}-bar`);
+  const badge = document.getElementById(`${opType}-pct-badge`);
+  const logsEl = document.getElementById(`${opType}-logs`);
   let lastLogLen = 0;
-
-  if(progressInterval) clearInterval(progressInterval);
-
-  progressInterval = setInterval(async () => {
+  
+  if(activeOpInterval) clearInterval(activeOpInterval);
+  
+  activeOpInterval = setInterval(async () => {
     try {
-      const [backups, logData] = await Promise.all([
-        apiFetch('/backups/'),
-        apiFetch(`/backups/${backupId}/logs`).catch(()=>null)
+      const [list, logData] = await Promise.all([
+        apiFetch(apiBase),
+        apiFetch(logApi).catch(()=>null)
       ]);
-      const b = backups.find(x=>x.id===backupId);
-
+      const job = list.find(x => x.id === jobId);
+      
       if(logData && logData.logs && logData.logs.length !== lastLogLen) {
         lastLogLen = logData.logs.length;
         const lines = logData.logs.split('\n').filter(Boolean);
         logsEl.innerHTML = lines.map(l => {
           const isErr = l.toLowerCase().includes('error') || l.toLowerCase().includes('fail');
           const isOk = l.toLowerCase().includes('complete') || l.toLowerCase().includes('success');
-          const color = isErr ? 'var(--danger)' : isOk ? 'var(--accent)' : 'var(--muted)';
+          const color = isErr ? 'var(--danger)' : isOk ? 'var(--accent)' : 'var(--text2)';
           return `<div style="color:${color}">${escHtml(l)}</div>`;
         }).join('');
         logsEl.scrollTop = logsEl.scrollHeight;
       }
-
-      if(b && b.status === 'completed') {
-        clearInterval(progressInterval);
-        bar.style.width = '100%'; pct.textContent = '100%';
-        badge.textContent = '100%'; badge.className = 'badge badge-green';
-        badge.style.color = 'var(--accent)';
-        logsEl.innerHTML += `<div style="color:var(--accent)">✓ Backup completed! Size: ${b.size_mb} MB | Duration: ${b.duration_seconds}s</div>`;
+      
+      if(job && job.status === 'completed') {
+        clearInterval(activeOpInterval);
+        bar.style.width = '100%'; 
+        badge.textContent = '100%'; badge.className = 'badge badge-green'; badge.style.color = 'var(--accent)';
+        logsEl.innerHTML += `<div style="color:var(--accent); margin-top:10px; font-weight:bold;">✓ Operation completed successfully!</div>`;
         logsEl.scrollTop = logsEl.scrollHeight;
-        setTimeout(()=>{ card.classList.remove('active'); loadBackups(); }, 3000);
-        return;
-      }
-
-      if(b && b.status === 'failed') {
-        clearInterval(progressInterval);
-        card.classList.remove('active');
-        const errMsg = b.error || 'Backup failed';
-        logsEl.innerHTML += `<div style="color:var(--danger)">✗ ${escHtml(errMsg)}</div>`;
+        setTimeout(()=>{ 
+          const cont = document.getElementById(containerId);
+          if (cont) cont.innerHTML = ''; 
+          if(opType === 'restore') loadRestores(); else loadBackups();
+        }, 5000);
+      } else if (job && job.status === 'failed') {
+        clearInterval(activeOpInterval);
+        badge.textContent = 'Failed'; badge.className = 'badge badge-red'; badge.style.color = '#fff';
+        bar.style.background = 'var(--danger)';
+        logsEl.innerHTML += `<div style="color:var(--danger); margin-top:10px; font-weight:bold;">✗ Operation failed.</div>`;
         logsEl.scrollTop = logsEl.scrollHeight;
-        toast(errMsg.split('\n')[0].substring(0, 120), 'error');
-        loadBackups();
-        return;
+      } else {
+        const actualPct = logData && logData.progress_percentage !== undefined ? logData.progress_percentage : (job && job.progress_percentage !== undefined ? job.progress_percentage : 0);
+        bar.style.width = actualPct + '%';
+        badge.textContent = actualPct + '%';
       }
+    } catch(e) {}
+  }, 1000);
+}
 
-      const actualPct = logData && logData.progress_percentage !== undefined ? logData.progress_percentage : (b && b.progress_percentage !== undefined ? b.progress_percentage : 0);
-      bar.style.width = actualPct + '%';
-      pct.textContent = actualPct + '%';
-      badge.textContent = actualPct + '%';
-
-    } catch(e) { /* keep polling on network error */ }
-  }, 1500);
+function simulateProgress(backupId, label) {
+  trackActiveOperation('backup', backupId, label);
 }
 
 async function cancelJob(id, type) {
@@ -2621,35 +2738,38 @@ async function deleteSchedule(id) {
 
 // ---- RESTORES ----
 async function loadRestores() {
-  const btn = document.querySelector("#page-restores .btn-secondary");
-  if(btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Loading'; }
+  await populateInlineRestoreSelects();
+  
+  // Populate the right sidebar connected databases for restores
   try {
-    const restores = await apiFetch('/backups/restores');
-    const tbody = document.getElementById('restores-table');
-    tbody.innerHTML = restores.map(r=>`
-      <tr>
-        <td class="mono text-sm">${r.backup_label||'—'}</td>
-        <td class="text-muted text-sm">${r.backup_collection||'full'}</td>
-        <td>
-          <div style="font-weight:600">${r.target_connection_name || r.target_database_name}</div>
-          <div class="text-muted text-sm" style="margin-top:4px">DB: ${r.target_actual_db_name || 'All'}</div>
-        </td>
-        <td>
-          ${statusBadge(r.status)}
-          ${r.status==='failed'&&r.error?`
-            <div style="color:var(--danger);font-size:11px;margin-top:6px;background:var(--danger-dim);border:1px solid rgba(239,68,68,0.15);border-radius:var(--radius-xs);padding:6px 8px;max-width:300px;word-break:break-word;white-space:pre-wrap;">
-              ${escHtml(r.error.split('\n').slice(0,3).join('\n'))}
-            </div>` : ''}
-        </td>
-        <td>${formatDuration(r.duration_seconds)}</td>
-        <td class="text-muted text-sm">${fmtDate(r.started_at)}</td>
-        <td><div class="actions">
-          ${r.status==='running'?`<button class="btn btn-danger btn-sm btn-icon" onclick="cancelJob('${r.id}', 'restores')" title="Stop Job"><i data-lucide="square" style="width:14px;height:14px"></i></button>`:''}
-          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteRestore('${r.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
-        </div></td>
-      </tr>`).join('')||emptyRow(7,'No restores yet. Click "New Restore" to restore a backup.');
+    const dbs = await apiFetch('/databases/');
+    const listEl = document.getElementById('inline-rs-db-list');
+    document.getElementById('inline-rs-db-count').textContent = `${dbs.length} databases online`;
+    if(!listEl) return;
+    
+    if(!dbs.length) {
+      listEl.innerHTML = '<div style="text-align:center;color:var(--text2);margin-top:20px;">No databases connected</div>';
+      return;
+    }
+    
+    listEl.innerHTML = dbs.map(d => `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 14px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.05); border-radius:6px; margin-bottom:10px;">
+        <div style="display:flex; align-items:center; gap:12px;">
+          <div style="width:36px; height:36px; border-radius:50%; background:var(--surface-solid); display:flex; align-items:center; justify-content:center; color:var(--text2);">
+            <i data-lucide="database" style="width:16px;height:16px;"></i>
+          </div>
+          <div>
+            <div style="font-weight:600; font-size:13px; color:var(--text);">${d.name}</div>
+            <div style="font-size:11px; color:var(--muted); margin-top:4px;">${d.type.toUpperCase()} • ${d.host}</div>
+          </div>
+        </div>
+        <span class="badge badge-green" style="font-size:10px; padding:2px 6px;">Online</span>
+      </div>
+    `).join('');
     lucide.createIcons();
     
+    // Check if there are any active restore operations running
+    const restores = await apiFetch('/backups/restores');
     // Auto-resume live tracking for running restores
     const runningRestore = restores.find(r => r.status === 'running');
     if (runningRestore) {
@@ -2819,72 +2939,8 @@ async function runRestore() {
   } catch(e) { toast(e.message,'error'); }
 }
 
-let restoreInterval = null;
 function trackRestoreProgress(restoreId) {
-  const card = document.getElementById('restore-live-card');
-  const bar = document.getElementById('restore-bar');
-  const pct = document.getElementById('restore-pct');
-  const badge = document.getElementById('restore-pct-badge');
-  const lbl = document.getElementById('restore-live-label');
-  const logsEl = document.getElementById('restore-logs');
-
-  card.classList.add('active');
-  lbl.textContent = `Restore ID: ${restoreId.substring(0,8)}...`;
-  logsEl.innerHTML = '<div style="color:var(--muted)">Starting restore...</div>';
-  let lastLogLen = 0;
-
-  if(restoreInterval) clearInterval(restoreInterval);
-
-  restoreInterval = setInterval(async()=>{
-    try {
-      const [restores, logData] = await Promise.all([
-        apiFetch('/backups/restores'),
-        apiFetch(`/backups/restores/${restoreId}/logs`).catch(()=>null)
-      ]);
-      const r = restores.find(x=>x.id===restoreId);
-
-      if(logData && logData.logs && logData.logs.length !== lastLogLen) {
-        lastLogLen = logData.logs.length;
-        const lines = logData.logs.split('\n').filter(Boolean).slice(-100);
-        logsEl.innerHTML = lines.map(l => {
-          const isErr = l.toLowerCase().includes('error') || l.toLowerCase().includes('fail');
-          const isOk = l.toLowerCase().includes('complete') || l.toLowerCase().includes('success');
-          const color = isErr ? 'var(--danger)' : isOk ? 'var(--accent)' : 'var(--muted)';
-          return `<div style="color:${color}">${escHtml(l)}</div>`;
-        }).join('');
-        logsEl.scrollTop = logsEl.scrollHeight;
-      }
-
-      if(r && r.status==='completed') {
-        clearInterval(restoreInterval);
-        bar.style.width='100%'; pct.textContent='100%';
-        badge.textContent='100%'; badge.className='badge badge-green';
-        lbl.textContent = `Restore completed in ${formatDuration(r.duration_seconds)}`;
-        logsEl.innerHTML += `<div style="color:var(--accent)">✓ Restore completed! Duration: ${formatDuration(r.duration_seconds)}</div>`;
-        logsEl.scrollTop = logsEl.scrollHeight;
-        toast('Restore completed successfully!','success');
-        setTimeout(()=>{ card.classList.remove('active'); loadRestores(); }, 3000);
-        return;
-      }
-
-      if(r && r.status==='failed') {
-        clearInterval(restoreInterval);
-        card.classList.remove('active');
-        const errMsg = r.error || 'Restore failed';
-        logsEl.innerHTML += `<div style="color:var(--danger)">✗ ${escHtml(errMsg)}</div>`;
-        logsEl.scrollTop = logsEl.scrollHeight;
-        toast(errMsg.split('\n')[0].substring(0,120), 'error');
-        loadRestores();
-        return;
-      }
-
-      const actualPct = logData && logData.progress_percentage !== undefined ? logData.progress_percentage : (r && r.progress_percentage !== undefined ? r.progress_percentage : 0);
-      bar.style.width = actualPct + '%';
-      pct.textContent = actualPct + '%';
-      badge.textContent = actualPct + '%';
-
-    } catch(e){}
-  }, 1500);
+  trackActiveOperation('restore', restoreId, `Restore ID: ${restoreId.substring(0,8)}...`);
 }
 
 // ---- MODALS ----
