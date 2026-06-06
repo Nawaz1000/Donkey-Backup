@@ -940,7 +940,7 @@ details[open] summary i {
       <!-- RESTORES -->
       <div class="page" id="page-restores">
         <div class="backup-page-layout">
-          <div class="backup-left">
+          <div class="backup-left" style="flex: 1;">
             <div class="card" style="border:none; background:var(--surface);">
               <div class="card-header" style="border-bottom:none; padding:24px;">
                 <div>
@@ -974,20 +974,6 @@ details[open] summary i {
                 </details>
 
                 <button class="btn btn-full" style="background:#ffffff; color:#000000; padding:14px; font-size:14px; box-shadow:0 4px 12px rgba(255,255,255,0.1); border-radius:var(--radius-sm);" onclick="runInlineRestore()"><i data-lucide="rotate-ccw" style="width:16px;height:16px;color:#000000"></i> Start Restore</button>
-              </div>
-            </div>
-          </div>
-          <div class="backup-right">
-            <div class="card" style="border:none; background:var(--surface);">
-              <div class="card-header" style="border-bottom:none; padding:20px 24px 10px 24px; display:flex; justify-content:space-between; align-items:flex-start;">
-                <div>
-                  <div class="card-title" style="font-size:15px; font-weight:600;"><i data-lucide="database" style="display:none"></i> Connected Databases</div>
-                  <div style="font-size:12px; color:var(--text2); margin-top:4px;" id="inline-rs-db-count">0 databases online</div>
-                </div>
-                <button class="btn btn-primary btn-sm" onclick="openModal('db-modal')"><i data-lucide="plus" style="width:14px;height:14px"></i> Add Database</button>
-              </div>
-              <div style="padding:0 24px 24px 24px;" class="db-list" id="inline-rs-db-list">
-                <!-- Dynamically populated -->
               </div>
             </div>
           </div>
@@ -1770,8 +1756,8 @@ async function onInlineRestoreTargetChange() {
 
   dbnameEl.innerHTML = '<option>Loading databases...</option>';
   try {
-    const r = await apiFetch(`/databases/${targetId}/names`);
-    dbnameEl.innerHTML = r.names.map(n=>`<option value="${n}">${n}</option>`).join('');
+    const r = await apiFetch(`/databases/${targetId}/databases`);
+    dbnameEl.innerHTML = r.databases.map(d=>`<option value="${d}">${d}</option>`).join('');
   } catch(e) {
     dbnameEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
   }
@@ -2886,34 +2872,7 @@ async function deleteSchedule(id) {
 async function loadRestores() {
   await populateInlineRestoreSelects();
   
-  // Populate the right sidebar connected databases for restores
   try {
-    const dbs = await apiFetch('/databases/');
-    const listEl = document.getElementById('inline-rs-db-list');
-    document.getElementById('inline-rs-db-count').textContent = `${dbs.length} databases online`;
-    if(!listEl) return;
-    
-    if(!dbs.length) {
-      listEl.innerHTML = '<div style="text-align:center;color:var(--text2);margin-top:20px;">No databases connected</div>';
-      return;
-    }
-    
-    listEl.innerHTML = dbs.map(d => `
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 14px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.05); border-radius:6px; margin-bottom:10px;">
-        <div style="display:flex; align-items:center; gap:12px;">
-          <div style="width:36px; height:36px; border-radius:50%; background:var(--surface-solid); display:flex; align-items:center; justify-content:center; color:var(--text2);">
-            <i data-lucide="database" style="width:16px;height:16px;"></i>
-          </div>
-          <div>
-            <div style="font-weight:600; font-size:13px; color:var(--text);">${d.name}</div>
-            <div style="font-size:11px; color:var(--muted); margin-top:4px;">${d.type.toUpperCase()} • ${d.host}</div>
-          </div>
-        </div>
-        <span class="badge badge-green" style="font-size:10px; padding:2px 6px;">Online</span>
-      </div>
-    `).join('');
-    lucide.createIcons();
-    
     // Check if there are any active restore operations running
     const restores = await apiFetch('/backups/restores');
     // Auto-resume live tracking for running restores
@@ -2922,7 +2881,6 @@ async function loadRestores() {
       trackRestoreProgress(runningRestore.id);
     }
   } catch(e) { toast(e.message,'error'); }
-  finally { if(btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="refresh-cw" style="width:14px;height:14px"></i> Refresh'; lucide.createIcons(); } }
 }
 
 async function deleteRestore(id) {
