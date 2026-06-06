@@ -1543,27 +1543,8 @@ async function loadBackupPage() {
   const activeContainer = document.getElementById('inline-active-backup-container');
   if(activeContainer) {
     if(activeBackups.length > 0) {
-      activeContainer.innerHTML = activeBackups.map(b => `
-        <div style="padding:16px; background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:var(--radius-sm); margin-bottom:12px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-            <div style="font-weight:600; font-size:13px; display:flex; align-items:center; gap:8px;">
-              <i data-lucide="database" style="width:14px; height:14px; color:var(--text2);"></i> ${b.database_name || 'Database'}
-            </div>
-            <div style="background:rgba(0, 212, 170, 0.2); color:var(--accent); font-size:10px; font-weight:700; padding:4px 8px; border-radius:12px; display:flex; align-items:center; gap:4px;">
-              <i data-lucide="loader" style="width:10px; height:10px; animation: spin 2s linear infinite;"></i> Active
-            </div>
-          </div>
-          <div style="font-size:11px; color:var(--text2); margin-bottom:8px;">Backup in progress...</div>
-          <div class="progress-wrap" style="height:4px; margin-top:0; margin-bottom:8px;">
-            <div class="progress-bar" style="width:${b.progress_percentage || 0}%"></div>
-          </div>
-          <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text2);">
-            <span><i data-lucide="clock" style="width:10px; height:10px;"></i> Running</span>
-            <span>${b.progress_percentage || 0}%</span>
-          </div>
-        </div>
-      `).join('');
-      lucide.createIcons();
+      const job = activeBackups[0];
+      trackActiveOperation('backup', job.id, job.label || 'Active Backup');
     } else {
       activeContainer.innerHTML = `<div style="padding:24px; text-align:center; color:var(--text2); font-size:13px; background:rgba(255,255,255,0.02); border-radius:var(--radius-sm); border:1px solid var(--border);">No active operations</div>`;
     }
