@@ -960,18 +960,41 @@ details[open] summary i {
                   </select>
                 </div>
                 
-                <!-- Advanced Options Toggle -->
-                <details style="margin-bottom:24px;">
-                  <summary style="cursor:pointer; color:var(--text2); font-size:13px; font-weight:500; outline:none; display:inline-flex; align-items:center; gap:6px;">Advanced Options <i data-lucide="chevron-down" style="width:14px;height:14px;"></i></summary>
-                  <div style="padding-top:16px; margin-top:12px; border-top:1px solid var(--border);">
-                    <div class="form-group mb-4">
-                      <label>Target Database Name</label>
-                      <select id="inline-rs-dbname">
-                        <option value="">— select connection first —</option>
-                      </select>
+                <div class="form-group mb-6">
+                  <label>Restore Mode</label>
+                  <div style="display:flex; gap:12px;">
+                    <div id="inline-rs-mode-existing" onclick="setInlineRestoreMode('existing')"
+                      style="flex:1; padding:14px; border-radius:var(--radius-sm); border:2px solid var(--accent); background:var(--accent-dim); cursor:pointer; text-align:center; font-size:13px; font-weight:700; color:var(--accent); display:flex; align-items:center; justify-content:center; gap:8px; transition:var(--transition)">
+                      <i data-lucide="folder-open" style="width:16px; height:16px;"></i> Existing Database
+                    </div>
+                    <div id="inline-rs-mode-new" onclick="setInlineRestoreMode('new')"
+                      style="flex:1; padding:14px; border-radius:var(--radius-sm); border:1px solid var(--border); background:rgba(255,255,255,0.02); cursor:pointer; text-align:center; font-size:13px; font-weight:600; color:var(--muted); display:flex; align-items:center; justify-content:center; gap:8px; transition:var(--transition)">
+                      <i data-lucide="sparkles" style="width:16px; height:16px;"></i> Create New Database
                     </div>
                   </div>
-                </details>
+                </div>
+
+                <!-- Existing DB select -->
+                <div id="inline-rs-existing-fields" class="form-group mb-6">
+                  <label>Target Database Name <span style="color:var(--muted);font-size:11px">(fetched from server)</span></label>
+                  <select id="inline-rs-dbname" style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                    <option value="">— select target connection first —</option>
+                  </select>
+                  <div class="info-banner warn" style="margin-top:12px; margin-bottom:0;">
+                    <i data-lucide="alert-triangle"></i>
+                    <span>Existing data will be overwritten</span>
+                  </div>
+                </div>
+
+                <!-- New DB fields -->
+                <div id="inline-rs-new-fields" class="form-group mb-6" style="display:none;">
+                  <label>New Database Name</label>
+                  <input type="text" id="inline-rs-new-dbname" placeholder="e.g. prod_db_restored" style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;" />
+                  <div class="info-banner" style="margin-top:12px; margin-bottom:0;">
+                    <i data-lucide="check-circle-2"></i>
+                    <span>A fresh database will be created — no existing data will be affected</span>
+                  </div>
+                </div>
 
                 <button class="btn btn-full" style="background:#ffffff; color:#000000; padding:14px; font-size:14px; box-shadow:0 4px 12px rgba(255,255,255,0.1); border-radius:var(--radius-sm);" onclick="runInlineRestore()"><i data-lucide="rotate-ccw" style="width:16px;height:16px;color:#000000"></i> Start Restore</button>
               </div>
@@ -1723,13 +1746,19 @@ async function runInlineBackup() {
 async function runInlineRestore() {
   const backupId = v('inline-rs-backup');
   const targetDbId = v('inline-rs-target');
-  const targetDbname = v('inline-rs-dbname') || '';
+  
+  const isNew = document.getElementById('inline-rs-new-fields') && document.getElementById('inline-rs-new-fields').style.display !== 'none';
+  const targetDbname = isNew ? v('inline-rs-new-dbname').trim() : v('inline-rs-dbname');
 
   if(!backupId){ toast('Select a backup to restore','error'); return; }
   if(!targetDbId){ toast('Select a target database connection','error'); return; }
-  if(!targetDbname){ toast('Select a target database name','error'); return; }
+  if(!targetDbname){ toast(isNew ? 'Enter a new database name' : 'Select a target database name','error'); return; }
 
-  if(!confirm(`Restore to "${targetDbname}"? Existing data will be overwritten.`)) return;
+  const msg = isNew 
+    ? `Create new database "${targetDbname}" and restore into it?`
+    : `Restore to "${targetDbname}"? Existing data will be overwritten.`;
+
+  if(!confirm(msg)) return;
 
   try {
     const r = await apiFetch('/backups/restore', {
@@ -1737,15 +1766,47 @@ async function runInlineRestore() {
       body:JSON.stringify({
         backup_id: backupId,
         target_database_id: targetDbId,
-        new_database: false,
+        new_database: isNew,
         new_database_name: targetDbname,
         indexing_mode: 'with_index',
         speed_profile: 'default'
       })
     });
-    toast('Restore started!', 'info');
+    toast(isNew ? `Creating "${targetDbname}" and restoring...` : 'Restore started!', 'info');
     trackActiveOperation('restore', r.id, `Restoring ${backupId.substring(0,8)}... to ${targetDbname}`);
   } catch(e) { toast(e.message,'error'); }
+}
+
+function setInlineRestoreMode(mode) {
+  const isNew = mode === 'new';
+  const existingFields = document.getElementById('inline-rs-existing-fields');
+  const newFields = document.getElementById('inline-rs-new-fields');
+  if (existingFields) existingFields.style.display = isNew ? 'none' : 'block';
+  if (newFields) newFields.style.display = isNew ? 'block' : 'none';
+
+  const btnExisting = document.getElementById('inline-rs-mode-existing');
+  const btnNew = document.getElementById('inline-rs-mode-new');
+  if (btnNew && btnExisting) {
+    if (isNew) {
+      btnNew.style.border = '2px solid var(--accent)';
+      btnNew.style.background = 'var(--accent-dim)';
+      btnNew.style.color = 'var(--accent)';
+      btnNew.style.fontWeight = '700';
+      btnExisting.style.border = '1px solid var(--border)';
+      btnExisting.style.background = 'rgba(255,255,255,0.02)';
+      btnExisting.style.color = 'var(--muted)';
+      btnExisting.style.fontWeight = '600';
+    } else {
+      btnExisting.style.border = '2px solid var(--accent)';
+      btnExisting.style.background = 'var(--accent-dim)';
+      btnExisting.style.color = 'var(--accent)';
+      btnExisting.style.fontWeight = '700';
+      btnNew.style.border = '1px solid var(--border)';
+      btnNew.style.background = 'rgba(255,255,255,0.02)';
+      btnNew.style.color = 'var(--muted)';
+      btnNew.style.fontWeight = '600';
+    }
+  }
 }
 
 async function onInlineRestoreTargetChange() {
@@ -2871,6 +2932,7 @@ async function deleteSchedule(id) {
 // ---- RESTORES ----
 async function loadRestores() {
   await populateInlineRestoreSelects();
+  setInlineRestoreMode('existing');
   
   try {
     // Check if there are any active restore operations running
