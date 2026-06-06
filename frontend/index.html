@@ -349,6 +349,23 @@ details summary i {
 details[open] summary i {
   transform: rotate(180deg);
 }
+
+/* ── Scrollable list heights for backup page sidebar ── */
+#inline-db-list, #inline-storage-list {
+  max-height: 195px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+#inline-db-list::-webkit-scrollbar, #inline-storage-list::-webkit-scrollbar {
+  width: 4px;
+}
+#inline-db-list::-webkit-scrollbar-thumb, #inline-storage-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+#inline-db-list::-webkit-scrollbar-thumb:hover, #inline-storage-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
 </style>
 </head>
 <body>
@@ -594,31 +611,6 @@ details[open] summary i {
                 <button class="btn btn-full" style="background:#ffffff; color:#000000; padding:14px; font-size:14px; box-shadow:0 4px 12px rgba(255,255,255,0.1); border-radius:var(--radius-sm);" onclick="runInlineBackup()"><i data-lucide="play" style="width:16px;height:16px;color:#000000"></i> Start Backup</button>
               </div>
             </div>
-
-            <!-- Active Backups Container inside backup-left -->
-            <div id="inline-active-backup-container">
-              <!-- Active operations will be injected here -->
-            </div>
-
-            <!-- Recent Backups List inside backup-left -->
-            <div class="card" style="background:var(--surface);">
-              <div class="card-header" style="border-bottom:none; padding:24px;">
-                <div class="card-title" style="font-size:16px; margin-bottom:6px; font-weight:600;">Recent Backups</div>
-                <div style="font-size:13px; color:var(--text2);">Last 3 operations</div>
-              </div>
-              <table>
-                <thead>
-                  <tr style="border-bottom:1px solid var(--border);">
-                    <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Database</th>
-                    <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Type</th>
-                    <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Size</th>
-                    <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Status</th>
-                    <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2); text-align:right;">Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="bk-recent-backups-table"></tbody>
-              </table>
-            </div>
           </div>
           <div class="backup-right">
             <div class="card" style="border:none; background:var(--surface);">
@@ -647,6 +639,31 @@ details[open] summary i {
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- Full-Width Active Backups Section -->
+        <div id="inline-active-backup-container" style="margin-top:24px;">
+          <!-- Active operations will be injected here -->
+        </div>
+
+        <!-- Recent Backups List -->
+        <div class="card" style="margin-top:24px; background:var(--surface);">
+          <div class="card-header" style="border-bottom:none; padding:24px;">
+            <div class="card-title" style="font-size:16px; margin-bottom:6px; font-weight:600;">Recent Backups</div>
+            <div style="font-size:13px; color:var(--text2);">Last 3 operations</div>
+          </div>
+          <table>
+            <thead>
+              <tr style="border-bottom:1px solid var(--border);">
+                <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Database</th>
+                <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Type</th>
+                <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Size</th>
+                <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Status</th>
+                <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2); text-align:right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="bk-recent-backups-table"></tbody>
+          </table>
         </div>
       </div>
 
@@ -2475,7 +2492,7 @@ function renderActiveJob(containerId, opType, jobId, label) {
   const container = document.getElementById(containerId);
   if(!container) return;
   const icon = opType === 'restore' ? 'rotate-ccw' : 'zap';
-  const color = opType === 'restore' ? 'var(--accent2)' : 'var(--warn)';
+  const color = 'var(--accent2)';
   
   container.innerHTML = `
     <div style="padding:16px; background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:var(--radius-sm); margin-bottom:12px;">
