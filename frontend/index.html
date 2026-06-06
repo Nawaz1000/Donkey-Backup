@@ -638,6 +638,31 @@ details[open] summary i {
                 <!-- Dynamically populated -->
               </div>
             </div>
+
+            <!-- Motivational Quotes Card -->
+            <div class="card" style="border:none; background: radial-gradient(circle at top right, rgba(16, 185, 129, 0.05), transparent 60%), var(--surface); position:relative; overflow:hidden; min-height:165px; display:flex; flex-direction:column; justify-content:space-between;" id="quotes-slideshow-card">
+              <div class="card-header" style="border-bottom:none; padding:18px 24px 8px 24px; display:flex; justify-content:space-between; align-items:center;">
+                <div class="card-title" style="font-size:14px; font-weight:600; color:var(--text2); display:flex; align-items:center; gap:8px;">
+                  <i data-lucide="quote" style="width:14px; height:14px; color:var(--accent);"></i>
+                  <span>Daily Motivation</span>
+                </div>
+                <div style="display:flex; gap:6px;">
+                  <button class="btn btn-icon" style="background:rgba(255,255,255,0.03); width:24px; height:24px; padding:0; border-radius:4px; cursor:pointer;" onclick="prevQuote()" title="Previous Quote"><i data-lucide="chevron-left" style="width:12px; height:12px;"></i></button>
+                  <button class="btn btn-icon" style="background:rgba(255,255,255,0.03); width:24px; height:24px; padding:0; border-radius:4px; cursor:pointer;" onclick="nextQuote()" title="Next Quote"><i data-lucide="chevron-right" style="width:12px; height:12px;"></i></button>
+                </div>
+              </div>
+              <div style="padding:0 24px 12px 24px; flex:1; display:flex; flex-direction:column; justify-content:center;">
+                <p id="quote-text" style="font-size:13px; font-weight:500; line-height:1.6; color:#ffffff; transition: opacity 0.4s ease; opacity: 1;">
+                  "There are two groups of people: those who do backups, and those who will."
+                </p>
+                <p id="quote-author" style="font-size:11px; font-weight:600; color:var(--accent); margin-top:8px; transition: opacity 0.4s ease; opacity: 1;">
+                  — Unknown
+                </p>
+              </div>
+              <div style="display:flex; justify-content:center; gap:6px; padding-bottom:16px;" id="quote-indicators">
+                <!-- Dots injected via JS -->
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1479,7 +1504,7 @@ details[open] summary i {
 <div class="toast-container" id="toasts"></div>
 
 <script>
-const API = '/api';
+const API = 'http://localhost:8000/api';
 
 function onBackupMethodChange(prefix) {
   const method = document.getElementById(`${prefix}-method`).value;
@@ -1508,6 +1533,7 @@ function initApp() {
   document.getElementById('app').style.display='flex';
   showPage('dashboard');
   if(typeof initTimePicker === 'function') initTimePicker();
+  startQuotesSlideshow();
   lucide.createIcons();
 }
 
@@ -2592,7 +2618,11 @@ function trackActiveOperation(opType, jobId, label) {
         logsEl.scrollTop = logsEl.scrollHeight;
         lucide.createIcons();
         loadBackupPage();
-        if(opType === 'restore') loadRestores(); else loadBackups();
+        setTimeout(()=>{ 
+          const cont = document.getElementById(containerId);
+          if (cont) cont.innerHTML = ''; 
+          if(opType === 'restore') loadRestores(); else { loadBackups(); loadBackupPage(); }
+        }, 5000);
       } else {
         const actualPct = logData && logData.progress_percentage !== undefined ? logData.progress_percentage : (job && job.progress_percentage !== undefined ? job.progress_percentage : 0);
         bar.style.width = actualPct + '%';
@@ -2614,6 +2644,7 @@ async function cancelJob(id, type) {
     const res = await apiFetch(url, {method:'POST'});
     if(res.success) {
       toast('Job cancelled successfully.', 'success');
+      loadBackupPage();
       if (type === 'backups') loadBackups();
       else loadRestores();
     } else {
@@ -3192,6 +3223,90 @@ async function testWebhooks() {
       btn.innerHTML = 'Test Webhooks';
     }
   }
+}
+
+// ---- MOTIVATIONAL QUOTES SLIDESHOW ----
+const QUOTES = [
+  { text: "There are two groups of people: those who do backups, and those who will.", author: "Unknown" },
+  { text: "First, solve the problem. Then, write the code.", author: "John Johnson" },
+  { text: "Talk is cheap. Show me the code.", author: "Linus Torvalds" },
+  { text: "A backup is only as good as the restore test.", author: "Sysadmin Proverb" },
+  { text: "Simplicity is the soul of efficiency.", author: "Austin Freeman" },
+  { text: "The best way to predict the future is to invent it.", author: "Alan Kay" },
+  { text: "One of the best programming skills is knowing what not to write.", author: "Unknown" },
+  { text: "Data is a precious thing and will last longer than the systems themselves.", author: "Tim Berners-Lee" },
+  { text: "The best error message is the one that never shows up.", author: "Thomas Fuchs" }
+];
+
+let currentQuoteIndex = 0;
+let quoteInterval = null;
+
+function renderQuote(index) {
+  const textEl = document.getElementById('quote-text');
+  const authorEl = document.getElementById('quote-author');
+  if (!textEl || !authorEl) return;
+  
+  textEl.style.opacity = 0;
+  authorEl.style.opacity = 0;
+  
+  setTimeout(() => {
+    textEl.textContent = `"${QUOTES[index].text}"`;
+    authorEl.textContent = `— ${QUOTES[index].author}`;
+    textEl.style.opacity = 1;
+    authorEl.style.opacity = 1;
+    updateQuoteIndicators(index);
+  }, 400);
+}
+
+function updateQuoteIndicators(index) {
+  const container = document.getElementById('quote-indicators');
+  if (!container) return;
+  
+  let html = '';
+  for (let i = 0; i < QUOTES.length; i++) {
+    const active = i === index;
+    html += `<div onclick="selectQuote(${i})" style="width:${active ? '12px' : '6px'}; height:6px; background:${active ? 'var(--accent)' : 'rgba(255,255,255,0.15)'}; border-radius:3px; cursor:pointer; transition: all 0.3s ease;"></div>`;
+  }
+  container.innerHTML = html;
+}
+
+function selectQuote(index) {
+  currentQuoteIndex = index;
+  renderQuote(currentQuoteIndex);
+  resetQuoteTimer();
+}
+
+function nextQuote() {
+  currentQuoteIndex = (currentQuoteIndex + 1) % QUOTES.length;
+  renderQuote(currentQuoteIndex);
+  resetQuoteTimer();
+}
+
+function prevQuote() {
+  currentQuoteIndex = (currentQuoteIndex - 1 + QUOTES.length) % QUOTES.length;
+  renderQuote(currentQuoteIndex);
+  resetQuoteTimer();
+}
+
+function startQuotesSlideshow() {
+  updateQuoteIndicators(currentQuoteIndex);
+  
+  const card = document.getElementById('quotes-slideshow-card');
+  if (card) {
+    card.addEventListener('mouseenter', () => {
+      if (quoteInterval) clearInterval(quoteInterval);
+    });
+    card.addEventListener('mouseleave', () => {
+      resetQuoteTimer();
+    });
+  }
+  
+  resetQuoteTimer();
+}
+
+function resetQuoteTimer() {
+  if (quoteInterval) clearInterval(quoteInterval);
+  quoteInterval = setInterval(nextQuote, 6000);
 }
 
 // ---- BOOT ----
