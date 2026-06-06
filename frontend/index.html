@@ -2034,13 +2034,16 @@ async function addDatabase() {
     document.getElementById('db-test-result').style.display='none';
     toast('Database added!','success');
     loadDatabases();
+    loadBackupPage();
   } catch(e) { toast(e.message,'error'); }
 }
 
 async function deleteDatabase(id) {
   if(!confirm('Delete this database?')) return;
   await apiFetch(`/databases/${id}`,{method:'DELETE'});
-  toast('Deleted','success'); loadDatabases();
+  toast('Deleted','success');
+  loadDatabases();
+  loadBackupPage();
 }
 
 async function openEditDb(id) {
@@ -2076,6 +2079,7 @@ async function saveEditDatabase() {
     closeModal('edit-db-modal');
     toast('Database updated!','success');
     loadDatabases();
+    loadBackupPage();
   } catch(e) { toast(e.message,'error'); }
 }
 
@@ -2135,13 +2139,16 @@ async function addStorage() {
     closeModal('storage-modal');
     toast('Storage added!','success');
     loadStorage();
+    loadBackupPage();
   } catch(e) { toast(e.message,'error'); }
 }
 
 async function deleteStorage(id) {
   if(!confirm('Delete this storage?')) return;
   await apiFetch(`/storage/${id}`,{method:'DELETE'});
-  toast('Deleted','success'); loadStorage();
+  toast('Deleted','success');
+  loadStorage();
+  loadBackupPage();
 }
 
 async function openEditStorage(id) {
@@ -2190,6 +2197,7 @@ async function saveEditStorage() {
     closeModal('edit-storage-modal');
     toast('Storage updated!', 'success');
     loadStorage();
+    loadBackupPage();
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -2568,10 +2576,11 @@ function trackActiveOperation(opType, jobId, label) {
         logsEl.innerHTML += `<div style="color:var(--accent); margin-top:10px; font-weight:bold;">✓ Operation completed successfully!</div>`;
         logsEl.scrollTop = logsEl.scrollHeight;
         lucide.createIcons();
+        loadBackupPage();
         setTimeout(()=>{ 
           const cont = document.getElementById(containerId);
           if (cont) cont.innerHTML = ''; 
-          if(opType === 'restore') loadRestores(); else loadBackups();
+          if(opType === 'restore') loadRestores(); else { loadBackups(); loadBackupPage(); }
         }, 5000);
       } else if (job && job.status === 'failed') {
         clearInterval(activeOpInterval);
@@ -2582,6 +2591,8 @@ function trackActiveOperation(opType, jobId, label) {
         logsEl.innerHTML += `<div style="color:var(--danger); margin-top:10px; font-weight:bold;">✗ Operation failed.</div>`;
         logsEl.scrollTop = logsEl.scrollHeight;
         lucide.createIcons();
+        loadBackupPage();
+        if(opType === 'restore') loadRestores(); else loadBackups();
       } else {
         const actualPct = logData && logData.progress_percentage !== undefined ? logData.progress_percentage : (job && job.progress_percentage !== undefined ? job.progress_percentage : 0);
         bar.style.width = actualPct + '%';
