@@ -545,6 +545,13 @@ input:checked + .slider:before { transform: translateX(18px); background-color: 
                     <option value="">— select connection first —</option>
                   </select>
                 </div>
+                <div class="form-group mb-4" id="inline-bk-scope-group">
+                  <label>Backup Scope</label>
+                  <select id="inline-bk-scope" onchange="document.getElementById('inline-bk-collection-group').style.display = this.value === 'collection' ? 'block' : 'none';" style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                    <option value="full">Full Database</option>
+                    <option value="collection">Specific Collection / Table</option>
+                  </select>
+                </div>
                 <div class="form-group mb-4" id="inline-bk-collection-group" style="display:none">
                   <label>Collection / Table</label>
                   <select id="inline-bk-collection-select" style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
@@ -1618,8 +1625,9 @@ async function onInlineBackupDbnameChange() {
 async function runInlineBackup() {
   const dbId = v('inline-bk-db');
   const dbname = v('inline-bk-dbname') || '';
-  const type = document.getElementById('inline-bk-type').value; // full, incremental, differential
-  const collection = (type !== 'full') ? v('inline-bk-collection-select') : '';
+  const type = document.getElementById('inline-bk-type') ? document.getElementById('inline-bk-type').value : 'full';
+  const scope = document.getElementById('inline-bk-scope') ? document.getElementById('inline-bk-scope').value : 'full';
+  const collection = (scope === 'collection') ? v('inline-bk-collection-select') : '';
   const label = `backup-${Date.now()}`;
   
   if(!dbId){ toast('Select a database connection','error'); return; }
@@ -2427,7 +2435,10 @@ function renderActiveJob(containerId, opType, jobId, label) {
           </div>
           <div style="font-size:13px; color:var(--text2); margin-top:6px;">${label || jobId}</div>
         </div>
-        <span class="badge badge-orange" id="${opType}-pct-badge" style="font-size:16px; padding:6px 12px; border:1px solid rgba(255,255,255,0.2);">0%</span>
+        <div style="display:flex; align-items:center; gap:12px;">
+          <button class="btn btn-danger btn-sm" style="padding:6px 12px; font-size:12px;" onclick="cancelJob('${jobId}', '${opType}s')"><i data-lucide="stop-circle" style="width:14px;height:14px;"></i> Stop</button>
+          <span class="badge badge-orange" id="${opType}-pct-badge" style="font-size:16px; padding:6px 12px; border:1px solid rgba(255,255,255,0.2);">0%</span>
+        </div>
       </div>
       <div style="padding:24px;">
         <div class="progress-wrap" style="height:12px; margin-bottom:8px; border-radius:6px; background:var(--surface-solid); overflow:hidden;">
@@ -2449,10 +2460,6 @@ function trackActiveOperation(opType, jobId, label) {
   const logApi = opType === 'restore' ? `/backups/restores/${jobId}/logs` : `/backups/${jobId}/logs`;
   
   renderActiveJob(containerId, opType, jobId, label);
-  
-  const bar = document.getElementById(`${opType}-bar`);
-  const badge = document.getElementById(`${opType}-pct-badge`);
-  const logsEl = document.getElementById(`${opType}-logs`);
   let lastLogLen = 0;
   
   if(activeOpInterval) clearInterval(activeOpInterval);
@@ -2464,6 +2471,12 @@ function trackActiveOperation(opType, jobId, label) {
         apiFetch(logApi).catch(()=>null)
       ]);
       const job = list.find(x => x.id === jobId);
+      
+      const bar = document.getElementById(`${opType}-bar`);
+      const badge = document.getElementById(`${opType}-pct-badge`);
+      const logsEl = document.getElementById(`${opType}-logs`);
+      const pctLabel = document.getElementById(`${opType}-pct`);
+      if(!bar || !badge || !logsEl) return;
       
       if(logData && logData.logs && logData.logs.length !== lastLogLen) {
         lastLogLen = logData.logs.length;
@@ -2481,7 +2494,6 @@ function trackActiveOperation(opType, jobId, label) {
         clearInterval(activeOpInterval);
         bar.style.width = '100%'; 
         badge.textContent = '✓ 100%'; badge.className = 'badge badge-green'; badge.style.color = 'var(--accent)';
-        const pctLabel = document.getElementById(`${opType}-pct`);
         if (pctLabel) pctLabel.textContent = '✓ 100%';
         logsEl.innerHTML += `<div style="color:var(--accent); margin-top:10px; font-weight:bold;">✓ Operation completed successfully!</div>`;
         logsEl.scrollTop = logsEl.scrollHeight;
@@ -2493,7 +2505,6 @@ function trackActiveOperation(opType, jobId, label) {
       } else if (job && job.status === 'failed') {
         clearInterval(activeOpInterval);
         badge.textContent = 'Failed'; badge.className = 'badge badge-red'; badge.style.color = '#fff';
-        const pctLabel = document.getElementById(`${opType}-pct`);
         if (pctLabel) pctLabel.textContent = 'Failed';
         bar.style.background = 'var(--danger)';
         logsEl.innerHTML += `<div style="color:var(--danger); margin-top:10px; font-weight:bold;">✗ Operation failed.</div>`;
@@ -2502,7 +2513,6 @@ function trackActiveOperation(opType, jobId, label) {
         const actualPct = logData && logData.progress_percentage !== undefined ? logData.progress_percentage : (job && job.progress_percentage !== undefined ? job.progress_percentage : 0);
         bar.style.width = actualPct + '%';
         badge.textContent = actualPct + '%';
-        const pctLabel = document.getElementById(`${opType}-pct`);
         if (pctLabel) pctLabel.textContent = actualPct + '%';
       }
     } catch(e) {}
