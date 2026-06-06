@@ -342,6 +342,13 @@ input:checked + .slider:before { transform: translateX(18px); background-color: 
 .db-item-info h4 { font-size: 13px; font-weight: 600; color: #fff; margin-bottom: 4px; }
 .db-item-info .db-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.1); color: var(--text2); }
 .status-dot { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 8px var(--accent-glow); }
+
+details summary i {
+  transition: transform 0.2s ease;
+}
+details[open] summary i {
+  transform: rotate(180deg);
+}
 </style>
 </head>
 <body>
@@ -559,7 +566,10 @@ input:checked + .slider:before { transform: translateX(18px); background-color: 
                   </select>
                 </div>
                 <details style="margin-bottom: 24px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px; background: var(--surface);">
-                  <summary style="cursor: pointer; font-weight: 600; font-size: 14px; outline: none; display: flex; justify-content: space-between; align-items: center;">Advanced Options</summary>
+                  <summary style="cursor: pointer; font-weight: 600; font-size: 14px; outline: none; display: flex; justify-content: space-between; align-items: center; color: var(--text);">
+                    <span>Advanced Options</span>
+                    <i data-lucide="chevron-down" style="width: 16px; height: 16px;"></i>
+                  </summary>
                   <div style="margin-top: 16px;">
                     <div class="form-group mb-4">
                       <label>Indexing Mode</label>
@@ -584,6 +594,31 @@ input:checked + .slider:before { transform: translateX(18px); background-color: 
                 <button class="btn btn-full" style="background:#ffffff; color:#000000; padding:14px; font-size:14px; box-shadow:0 4px 12px rgba(255,255,255,0.1); border-radius:var(--radius-sm);" onclick="runInlineBackup()"><i data-lucide="play" style="width:16px;height:16px;color:#000000"></i> Start Backup</button>
               </div>
             </div>
+
+            <!-- Active Backups Container inside backup-left -->
+            <div id="inline-active-backup-container">
+              <!-- Active operations will be injected here -->
+            </div>
+
+            <!-- Recent Backups List inside backup-left -->
+            <div class="card" style="background:var(--surface);">
+              <div class="card-header" style="border-bottom:none; padding:24px;">
+                <div class="card-title" style="font-size:16px; margin-bottom:6px; font-weight:600;">Recent Backups</div>
+                <div style="font-size:13px; color:var(--text2);">Last 3 operations</div>
+              </div>
+              <table>
+                <thead>
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Database</th>
+                    <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Type</th>
+                    <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Size</th>
+                    <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Status</th>
+                    <th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2); text-align:right;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="bk-recent-backups-table"></tbody>
+              </table>
+            </div>
           </div>
           <div class="backup-right">
             <div class="card" style="border:none; background:var(--surface);">
@@ -599,7 +634,7 @@ input:checked + .slider:before { transform: translateX(18px); background-color: 
               </div>
             </div>
 
-            <div class="card" style="border:none; background:var(--surface); margin-top:24px;">
+            <div class="card" style="border:none; background:var(--surface);">
               <div class="card-header" style="border-bottom:none; padding:20px 24px 10px 24px; display:flex; justify-content:space-between; align-items:flex-start;">
                 <div>
                   <div class="card-title" style="font-size:15px; font-weight:600;"><i data-lucide="cloud" style="display:none"></i> Connected Storage</div>
@@ -612,23 +647,6 @@ input:checked + .slider:before { transform: translateX(18px); background-color: 
               </div>
             </div>
           </div>
-        </div>
-        
-        <!-- Full-Width Active Backups Section -->
-        <div id="inline-active-backup-container" style="margin-top:24px;">
-          <!-- Active operations will be injected here -->
-        </div>
-        
-        <!-- Recent Backups List -->
-        <div class="card" style="margin-top:24px; background:var(--surface);">
-          <div class="card-header" style="border-bottom:none; padding:24px;">
-            <div class="card-title" style="font-size:16px; margin-bottom:6px; font-weight:600;">Recent Backups</div>
-            <div style="font-size:13px; color:var(--text2);">Last 3 operations</div>
-          </div>
-          <table>
-            <thead><tr style="border-bottom:1px solid var(--border);"><th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Database</th><th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Type</th><th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Size</th><th style="padding:12px 24px; font-size:12px; font-weight:500; text-transform:none; letter-spacing:0; color:var(--text2);">Status</th></tr></thead>
-            <tbody id="bk-recent-backups-table"></tbody>
-          </table>
         </div>
       </div>
 
@@ -1603,8 +1621,14 @@ async function loadBackupPage() {
         <td style="padding:16px 24px; font-size:13px; color:var(--text);">${b.database_type || 'Unknown'}</td>
         <td style="padding:16px 24px; font-size:13px; color:var(--text);">${b.size_mb ? (b.size_mb).toFixed(1) + ' MB' : '—'}</td>
         <td style="padding:16px 24px;"><span style="display:inline-flex; align-items:center; gap:4px; ${badgeStyle}"><i data-lucide="${statusIcon}" style="width:12px;height:12px"></i> ${b.status.charAt(0).toUpperCase() + b.status.slice(1)}</span></td>
+        <td style="padding:16px 24px; text-align:right;">
+          <div style="display:inline-flex; gap:8px; justify-content:flex-end; align-items:center;">
+            <button class="btn btn-secondary btn-sm btn-icon" onclick="deleteBackup('${b.id}', false)" title="Delete Local Record Only" style="width:28px; height:28px; padding:0;"><i data-lucide="trash" style="width:12px;height:12px"></i></button>
+            <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}', true)" title="Delete from Cloud Bucket & Local" style="width:28px; height:28px; padding:0;"><i data-lucide="cloud-off" style="width:12px;height:12px"></i></button>
+          </div>
+        </td>
       </tr>`;
-    }).join('') || emptyRow(4,'No recent backups.');
+    }).join('') || emptyRow(5,'No recent backups.');
     lucide.createIcons();
   }
 }
@@ -2255,7 +2279,15 @@ function renderHistoryTable() {
       <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${fmtDate(new Date(item.timestamp).toISOString())}</td>
       <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);">${statusBadgeHtml}</td>
       <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);">
-        <button class="btn btn-icon" title="View Details" style="background:transparent; border:none; color:var(--text2); cursor:pointer;" onclick="alert('Operation Details\\n\\nID: ${item.id}\\nMessage: ${item.error||item.status}\\nDate: ${fmtDate(new Date(item.timestamp).toISOString())}')"><i data-lucide="eye" style="width:16px;height:16px;"></i></button>
+        <div style="display:inline-flex; gap:4px; align-items:center;">
+          <button class="btn btn-icon" title="View Details" style="background:transparent; border:none; color:var(--text2); cursor:pointer; width:28px; height:28px;" onclick="alert('Operation Details\n\nID: ${item.id}\nMessage: ${item.error||item.status}\nDate: ${fmtDate(new Date(item.timestamp).toISOString())}')"><i data-lucide="eye" style="width:15px;height:15px;"></i></button>
+          ${item.is_restore ? `
+            <button class="btn btn-icon" title="Delete Restore Record" style="background:transparent; border:none; color:var(--danger); cursor:pointer; width:28px; height:28px;" onclick="deleteRestoreRecord('${item.id}')"><i data-lucide="trash" style="width:15px;height:15px;"></i></button>
+          ` : `
+            <button class="btn btn-icon" title="Delete Record Only" style="background:transparent; border:none; color:var(--text2); cursor:pointer; width:28px; height:28px;" onclick="deleteBackup('${item.id}', false)"><i data-lucide="trash" style="width:15px;height:15px;"></i></button>
+            <button class="btn btn-icon" title="Delete from Cloud Bucket & Local" style="background:transparent; border:none; color:var(--danger); cursor:pointer; width:28px; height:28px;" onclick="deleteBackup('${item.id}', true)"><i data-lucide="cloud-off" style="width:15px;height:15px;"></i></button>
+          `}
+        </div>
       </td>
     </tr>`;
   }).join('') || `<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--text2);">No records found.</td></tr>`;
@@ -2569,8 +2601,25 @@ async function deleteBackup(id, deleteFromRemote = false) {
     ? 'Delete this backup history AND remove the file from remote cloud storage?' 
     : 'Delete this backup history record? (Remote file will be kept)';
   if(!confirm(msg)) return;
-  await apiFetch(`/backups/${id}?delete_from_remote=${deleteFromRemote}`,{method:'DELETE'});
-  toast('Deleted','success'); loadBackups();
+  try {
+    await apiFetch(`/backups/${id}?delete_from_remote=${deleteFromRemote}`,{method:'DELETE'});
+    toast('Deleted','success');
+    loadBackups();
+    loadBackupPage();
+  } catch(e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function deleteRestoreRecord(id) {
+  if(!confirm('Delete this restore record?')) return;
+  try {
+    await apiFetch(`/backups/restores/${id}`, {method:'DELETE'});
+    toast('Deleted','success');
+    loadBackups();
+  } catch(e) {
+    toast(e.message, 'error');
+  }
 }
 
 // ---- SCHEDULES ----
