@@ -1809,9 +1809,12 @@
               <h2 style="font-size:24px; font-weight:700; color:#fff; margin-bottom:4px;">History</h2>
               <div style="font-size:14px; color:var(--text2);">Complete log of all backup and restore operations</div>
             </div>
-            <button class="btn btn-secondary btn-sm" style="background:var(--surface); border:1px solid var(--border);"
-              onclick="exportHistoryLog()"><i data-lucide="download" style="width:14px;height:14px;"></i> Export
-              Log</button>
+            <div style="display:flex; gap:12px;">
+              <button class="btn btn-secondary btn-sm" id="btn-refresh-history" style="background:var(--surface); border:1px solid var(--border);"
+                onclick="loadBackups()"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Refresh</button>
+              <button class="btn btn-secondary btn-sm" style="background:var(--surface); border:1px solid var(--border);"
+                onclick="exportHistoryLog()"><i data-lucide="download" style="width:14px;height:14px;"></i> Export Log</button>
+            </div>
           </div>
 
           <div class="card" style="border:none; background:var(--surface); margin-bottom:24px; padding:20px;">
@@ -3456,7 +3459,7 @@
     const HISTORY_ITEMS_PER_PAGE = 8;
 
     async function loadBackups() {
-      const btn = document.querySelector("#page-history .btn-secondary");
+      const btn = document.getElementById("btn-refresh-history");
       if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Loading'; }
       try {
         const [backups, restores] = await Promise.all([

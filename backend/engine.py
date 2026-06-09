@@ -378,13 +378,15 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
 
 
 def get_speed_settings(profile: str):
+    cores = os.cpu_count() or 4
     if profile == "safe":
-        return {"threads": 2, "chunk_size": 8 * 1024 * 1024, "queue_max": 16, "concurrency": 2, "mongo_parallel": 2}
+        return {"threads": 1, "chunk_size": 4 * 1024 * 1024, "queue_max": 4, "concurrency": 1, "mongo_parallel": 1}
     elif profile == "balanced":
-        return {"threads": 4, "chunk_size": 16 * 1024 * 1024, "queue_max": 16, "concurrency": 4, "mongo_parallel": 4}
-    else: # extreme or default
-        return {"threads": max(1, os.cpu_count() - 1) if hasattr(os, "cpu_count") and os.cpu_count() else 8,
-                "chunk_size": 64 * 1024 * 1024, "queue_max": 16, "concurrency": 32, "mongo_parallel": 32}
+        return {"threads": max(1, cores // 2), "chunk_size": 16 * 1024 * 1024, "queue_max": 8, "concurrency": 4, "mongo_parallel": 2}
+    elif profile == "extreme":
+        return {"threads": cores, "chunk_size": 128 * 1024 * 1024, "queue_max": 128, "concurrency": 64, "mongo_parallel": 16}
+    else: # default
+        return {"threads": max(1, cores - 1), "chunk_size": 32 * 1024 * 1024, "queue_max": 32, "concurrency": 8, "mongo_parallel": 4}
 
 def get_compressor_info(profile: str = "default", log_path: str = None) -> dict:
     settings = get_speed_settings(profile)
@@ -393,7 +395,7 @@ def get_compressor_info(profile: str = "default", log_path: str = None) -> dict:
         if log_path:
             write_log(log_path, f"INFO  Using Zstandard (zstd) with {threads} threads for {profile} profile.")
         return {
-            "cmd": ["zstd", "--fast=3", f"--threads={threads}"] if profile in ("extreme", "default") else ["zstd", "-1", f"--threads={threads}"],
+            "cmd": ["zstd", "--fast=1", f"--threads={threads}"] if profile == "extreme" else (["zstd", "--fast=3", f"--threads={threads}"] if profile == "default" else ["zstd", "-1", f"--threads={threads}"]),
             "ext": "zst",
             "type": "zstd"
         }
