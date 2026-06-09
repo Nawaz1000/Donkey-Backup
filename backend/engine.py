@@ -782,7 +782,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     write_log(log_path, f"INFO  mongodump cmd: {' '.join(log_cmd)}")
     env = os.environ.copy()
     env["GOGC"] = "100"
-    env["GOMAXPROCS"] = "1"
+    env["GOMAXPROCS"] = str(settings["threads"])
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
 
 
@@ -863,7 +863,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     write_log(log_path, f"INFO  mongorestore cmd: {' '.join(log_cmd)}")
     env = os.environ.copy()
     env["GOGC"] = "100"
-    env["GOMAXPROCS"] = "1"
+    env["GOMAXPROCS"] = str(settings["threads"])
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile)
 
 
@@ -936,7 +936,12 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
         write_log(log_path, "INFO  No fast compressor found in PATH. Using single-threaded native pg_dump compression.")
         
     env = pg_env(db)
-    env["PGOPTIONS"] = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
+    if speed_profile == "extreme":
+        env["PGOPTIONS"] = f"-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
+    elif speed_profile == "balanced":
+        env["PGOPTIONS"] = f"-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB -c max_parallel_workers_per_gather=2 -c effective_io_concurrency=4"
+    else:
+        env["PGOPTIONS"] = f"-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
         
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
 
