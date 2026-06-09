@@ -3750,15 +3750,22 @@
       const container = document.getElementById(containerId);
       if (!container) return;
 
-      if (opType === 'restore') {
-        container.innerHTML = `
-      <div class="card" style="border:none; background:var(--surface); padding:24px; margin-bottom:24px; border-radius:var(--radius);" id="active-restore-card">
+      const isRestore = opType === 'restore';
+      const title = isRestore ? 'Active Restore' : 'Active Backup';
+      const desc = isRestore ? 'Currently running restore operation' : 'Currently running backup operation';
+      const typeBadge = isRestore ? 'Full Restore' : 'Full Backup';
+      const tablesLbl = isRestore ? 'Tables Restored' : 'Tables Backed Up';
+      const targetLbl = isRestore ? 'Target' : 'Source';
+      const pointLbl = isRestore ? 'Restore Point' : 'Backup Type';
+
+      container.innerHTML = `
+      <div class="card" style="border:none; background:var(--surface); padding:24px; margin-bottom:24px; border-radius:var(--radius);" id="active-${opType}-card">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
           <div>
-            <h3 style="font-size:16px; font-weight:700; color:#fff; margin-bottom:4px;">Active Restore</h3>
-            <div style="font-size:12px; color:var(--text2);">Currently running restore operation</div>
+            <h3 style="font-size:16px; font-weight:700; color:#fff; margin-bottom:4px;">${title}</h3>
+            <div style="font-size:12px; color:var(--text2);">${desc}</div>
           </div>
-          <div style="background:rgba(245,158,11,0.1); color:var(--warn); font-size:11px; font-weight:700; padding:6px 12px; border-radius:12px; display:flex; align-items:center; gap:6px;" id="restore-status-badge">
+          <div style="background:rgba(245,158,11,0.1); color:var(--warn); font-size:11px; font-weight:700; padding:6px 12px; border-radius:12px; display:flex; align-items:center; gap:6px;" id="${opType}-status-badge">
             <span class="dot dot-pulse" style="background:currentColor; width:6px; height:6px; border-radius:50%;"></span>
             <span>In Progress</span>
           </div>
@@ -3772,48 +3779,48 @@
               </div>
               <div>
                 <div style="display:flex; align-items:center; gap:8px;">
-                  <span style="font-weight:700; font-size:16px; color:#fff;" id="restore-db-name">${label || 'Database'}</span>
-                  <span class="badge badge-blue" style="font-size:10px; padding:2px 6px;">Full Restore</span>
+                  <span style="font-weight:700; font-size:16px; color:#fff;" id="${opType}-db-name">${label || 'Database'}</span>
+                  <span class="badge badge-blue" style="font-size:10px; padding:2px 6px;">${typeBadge}</span>
                 </div>
                 <div style="display:flex; gap:16px; margin-top:6px; font-size:11px; color:var(--muted); flex-wrap:wrap;">
-                  <span style="display:inline-flex; align-items:center; gap:4px;"><i data-lucide="file" style="width:12px; height:12px;"></i> <span id="restore-meta-size">estimating...</span></span>
-                  <span style="display:inline-flex; align-items:center; gap:4px;"><i data-lucide="clock" style="width:12px; height:12px;"></i> <span id="restore-meta-elapsed">00:00</span></span>
-                  <span style="display:inline-flex; align-items:center; gap:4px;"><i data-lucide="timer" style="width:12px; height:12px;"></i> <span id="restore-meta-eta">estimating...</span></span>
-                  <span style="display:inline-flex; align-items:center; gap:4px;"><i data-lucide="calendar" style="width:12px; height:12px;"></i> <span id="restore-meta-started">—</span></span>
+                  <span style="display:inline-flex; align-items:center; gap:4px;"><i data-lucide="file" style="width:12px; height:12px;"></i> <span id="${opType}-meta-size">estimating...</span></span>
+                  <span style="display:inline-flex; align-items:center; gap:4px;"><i data-lucide="clock" style="width:12px; height:12px;"></i> <span id="${opType}-meta-elapsed">00:00</span></span>
+                  <span style="display:inline-flex; align-items:center; gap:4px;"><i data-lucide="timer" style="width:12px; height:12px;"></i> <span id="${opType}-meta-eta">estimating...</span></span>
+                  <span style="display:inline-flex; align-items:center; gap:4px;"><i data-lucide="calendar" style="width:12px; height:12px;"></i> <span id="${opType}-meta-started">—</span></span>
                 </div>
               </div>
             </div>
             <div style="text-align:right;">
-              <div style="font-size:24px; font-weight:800; color:#fff;" id="restore-pct-text">0%</div>
-              <div style="font-size:11px; color:var(--muted); margin-top:4px;" id="restore-size-progress">—</div>
+              <div style="font-size:24px; font-weight:800; color:#fff;" id="${opType}-pct-text">0%</div>
+              <div style="font-size:11px; color:var(--muted); margin-top:4px;" id="${opType}-size-progress">—</div>
             </div>
           </div>
 
           <div class="progress-wrap" style="height:6px; background:rgba(255,255,255,0.05); margin-bottom:20px; margin-top:0; overflow:hidden;">
-            <div class="progress-bar" id="restore-bar" style="width:0%; background:#fff; height:100%; transition: width 0.4s ease;"></div>
+            <div class="progress-bar" id="${opType}-bar" style="width:0%; background:#fff; height:100%; transition: width 0.4s ease;"></div>
           </div>
 
           <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border); padding-top:16px; flex-wrap:wrap; gap:16px;">
             <div style="display:flex; gap:32px; flex-wrap:wrap;">
               <div>
                 <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Speed</div>
-                <div style="font-size:14px; font-weight:700; color:#fff;" id="restore-stat-speed">—</div>
+                <div style="font-size:14px; font-weight:700; color:#fff;" id="${opType}-stat-speed">—</div>
               </div>
               <div>
-                <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Tables Restored</div>
-                <div style="font-size:14px; font-weight:700; color:#fff;" id="restore-stat-tables">—</div>
+                <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">${tablesLbl}</div>
+                <div style="font-size:14px; font-weight:700; color:#fff;" id="${opType}-stat-tables">—</div>
               </div>
               <div>
-                <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Target</div>
-                <div style="font-size:14px; font-weight:700; color:#fff;" id="restore-stat-target">—</div>
+                <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">${targetLbl}</div>
+                <div style="font-size:14px; font-weight:700; color:#fff;" id="${opType}-stat-target">—</div>
               </div>
               <div>
-                <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Restore Point</div>
-                <div style="font-size:14px; font-weight:700; color:#fff; font-family:var(--mono);" id="restore-stat-point">—</div>
+                <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">${pointLbl}</div>
+                <div style="font-size:14px; font-weight:700; color:#fff; font-family:var(--mono);" id="${opType}-stat-point">—</div>
               </div>
             </div>
             <div>
-              <button class="btn btn-secondary btn-sm" style="border:1px solid var(--border); padding:8px 14px; font-size:12px; font-weight:600; cursor:pointer;" onclick="cancelJob('${jobId}', 'restores')">
+              <button class="btn btn-secondary btn-sm" style="border:1px solid var(--border); padding:8px 14px; font-size:12px; font-weight:600; cursor:pointer;" onclick="cancelJob('${jobId}', '${opType}s')">
                 <i data-lucide="square" style="width:12px; height:12px; fill:currentColor;"></i> Cancel
               </button>
             </div>
@@ -3831,45 +3838,12 @@
               <span>Live</span>
             </div>
           </div>
-          <div id="restore-logs" style="padding:16px; font-family:'SF Mono','Cascadia Code',monospace; font-size:11px; height:140px; overflow-y:auto; line-height:1.7; background:#000;">
+          <div id="${opType}-logs" style="padding:16px; font-family:'SF Mono','Cascadia Code',monospace; font-size:11px; height:140px; overflow-y:auto; line-height:1.7; background:#000;">
             <div style="color:var(--text2)">Initializing operation...</div>
           </div>
         </div>
       </div>
     `;
-        lucide.createIcons();
-        return;
-      }
-
-      const icon = 'zap';
-      const color = 'var(--accent2)';
-
-      container.innerHTML = `
-    <div style="padding:16px; background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:var(--radius-sm); margin-bottom:12px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <div style="font-weight:600; font-size:13px; display:flex; align-items:center; gap:8px;">
-          <i data-lucide="${icon}" style="width:14px; height:14px; color:var(--text2);"></i> ${label || jobId}
-        </div>
-        <div style="display:flex; align-items:center; gap:12px;">
-          <button class="btn btn-danger btn-sm" style="padding:4px 8px; font-size:11px;" onclick="cancelJob('${jobId}', '${opType}s')"><i data-lucide="stop-circle" style="width:12px;height:12px;"></i> Stop</button>
-          <div id="${opType}-pct-badge" style="background:rgba(0, 212, 170, 0.2); color:var(--accent); font-size:10px; font-weight:700; padding:4px 8px; border-radius:12px; display:flex; align-items:center; gap:4px;">
-            <i data-lucide="loader" style="width:10px; height:10px; animation: spin 2s linear infinite;"></i> <span>0%</span>
-          </div>
-        </div>
-      </div>
-      <div style="font-size:11px; color:var(--text2); margin-bottom:8px;">Operation in progress...</div>
-      <div class="progress-wrap" style="height:4px; margin-top:0; margin-bottom:8px;">
-        <div class="progress-bar" id="${opType}-bar" style="width:0%; background:${color};"></div>
-      </div>
-      <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text2);">
-        <span><i data-lucide="clock" style="width:10px; height:10px;"></i> Running</span>
-        <span id="${opType}-pct">0%</span>
-      </div>
-      <div id="${opType}-logs" style="margin-top:12px; background:#000; border:1px solid rgba(255,255,255,0.05); border-radius:var(--radius-sm); padding:10px; font-family:'SF Mono','Cascadia Code',monospace; font-size:11px; height:120px; overflow-y:auto; line-height:1.6;">
-        <div style="color:var(--text2)">Initializing operation...</div>
-      </div>
-    </div>
-  `;
       lucide.createIcons();
     }
 
@@ -3905,10 +3879,10 @@
           const job = list.find(x => x.id === jobId);
           if (!job) return;
 
-          if (opType === 'restore') {
-            const bar = document.getElementById('restore-bar');
-            const logsEl = document.getElementById('restore-logs');
-            const pctText = document.getElementById('restore-pct-text');
+          if (true) {
+            const bar = document.getElementById(`${opType}-bar`);
+            const logsEl = document.getElementById(`${opType}-logs`);
+            const pctText = document.getElementById(`${opType}-pct-text`);
 
             if (!bar || !pctText || !logsEl) return;
 
@@ -3931,11 +3905,11 @@
             // 1. Calculate Elapsed Time
             const startedAt = new Date(job.started_at || job.created_at);
             const elapsedSec = Math.floor((Date.now() - startedAt.getTime()) / 1000);
-            const elapsedEl = document.getElementById('restore-meta-elapsed');
+            const elapsedEl = document.getElementById(`${opType}-meta-elapsed`);
             if (elapsedEl) elapsedEl.textContent = 'Elapsed: ' + formatDuration(elapsedSec);
 
             // 2. ETA
-            const etaEl = document.getElementById('restore-meta-eta');
+            const etaEl = document.getElementById(`${opType}-meta-eta`);
             if (etaEl) {
               if (actualPct > 0 && actualPct < 100) {
                 const totalEstSec = elapsedSec / (actualPct / 100);
@@ -3949,7 +3923,7 @@
             }
 
             // 3. Started Time
-            const startedEl = document.getElementById('restore-meta-started');
+            const startedEl = document.getElementById(`${opType}-meta-started`);
             if (startedEl) {
               const timeStr = startedAt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
               const dateStr = startedAt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -3957,8 +3931,13 @@
             }
 
             // 4. Size & Progress text
-            const sizeEl = document.getElementById('restore-meta-size');
-            const progSizeEl = document.getElementById('restore-size-progress');
+            const sizeEl = document.getElementById(`${opType}-meta-size`);
+            const progSizeEl = document.getElementById(`${opType}-size-progress`);
+            // Try to set backupSizeMB for backups directly if not previously fetched
+            if (opType === 'backup' && !backupSizeMB && job.size_mb) {
+                backupSizeMB = job.size_mb;
+            }
+
             if (backupSizeMB) {
               const currentMB = (actualPct / 100 * backupSizeMB).toFixed(1);
               const totalGB = backupSizeMB > 1024 ? (backupSizeMB / 1024).toFixed(1) + ' GB' : backupSizeMB.toFixed(1) + ' MB';
@@ -3971,7 +3950,7 @@
             }
 
             // 5. Speed
-            const speedEl = document.getElementById('restore-stat-speed');
+            const speedEl = document.getElementById(`${opType}-stat-speed`);
             if (speedEl) {
               if (backupSizeMB && elapsedSec > 0 && actualPct > 0) {
                 const speed = ((actualPct / 100 * backupSizeMB) / elapsedSec); // MB/s
@@ -3981,8 +3960,8 @@
               }
             }
 
-            // 6. Tables Restored
-            const tablesEl = document.getElementById('restore-stat-tables');
+            // 6. Tables Restored / Backed Up
+            const tablesEl = document.getElementById(`${opType}-stat-tables`);
             if (tablesEl) {
               let totalTables = 0;
               let restoredTables = 0;
@@ -3995,23 +3974,31 @@
               if (totalTables > 0) {
                 tablesEl.textContent = `${restoredTables} / ${totalTables}`;
               } else if (restoredTables > 0) {
-                tablesEl.textContent = `${restoredTables} restored`;
+                tablesEl.textContent = `${restoredTables} completed`;
               } else {
                 tablesEl.textContent = '—';
               }
             }
 
             // 7. Target
-            const targetEl = document.getElementById('restore-stat-target');
+            const targetEl = document.getElementById(`${opType}-stat-target`);
             if (targetEl) {
-              targetEl.textContent = job.new_database ? job.new_database_name : job.target_actual_db_name;
+              if (opType === 'restore') {
+                  targetEl.textContent = job.new_database ? job.new_database_name : job.target_actual_db_name;
+              } else {
+                  targetEl.textContent = job.database_name || '—';
+              }
             }
 
             // 8. Restore Point
-            const pointEl = document.getElementById('restore-stat-point');
+            const pointEl = document.getElementById(`${opType}-stat-point`);
             if (pointEl) {
-              const labelClean = job.backup_label ? job.backup_label.replace('backup-', '') : '—';
-              pointEl.textContent = labelClean.substring(0, 15);
+              if (opType === 'restore') {
+                  const labelClean = job.backup_label ? job.backup_label.replace('backup-', '') : '—';
+                  pointEl.textContent = labelClean.substring(0, 15);
+              } else {
+                  pointEl.textContent = job.type === 'full' ? 'Full Backup' : 'Incremental';
+              }
             }
 
             // Handle Complete / Failed states
@@ -4019,7 +4006,7 @@
               clearInterval(activeOpInterval);
               bar.style.width = '100%';
               pctText.textContent = '100%';
-              const badge = document.getElementById('restore-status-badge');
+              const badge = document.getElementById(`${opType}-status-badge`);
               if (badge) {
                 badge.innerHTML = '<i data-lucide="check-circle-2" style="width:10px; height:10px;"></i> <span>Completed</span>';
                 badge.style.background = 'rgba(16,185,129,0.2)'; badge.style.color = '#10b981';
@@ -4031,13 +4018,13 @@
               setTimeout(() => {
                 const cont = document.getElementById(containerId);
                 if (cont) cont.innerHTML = '';
-                loadRestores();
+                if (opType === 'restore') loadRestores(); else { loadBackups(); loadBackupPage(); }
               }, 5000);
             } else if (job.status === 'failed') {
               clearInterval(activeOpInterval);
               pctText.textContent = 'Failed';
               bar.style.background = 'var(--danger)';
-              const badge = document.getElementById('restore-status-badge');
+              const badge = document.getElementById(`${opType}-status-badge`);
               if (badge) {
                 badge.innerHTML = '<i data-lucide="x-circle" style="width:10px; height:10px;"></i> <span>Failed</span>';
                 badge.style.background = 'rgba(239,68,68,0.2)'; badge.style.color = '#ef4444';
@@ -4049,66 +4036,9 @@
               setTimeout(() => {
                 const cont = document.getElementById(containerId);
                 if (cont) cont.innerHTML = '';
-                loadRestores();
+                if (opType === 'restore') loadRestores(); else { loadBackups(); loadBackupPage(); }
               }, 5000);
             }
-
-            return;
-          }
-
-          const bar = document.getElementById(`${opType}-bar`);
-          const badge = document.getElementById(`${opType}-pct-badge`);
-          const logsEl = document.getElementById(`${opType}-logs`);
-          const pctLabel = document.getElementById(`${opType}-pct`);
-          if (!bar || !badge || !logsEl) return;
-
-          if (logData && logData.logs && logData.logs.length !== lastLogLen) {
-            lastLogLen = logData.logs.length;
-            const lines = logData.logs.split('\n').filter(Boolean);
-            logsEl.innerHTML = lines.map(l => {
-              const isErr = l.toLowerCase().includes('error') || l.toLowerCase().includes('fail');
-              const isOk = l.toLowerCase().includes('complete') || l.toLowerCase().includes('success');
-              const color = isErr ? 'var(--danger)' : isOk ? 'var(--accent)' : 'var(--text2)';
-              return `<div style="color:${color}">${escHtml(l)}</div>`;
-            }).join('');
-            logsEl.scrollTop = logsEl.scrollHeight;
-          }
-
-          if (job && job.status === 'completed') {
-            clearInterval(activeOpInterval);
-            bar.style.width = '100%';
-            badge.innerHTML = '<i data-lucide="check-circle-2" style="width:10px; height:10px;"></i> <span>100%</span>';
-            badge.style.background = 'rgba(16,185,129,0.2)'; badge.style.color = '#10b981';
-            if (pctLabel) pctLabel.textContent = '100%';
-            logsEl.innerHTML += `<div style="color:var(--accent); margin-top:10px; font-weight:bold;">✓ Operation completed successfully!</div>`;
-            logsEl.scrollTop = logsEl.scrollHeight;
-            lucide.createIcons();
-            loadBackupPage();
-            setTimeout(() => {
-              const cont = document.getElementById(containerId);
-              if (cont) cont.innerHTML = '';
-              if (opType === 'restore') loadRestores(); else { loadBackups(); loadBackupPage(); }
-            }, 5000);
-          } else if (job && job.status === 'failed') {
-            clearInterval(activeOpInterval);
-            badge.innerHTML = '<i data-lucide="x-circle" style="width:10px; height:10px;"></i> <span>Failed</span>';
-            badge.style.background = 'rgba(239,68,68,0.2)'; badge.style.color = '#ef4444';
-            if (pctLabel) pctLabel.textContent = 'Failed';
-            bar.style.background = 'var(--danger)';
-            logsEl.innerHTML += `<div style="color:var(--danger); margin-top:10px; font-weight:bold;">✗ Operation failed.</div>`;
-            logsEl.scrollTop = logsEl.scrollHeight;
-            lucide.createIcons();
-            loadBackupPage();
-            setTimeout(() => {
-              const cont = document.getElementById(containerId);
-              if (cont) cont.innerHTML = '';
-              if (opType === 'restore') loadRestores(); else { loadBackups(); loadBackupPage(); }
-            }, 5000);
-          } else {
-            const actualPct = logData && logData.progress_percentage !== undefined ? logData.progress_percentage : (job && job.progress_percentage !== undefined ? job.progress_percentage : 0);
-            bar.style.width = actualPct + '%';
-            badge.querySelector('span') ? badge.querySelector('span').textContent = actualPct + '%' : badge.textContent = actualPct + '%';
-            if (pctLabel) pctLabel.textContent = actualPct + '%';
           }
         } catch (e) { }
       }, 1000);
