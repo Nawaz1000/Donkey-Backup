@@ -524,14 +524,34 @@ details[open] summary i {
       </div>
 
       <!-- BACKUPS -->
+      <style>
+        #page-backups .card { background: var(--surface-solid) !important; }
+        #page-backups .form-group label { margin-bottom: 8px; font-size: 11px; color: var(--text2); }
+        #page-backups input, #page-backups select { background: var(--bg) !important; border-color: rgba(255,255,255,0.03) !important; }
+        #page-backups details summary { background: var(--bg); border: 1px solid rgba(255,255,255,0.03); padding: 14px 16px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; display:flex; align-items:center; justify-content:space-between; cursor:pointer; }
+        #page-backups details { border:none !important; padding:0 !important; background:transparent !important; margin-bottom:24px; }
+        #page-backups details summary::-webkit-details-marker { display:none; }
+        #page-backups .btn-full { background: #e5e5e5 !important; color: #111 !important; font-weight: 600; padding: 14px !important; border-radius: 6px; }
+        #page-backups .btn-primary.btn-sm { background: #e5e5e5 !important; color: #111 !important; border:none; padding: 6px 12px; font-size: 12px; font-weight: 600; border-radius: 4px; }
+        #page-backups .db-list .db-item { background: var(--bg) !important; border-color: rgba(255,255,255,0.03) !important; margin-bottom:12px; }
+        #page-backups .db-list .db-item-icon { background: rgba(255,255,255,0.04) !important; }
+        #page-backups .card-title { font-weight: 700; letter-spacing: -0.2px; }
+        
+        /* Segmented Control for Backup Type */
+        #page-backups .radio-group { display:flex; background: var(--bg); border: 1px solid rgba(255,255,255,0.03); border-radius: var(--radius-sm); padding: 4px; gap: 4px; }
+        #page-backups .radio-group .radio-card { flex:1; margin:0; padding: 10px; border:none !important; text-align:center; background:transparent; color: var(--text2); border-radius: 6px; }
+        #page-backups .radio-group .radio-card.active { background: #e5e5e5 !important; color: #111 !important; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+        #page-backups .radio-group .radio-dot { display:none !important; }
+        #page-backups .radio-group .radio-label { margin:0 !important; font-weight: 600; font-size: 12px; }
+      </style>
       <div class="page" id="page-backups">
         <div class="backup-page-layout">
           <div class="backup-left">
-            <div class="card" style="border:none; background:var(--surface);">
+            <div class="card" style="border:none;">
               <div class="card-header" style="border-bottom:none; padding:24px;">
                 <div>
-                  <div class="card-title" style="font-size:18px; margin-bottom:6px; font-weight:700;"><i data-lucide="zap" style="display:none"></i> New Backup</div>
-                  <div style="font-size:13px; color:var(--text2);">Configure and launch a database backup</div>
+                  <div class="card-title" style="font-size:18px; margin-bottom:4px; font-weight:700;">New Backup</div>
+                  <div style="font-size:12px; color:var(--muted);">Configure a new backup job</div>
                 </div>
               </div>
               <div style="padding:0 24px 24px 24px;">
@@ -583,10 +603,10 @@ details[open] summary i {
                     <option value="">— select database name first —</option>
                   </select>
                 </div>
-                <details style="margin-bottom: 24px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px; background: var(--surface);">
-                  <summary style="cursor: pointer; font-weight: 600; font-size: 14px; outline: none; display: flex; justify-content: space-between; align-items: center; color: var(--text);">
-                    <span>Advanced Options</span>
-                    <i data-lucide="chevron-down" style="width: 16px; height: 16px;"></i>
+                <details>
+                  <summary>
+                    <div style="display:flex; align-items:center; gap:8px;"><i data-lucide="sliders" style="width:16px;height:16px;color:var(--text2)"></i> Advanced Options</div>
+                    <i data-lucide="chevron-down" style="width: 16px; height: 16px; color:var(--text2);"></i>
                   </summary>
                   <div style="margin-top: 16px;">
                     <div class="form-group mb-4">
@@ -609,31 +629,31 @@ details[open] summary i {
                   </div>
                 </details>
 
-                <button class="btn btn-full" style="background:#ffffff; color:#000000; padding:14px; font-size:14px; box-shadow:0 4px 12px rgba(255,255,255,0.1); border-radius:var(--radius-sm);" onclick="runInlineBackup()"><i data-lucide="play" style="width:16px;height:16px;color:#000000"></i> Start Backup</button>
+                <button class="btn btn-full" onclick="runInlineBackup()">Start Backup</button>
               </div>
             </div>
           </div>
           <div class="backup-right">
-            <div class="card" style="border:none; background:var(--surface);">
-              <div class="card-header" style="border-bottom:none; padding:20px 24px 10px 24px; display:flex; justify-content:space-between; align-items:flex-start;">
+            <div class="card" style="border:none;">
+              <div class="card-header" style="border-bottom:none; padding:24px 24px 16px 24px; display:flex; justify-content:space-between; align-items:flex-start;">
                 <div>
-                  <div class="card-title" style="font-size:15px; font-weight:600;"><i data-lucide="database" style="display:none"></i> Connected Databases</div>
-                  <div style="font-size:12px; color:var(--text2); margin-top:4px;" id="inline-db-count">0 databases online</div>
+                  <div class="card-title" style="font-size:15px; font-weight:700;">Connected<br>Databases</div>
+                  <div style="display:none" id="inline-db-count"></div>
                 </div>
-                <button class="btn btn-primary btn-sm" onclick="openModal('db-modal')"><i data-lucide="plus" style="width:14px;height:14px"></i> Add Database</button>
+                <button class="btn btn-primary btn-sm" onclick="openModal('db-modal')">Add Database</button>
               </div>
               <div style="padding:0 24px 24px 24px;" class="db-list" id="inline-db-list">
                 <!-- Dynamically populated -->
               </div>
             </div>
 
-            <div class="card" style="border:none; background:var(--surface);">
-              <div class="card-header" style="border-bottom:none; padding:20px 24px 10px 24px; display:flex; justify-content:space-between; align-items:flex-start;">
+            <div class="card" style="border:none;">
+              <div class="card-header" style="border-bottom:none; padding:24px 24px 16px 24px; display:flex; justify-content:space-between; align-items:flex-start;">
                 <div>
-                  <div class="card-title" style="font-size:15px; font-weight:600;"><i data-lucide="cloud" style="display:none"></i> Connected Storage</div>
-                  <div style="font-size:12px; color:var(--text2); margin-top:4px;" id="inline-storage-count">0 buckets configured</div>
+                  <div class="card-title" style="font-size:15px; font-weight:700;">Connected<br>Storage</div>
+                  <div style="display:none" id="inline-storage-count"></div>
                 </div>
-                <button class="btn btn-primary btn-sm" onclick="openModal('storage-modal')"><i data-lucide="plus" style="width:14px;height:14px"></i> Add Bucket</button>
+                <button class="btn btn-primary btn-sm" onclick="openModal('storage-modal')">Add Bucket</button>
               </div>
               <div style="padding:0 24px 24px 24px;" class="db-list" id="inline-storage-list">
                 <!-- Dynamically populated -->
@@ -641,27 +661,20 @@ details[open] summary i {
             </div>
 
             <!-- Motivational Quotes Card -->
-            <div class="card" style="border:none; background: radial-gradient(circle at top right, rgba(16, 185, 129, 0.05), transparent 60%), var(--surface); position:relative; overflow:hidden; min-height:165px; display:flex; flex-direction:column; justify-content:space-between;" id="quotes-slideshow-card">
-              <div class="card-header" style="border-bottom:none; padding:18px 24px 8px 24px; display:flex; justify-content:space-between; align-items:center;">
-                <div class="card-title" style="font-size:14px; font-weight:600; color:var(--text2); display:flex; align-items:center; gap:8px;">
-                  <i data-lucide="quote" style="width:14px; height:14px; color:var(--accent);"></i>
-                  <span>Daily Motivation</span>
-                </div>
-                <div style="display:flex; gap:6px;">
-                  <button class="btn btn-icon" style="background:rgba(255,255,255,0.03); width:24px; height:24px; padding:0; border-radius:4px; cursor:pointer;" onclick="prevQuote()" title="Previous Quote"><i data-lucide="chevron-left" style="width:12px; height:12px;"></i></button>
-                  <button class="btn btn-icon" style="background:rgba(255,255,255,0.03); width:24px; height:24px; padding:0; border-radius:4px; cursor:pointer;" onclick="nextQuote()" title="Next Quote"><i data-lucide="chevron-right" style="width:12px; height:12px;"></i></button>
-                </div>
+            <div class="card" style="border:none;" id="quotes-slideshow-card">
+              <div class="card-header" style="border-bottom:none; padding:24px 24px 16px 24px;">
+                <div class="card-title" style="font-size:15px; font-weight:700;">Daily Motivation</div>
               </div>
-              <div style="padding:0 24px 12px 24px; flex:1; display:flex; flex-direction:column; justify-content:center;">
-                <p id="quote-text" style="font-size:13px; font-weight:500; line-height:1.6; color:#ffffff; transition: opacity 0.4s ease; opacity: 1;">
-                  "There are two groups of people: those who do backups, and those who will."
-                </p>
-                <p id="quote-author" style="font-size:11px; font-weight:600; color:var(--accent); margin-top:8px; transition: opacity 0.4s ease; opacity: 1;">
-                  — Unknown
-                </p>
-              </div>
-              <div style="display:flex; justify-content:center; gap:6px; padding-bottom:16px;" id="quote-indicators">
-                <!-- Dots injected via JS -->
+              <div style="padding:0 24px 24px 24px;">
+                <div style="background:var(--bg); border:1px solid rgba(255,255,255,0.03); border-radius:var(--radius-sm); padding:20px; min-height:100px; display:flex; flex-direction:column; justify-content:center; position:relative;">
+                  <p id="quote-text" style="font-size:12px; font-weight:600; line-height:1.6; color:#fff; transition: opacity 0.4s ease; opacity: 1;">
+                    "Backups are only useful when restores are effortless."
+                  </p>
+                  <p id="quote-author" style="display:none;">— Unknown</p>
+                  <div style="display:flex; justify-content:flex-start; gap:6px; margin-top:16px;" id="quote-indicators">
+                    <!-- Dots injected via JS -->
+                  </div>
+                </div>
               </div>
             </div>
           </div>
