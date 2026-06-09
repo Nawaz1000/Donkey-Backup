@@ -847,28 +847,12 @@ details[open] summary i {
                       <option value="weekly">Weekly</option>
                       <option value="monthly">Monthly</option>
                       <option value="hourly">Hourly</option>
+                      <option value="weekly_mixed">Weekly Mixed (Sun=Full, Mon-Sat=Incremental)</option>
                     </select>
                   </div>
                   <div class="form-group" style="flex:1;">
                     <label>Time</label>
-                    <div style="position:relative;" id="custom-time-picker">
-                      <div style="display:flex; align-items:center; background:var(--surface-solid); border:1px solid var(--border); border-radius:var(--radius-sm); padding:0 16px; cursor:pointer;" onclick="toggleTimeDropdown(event)">
-                        <i data-lucide="clock" style="width:16px; height:16px; color:var(--text2);"></i>
-                        <input type="hidden" id="inline-sc-time" value="02:15">
-                        <div id="inline-sc-time-display" style="padding:14px 12px; font-weight:700; color:#fff; flex:1;">02:15 AM</div>
-                      </div>
-                      <div id="time-dropdown" style="display:none; position:absolute; top:calc(100% + 8px); left:0; background:#fff; border-radius:4px; box-shadow:0 10px 30px rgba(0,0,0,0.5); z-index:100; flex-direction:row; overflow:hidden;">
-                        <!-- Hours -->
-                        <div style="display:flex; flex-direction:column; max-height:220px; overflow-y:auto; border-right:1px solid #eee; scrollbar-width:none;" id="time-hours"></div>
-                        <!-- Minutes -->
-                        <div style="display:flex; flex-direction:column; max-height:220px; overflow-y:auto; border-right:1px solid #eee; scrollbar-width:none;" id="time-minutes"></div>
-                        <!-- AM/PM -->
-                        <div style="display:flex; flex-direction:column; max-height:220px; overflow-y:auto;" id="time-ampm">
-                          <div class="time-opt time-ampm-opt active" onclick="selectTimeAmpm('AM', event)">AM</div>
-                          <div class="time-opt time-ampm-opt" onclick="selectTimeAmpm('PM', event)">PM</div>
-                        </div>
-                      </div>
-                    </div>
+                    <input type="time" id="inline-sc-time" value="02:15" style="background:var(--surface-solid); border:1px solid var(--border); padding:12px 16px; font-weight:500; width:100%; border-radius:var(--radius-sm); color:#fff; box-sizing:border-box; outline:none;" />
                   </div>
                 </div>
 
