@@ -138,6 +138,56 @@ def add_database(req: DatabaseCreate, user=Depends(get_current_user)):
     return {k: v for k, v in db.items() if k != "password"}
 
 
+@router.post("/test-connection")
+def test_new_connection(db: DatabaseCreate, user=Depends(get_current_user)):
+    if db.type == "mongodb":
+        try:
+            uri = sanitize_mongo_uri(db.mongo_uri or "")
+            if not uri:
+                uri = f"mongodb://{db.host}:{db.port}"
+            client = connect_mongo(uri)
+            info = client.server_info()
+            version = info.get("version", "?")
+            client.close()
+            return {"success": True, "message": f"Connected! MongoDB v{version}"}
+        except Exception as e:
+            raise HTTPException(400, f"Connection failed: {str(e)}")
+
+    elif db.type == "postgresql":
+        try:
+            import subprocess, os
+            env = os.environ.copy()
+            if db.password:
+                env["PGPASSWORD"] = db.password
+            cmd = ["psql", "-h", db.host, "-p", str(db.port), "-U", db.username, "-d", db.database_name or "postgres", "-c", "SELECT version();"]
+            result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise Exception(result.stderr.strip())
+            version_line = result.stdout.strip().split('\n')[0][:50]
+            return {"success": True, "message": f"Connected! {version_line}..."}
+        except Exception as e:
+            raise HTTPException(400, f"Connection failed: {str(e)}")
+
+    elif db.type == "solr":
+        try:
+            import urllib.request, json, base64, ssl
+            solr_base_url = get_solr_base_url(db.host, db.port)
+            context = ssl._create_unverified_context()
+            cores_url = f"{solr_base_url}/solr/admin/cores?action=STATUS&wt=json"
+            req_cores = urllib.request.Request(cores_url)
+            if db.username and db.password:
+                auth_str = f"{db.username}:{db.password}"
+                encoded_auth = base64.b64encode(auth_str.encode()).decode()
+                req_cores.add_header("Authorization", f"Basic {encoded_auth}")
+            with urllib.request.urlopen(req_cores, context=context, timeout=10) as response:
+                data = json.loads(response.read().decode())
+                cores = len(data.get("status", {}))
+                return {"success": True, "message": f"Connected! Found {cores} Solr cores."}
+        except Exception as e:
+            raise HTTPException(400, f"Connection failed: {str(e)}")
+
+    raise HTTPException(400, "Unknown database type")
+
 @router.post("/test-uri")
 def test_uri(req: TestUriRequest, user=Depends(get_current_user)):
     if req.type != "mongodb":
