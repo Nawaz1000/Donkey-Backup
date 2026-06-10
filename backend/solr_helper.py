@@ -101,8 +101,11 @@ def dump_solr(solr_base_url, collection, auth_header):
                 sys.stdout.buffer.write(buffer_bytes)
                 
                 total_dumped += len(docs)
+                num_found = data.get("response", {}).get("numFound", 0)
                 if len(docs) > 0:
-                    sys.stderr.write(f"Dumped {total_dumped} documents from '{collection}'...\n")
+                    pct = int((total_dumped / num_found) * 100) if num_found > 0 else 0
+                    pct = min(100, max(0, pct))
+                    sys.stderr.write(f"Dumped {total_dumped}/{num_found} documents from '{collection}'... ({pct}%)\n")
                     sys.stderr.flush()
                 
                 next_cursor = data.get("nextCursorMark")

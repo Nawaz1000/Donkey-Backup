@@ -132,7 +132,9 @@ def delete_backup(backup_id: str, delete_from_remote: bool = False, user=Depends
                     )
                     client = BlobServiceClient.from_connection_string(conn_str)
                     container = client.get_container_client(storage["azure_container"])
-                    container.delete_blob(backup["remote_name"])
+                    blobs = container.list_blobs(name_starts_with=backup["remote_name"])
+                    for blob in blobs:
+                        container.delete_blob(blob.name)
                 elif storage["type"] == "gcs":
                     import json
                     from google.cloud import storage as gcs
@@ -141,8 +143,9 @@ def delete_backup(backup_id: str, delete_from_remote: bool = False, user=Depends
                     creds = service_account.Credentials.from_service_account_info(creds_dict)
                     client = gcs.Client(credentials=creds)
                     bucket = client.bucket(storage["gcs_bucket"])
-                    blob = bucket.blob(backup["remote_name"])
-                    blob.delete()
+                    blobs = bucket.list_blobs(prefix=backup["remote_name"])
+                    for blob in blobs:
+                        blob.delete()
         except Exception as e:
             print(f"Failed to delete remote backup: {e}")
             error_str = str(e).lower()

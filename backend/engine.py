@@ -1106,24 +1106,9 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
         
     coll = collections_to_backup[0]
     
-    # Fetch total size to enable progress percentage
-    if tracker:
-        try:
-            context = ssl._create_unverified_context()
-            headers = {"Authorization": auth_str} if auth_str != "None" else {}
-            core_url = f"{solr_base_url}/solr/admin/cores?action=STATUS&wt=json"
-            req_cores = urllib.request.Request(core_url, headers=headers)
-            with urllib.request.urlopen(req_cores, context=context, timeout=5) as response:
-                data = json.loads(response.read().decode())
-                total_bytes = 0
-                for core_name, core_info in data.get("status", {}).items():
-                    coll_name = core_info.get("cloud", {}).get("collection", core_name)
-                    if coll_name == coll:
-                        total_bytes += core_info.get("index", {}).get("sizeInBytes", 0)
-                if total_bytes > 0:
-                    tracker.total_size = total_bytes
-        except Exception as e:
-            write_log(log_path, f"WARN  Could not fetch Solr index size: {e}")
+    # We do NOT set tracker.total_size based on Solr index size because the JSON dump stream size 
+    # has no predictable relationship with the Lucene index binary size. Instead, the progress 
+    # will be parsed directly from the percentage outputted by solr_helper.py.
     
     cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "solr_helper.py"), "dump", solr_base_url, coll, auth_str]
     
