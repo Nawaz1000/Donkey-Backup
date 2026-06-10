@@ -2375,10 +2375,12 @@
           <textarea id="edit-st-gcs-creds" rows="4" placeholder="Leave blank to keep current"></textarea>
         </div>
       </div>
-      <div class="modal-actions">
-        <button class="btn btn-secondary" onclick="closeModal('edit-storage-modal')">Cancel</button>
-        <button class="btn btn-primary" onclick="saveEditStorage()"><i data-lucide="save"
-            style="width:15px;height:15px"></i> Save Changes</button>
+      <div class="modal-actions" style="justify-content: space-between;">
+        <button class="btn btn-danger" onclick="deleteStorage(document.getElementById('edit-st-id').value); closeModal('edit-storage-modal')"><i data-lucide="trash-2" style="width:15px;height:15px"></i> Remove</button>
+        <div>
+          <button class="btn btn-secondary" onclick="closeModal('edit-storage-modal')">Cancel</button>
+          <button class="btn btn-primary" onclick="saveEditStorage()"><i data-lucide="save" style="width:15px;height:15px"></i> Save Changes</button>
+        </div>
       </div>
     </div>
   </div>
@@ -2412,10 +2414,12 @@
       </div>
       <div class="form-group"><label>Database Name</label><input type="text" id="edit-db-dbname" /></div>
       <div class="form-group"><label>Description</label><input type="text" id="edit-db-desc" /></div>
-      <div class="modal-actions">
-        <button class="btn btn-secondary" onclick="closeModal('edit-db-modal')">Cancel</button>
-        <button class="btn btn-primary" onclick="saveEditDatabase()"><i data-lucide="save"
-            style="width:15px;height:15px"></i> Save Changes</button>
+      <div class="modal-actions" style="justify-content: space-between;">
+        <button class="btn btn-danger" onclick="deleteDatabase(document.getElementById('edit-db-id').value); closeModal('edit-db-modal')"><i data-lucide="trash-2" style="width:15px;height:15px"></i> Remove</button>
+        <div>
+          <button class="btn btn-secondary" onclick="closeModal('edit-db-modal')">Cancel</button>
+          <button class="btn btn-primary" onclick="saveEditDatabase()"><i data-lucide="save" style="width:15px;height:15px"></i> Save</button>
+        </div>
       </div>
     </div>
   </div>
@@ -3204,7 +3208,7 @@
           <button class="btn btn-secondary btn-sm btn-icon" onclick="testConn('${d.id}')" title="Test Connection"><i data-lucide="plug" style="width:14px;height:14px"></i></button>
           <button class="btn btn-secondary btn-sm btn-icon" onclick="openEditDb('${d.id}')" title="Edit"><i data-lucide="pencil" style="width:14px;height:14px"></i></button>
           <button class="btn btn-primary btn-sm" onclick="quickBackup('${d.id}','${d.name}')"><i data-lucide="play" style="width:13px;height:13px"></i> Backup</button>
-          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteDatabase('${d.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
+          <button class="btn btn-danger btn-sm" onclick="deleteDatabase('${d.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i> Remove</button>
         </div></td>
       </tr>`).join('') || emptyRow(6, 'No databases added yet. Click "+ Add Database" to get started.');
         lucide.createIcons();
@@ -3409,7 +3413,7 @@
         <td class="text-muted text-sm">${fmtDate(s.created_at)}</td>
         <td><div class="actions">
           <button class="btn btn-secondary btn-sm btn-icon" onclick="openEditStorage('${s.id}')" title="Edit"><i data-lucide="pencil" style="width:14px;height:14px"></i></button>
-          <button class="btn btn-danger btn-sm btn-icon" onclick="deleteStorage('${s.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
+          <button class="btn btn-danger btn-sm" onclick="deleteStorage('${s.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i> Remove</button>
         </div></td>
       </tr>`).join('') || emptyRow(5, 'No storage configured yet.');
         lucide.createIcons();
