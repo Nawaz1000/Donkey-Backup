@@ -1237,7 +1237,16 @@ def do_backup(backup_id: str):
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
         if backup.get("send_notifications", True):
-            send_notification("Backup Failed \u274c", f"Backup for {collection if collection != 'full' else (db and db.get('name'))} in {storage and storage.get('name')} failed at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}. Error: {msg}", is_error=True, log_path=log_path)
+            send_notification(
+                title="Backup Failed ❌",
+                details={
+                    "Target": collection if collection != 'full' else (db and db.get('name')),
+                    "Storage": storage and storage.get('name'),
+                    "Time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC'),
+                    "Error": msg
+                },
+                is_error=True, log_path=log_path
+            )
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     try:
@@ -1245,7 +1254,15 @@ def do_backup(backup_id: str):
             return fail("Database or storage not found")
             
         if backup.get("send_notifications", True):
-            send_notification("Backup Started \u23f3", f"Backup for {collection if collection != 'full' else db.get('name')} in {storage.get('name')} started at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}", is_error=False, log_path=log_path)
+            send_notification(
+                title="Backup Started ⏳",
+                details={
+                    "Target": collection if collection != 'full' else db.get('name'),
+                    "Storage": storage.get('name'),
+                    "Time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+                },
+                is_error=False, log_path=log_path
+            )
 
         speed_profile = backup.get("speed_profile", "default")
         
@@ -1312,7 +1329,17 @@ def do_backup(backup_id: str):
             duration_seconds=duration
         )
         if backup.get("send_notifications", True):
-            send_notification("Backup Successful \u2705", f"Backup for {collection if collection != 'full' else (db and db.get('name'))} in {storage and storage.get('name')} completed at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}. Size: {size_mb}MB. Duration: {duration}s", is_error=False, log_path=log_path)
+            send_notification(
+                title="Backup Successful ✅",
+                details={
+                    "Target": collection if collection != 'full' else (db and db.get('name')),
+                    "Storage": storage and storage.get('name'),
+                    "Size": f"{size_mb} MB",
+                    "Duration": f"{duration}s",
+                    "Time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+                },
+                is_error=False, log_path=log_path
+            )
 
     except Exception as e:
         fail(str(e))
@@ -1355,14 +1382,30 @@ def do_restore(restore_id: str):
             completed_at=datetime.utcnow().isoformat() + "Z",
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
-        send_notification("Restore Failed \u274c", f"Restore for {restore.get('remote_name', 'backup')} to {target_db and target_db.get('name')} failed at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}. Error: {msg}", is_error=True, log_path=log_path)
+        send_notification(
+            title="Restore Failed ❌",
+            details={
+                "Source": restore.get('remote_name', 'backup'),
+                "Target DB": target_db and target_db.get('name'),
+                "Time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC'),
+                "Error": msg
+            },
+            is_error=True, log_path=log_path
+        )
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     try:
         if not target_db:
             return fail("Target database not found")
         
-        send_notification("Restore Started \u23f3", f"Restore to {target_db.get('name')} started at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}", is_error=False, log_path=log_path)
+        send_notification(
+            title="Restore Started ⏳",
+            details={
+                "Target DB": target_db.get('name'),
+                "Time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+            },
+            is_error=False, log_path=log_path
+        )
 
 
         if restore.get("backup_id"):
@@ -1398,7 +1441,16 @@ def do_restore(restore_id: str):
         else:
             return fail("Backup ID or Storage/Remote Name not provided")
 
-        send_notification("Restore Started \u23f3", f"Restore for {remote_name} from {storage.get('name')} to {target_db.get('name')} started at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}", is_error=False, log_path=log_path)
+        send_notification(
+            title="Restore Started ⏳",
+            details={
+                "Source": remote_name,
+                "Storage": storage.get('name'),
+                "Target DB": target_db.get('name'),
+                "Time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+            },
+            is_error=False, log_path=log_path
+        )
 
         # Override dbname if new database
         if restore.get("new_database") and restore.get("new_database_name"):
@@ -1457,7 +1509,16 @@ def do_restore(restore_id: str):
             completed_at=datetime.utcnow().isoformat() + "Z",
             duration_seconds=duration
         )
-        send_notification("Restore Successful \u2705", f"Restore for {remote_name} to {target_db and target_db.get('name')} completed at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}. Duration: {duration}s", is_error=False, log_path=log_path)
+        send_notification(
+            title="Restore Successful ✅",
+            details={
+                "Source": remote_name,
+                "Target DB": target_db and target_db.get('name'),
+                "Duration": f"{duration}s",
+                "Time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+            },
+            is_error=False, log_path=log_path
+        )
 
     except Exception as e:
         fail(str(e))
@@ -1605,7 +1666,14 @@ def do_sync(sync_id: str):
             completed_at=datetime.utcnow().isoformat() + "Z",
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
-        send_notification("Sync Failed \u274c", f"Job ID: {sync_id}\nError: {msg}", is_error=True, log_path=log_path)
+        send_notification(
+            title="Sync Failed ❌",
+            details={
+                "Job ID": sync_id,
+                "Error": msg
+            },
+            is_error=True, log_path=log_path
+        )
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     try:
@@ -1648,7 +1716,15 @@ def do_sync(sync_id: str):
             duration_seconds=duration,
             progress=100
         )
-        send_notification("Sync Successful \u2705", f"Job ID: {sync_id}\nSize: {size_mb}MB\nDuration: {duration}s", is_error=False, log_path=log_path)
+        send_notification(
+            title="Sync Successful ✅",
+            details={
+                "Job ID": sync_id,
+                "Size": f"{size_mb} MB",
+                "Duration": f"{duration}s"
+            },
+            is_error=False, log_path=log_path
+        )
 
     except Exception as e:
         fail(str(e))

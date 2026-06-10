@@ -96,7 +96,7 @@ def write_json(path: str, data):
 import urllib.request
 import urllib.parse
 
-def send_notification(title: str, message: str, is_error: bool = False, log_path: str = None):
+def send_notification(title: str, message: str = "", details: dict = None, is_error: bool = False, log_path: str = None):
     try:
         if not os.path.exists("data/settings.json"):
             if log_path:
@@ -108,8 +108,14 @@ def send_notification(title: str, message: str, is_error: bool = False, log_path
             return
         settings = read_json("data/settings.json")
         
+        # Fallback raw text
         text = f"*{title}*\n{message}"
-        color = "EF4444" if is_error else "10B981"
+        if details:
+            text += "\n\nDetails:\n"
+            for k, v in details.items():
+                text += f"• *{k}:* {v}\n"
+
+        color = "#EF4444" if is_error else "#10B981"
         
         headers = {
             "User-Agent": "curl/7.68.0",
@@ -124,7 +130,47 @@ def send_notification(title: str, message: str, is_error: bool = False, log_path
                     write_log(log_path, "INFO  Sending Slack webhook notification...")
                 except Exception:
                     pass
-            payload = json.dumps({"text": text}).encode('utf-8')
+                    
+            slack_blocks = [
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": title,
+                        "emoji": True
+                    }
+                }
+            ]
+            if message:
+                slack_blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": message
+                    }
+                })
+            if details:
+                details_text = ""
+                for k, v in details.items():
+                    details_text += f"*{k}:* {v}\n"
+                slack_blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": details_text
+                    }
+                })
+                
+            slack_payload = {
+                "text": text, # Fallback text
+                "attachments": [
+                    {
+                        "color": color,
+                        "blocks": slack_blocks
+                    }
+                ]
+            }
+            payload = json.dumps(slack_payload).encode('utf-8')
             req = urllib.request.Request(settings["slack_webhook"], data=payload, headers=headers, method="POST")
             _send_single_webhook("Slack", req, log_path)
             
@@ -136,8 +182,23 @@ def send_notification(title: str, message: str, is_error: bool = False, log_path
                     write_log(log_path, "INFO  Sending Microsoft Teams webhook notification...")
                 except Exception:
                     pass
+                    
+            teams_facts = []
+            if details:
+                for k, v in details.items():
+                    teams_facts.append({"name": f"{k}:", "value": str(v)})
+            
             teams_payload = {
-                "text": text
+                "@type": "MessageCard",
+                "@context": "http://schema.org/extensions",
+                "themeColor": color.replace("#", ""),
+                "summary": title,
+                "sections": [{
+                    "activityTitle": title,
+                    "activitySubtitle": message,
+                    "facts": teams_facts,
+                    "markdown": True
+                }]
             }
             payload = json.dumps(teams_payload).encode('utf-8')
             req = urllib.request.Request(settings["teams_webhook"], data=payload, headers=headers, method="POST")
@@ -151,9 +212,18 @@ def send_notification(title: str, message: str, is_error: bool = False, log_path
                     write_log(log_path, "INFO  Sending Telegram webhook notification...")
                 except Exception:
                     pass
+                    
+            tg_text = f"<b>{title}</b>\n"
+            if message:
+                tg_text += f"{message}\n"
+            if details:
+                tg_text += "\n"
+                for k, v in details.items():
+                    tg_text += f"• <b>{k}:</b> {v}\n"
+                    
             tg_url = settings["telegram_webhook"]
             connector = "&" if "?" in tg_url else "?"
-            url = tg_url + connector + "text=" + urllib.parse.quote(text)
+            url = tg_url + connector + "text=" + urllib.parse.quote(tg_text) + "&parse_mode=HTML"
             req = urllib.request.Request(url, headers={"User-Agent": "BackupVault/1.0"})
             _send_single_webhook("Telegram", req, log_path)
     except Exception as e:
