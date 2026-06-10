@@ -1824,14 +1824,14 @@
                   onkeyup="filterHistory()">
               </div>
               <select id="history-type-filter"
-                style="background:var(--bg); border:1px solid transparent; padding:12px 16px; border-radius:var(--radius-sm); color:#fff; font-size:13px; outline:none; width:160px;"
+                style="background-color:var(--bg); border:1px solid transparent; padding:12px 16px; border-radius:var(--radius-sm); color:#fff; font-size:13px; outline:none; width:160px;"
                 onchange="filterHistory()">
                 <option value="all">All Types</option>
                 <option value="backup">Backup</option>
                 <option value="restore">Restore</option>
               </select>
               <select id="history-status-filter"
-                style="background:var(--bg); border:1px solid transparent; padding:12px 16px; border-radius:var(--radius-sm); color:#fff; font-size:13px; outline:none; width:160px;"
+                style="background-color:var(--bg); border:1px solid transparent; padding:12px 16px; border-radius:var(--radius-sm); color:#fff; font-size:13px; outline:none; width:160px;"
                 onchange="filterHistory()">
                 <option value="all">All Status</option>
                 <option value="completed">Completed</option>
@@ -1839,7 +1839,7 @@
                 <option value="running">Running</option>
               </select>
               <select id="history-time-filter"
-                style="background:var(--bg); border:1px solid transparent; padding:12px 16px; border-radius:var(--radius-sm); color:#fff; font-size:13px; outline:none; width:160px;"
+                style="background-color:var(--bg); border:1px solid transparent; padding:12px 16px; border-radius:var(--radius-sm); color:#fff; font-size:13px; outline:none; width:160px;"
                 onchange="filterHistory()">
                 <option value="7">Last 7 days</option>
                 <option value="30">Last 30 days</option>
@@ -2869,7 +2869,7 @@
           const statusIcon = b.status === 'completed' ? 'check-circle-2' : 'x-circle';
           return `
       <tr>
-        <td style="padding:16px 24px; font-weight:500; display:flex; align-items:center; gap:8px;"><i data-lucide="database" style="width:16px;height:16px;color:var(--text2)"></i> ${b.database_name || 'Database'}</td>
+        <td style="padding:16px 24px; font-weight:500; "><div style="display:flex; align-items:center; gap:8px;"><i data-lucide="database" style="width:16px;height:16px;color:var(--text2)"></i> ${b.database_name || 'Database'}</div></td>
         <td style="padding:16px 24px; font-size:13px; color:var(--text);">${b.database_type || 'Unknown'}</td>
         <td style="padding:16px 24px; font-size:13px; color:var(--text);">${b.size_mb ? (b.size_mb).toFixed(1) + ' MB' : '—'}</td>
         <td style="padding:16px 24px;"><span style="display:inline-flex; align-items:center; gap:4px; ${badgeStyle}"><i data-lucide="${statusIcon}" style="width:12px;height:12px"></i> ${b.status.charAt(0).toUpperCase() + b.status.slice(1)}</span></td>
@@ -3111,7 +3111,7 @@
 
           return `
       <tr>
-        <td style="padding:16px 24px; font-weight:500; display:flex; align-items:center; gap:8px;"><i data-lucide="database" style="width:16px;height:16px;color:var(--text2)"></i> ${b.database_name || 'prod_users'}</td>
+        <td style="padding:16px 24px; font-weight:500; "><div style="display:flex; align-items:center; gap:8px;"><i data-lucide="database" style="width:16px;height:16px;color:var(--text2)"></i> ${b.database_name || 'prod_users'}</div></td>
         <td style="padding:16px 24px; font-size:13px; color:var(--text);">${b.database_type === 'postgresql' ? 'PostgreSQL' : b.database_type === 'mongodb' ? 'MongoDB' : 'MySQL'}</td>
         <td style="padding:16px 24px; font-size:13px; color:var(--text);">${b.size_mb ? (b.size_mb / 1024).toFixed(1) + ' GB' : '4.2 GB'}</td>
         <td style="padding:16px 24px; font-size:13px; color:var(--text);">${op}</td>
