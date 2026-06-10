@@ -591,7 +591,8 @@
 
     table {
       width: 100%;
-      border-collapse: collapse
+      border-collapse: separate;
+      border-spacing: 0;
     }
 
     th {
@@ -1609,7 +1610,7 @@
                   <div class="form-group mb-6">
                     <label>Database</label>
                     <select id="inline-bk-db" onchange="onInlineBackupDbChange()"
-                      style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                     </select>
                   </div>
                   <div class="form-group mb-6">
@@ -1633,14 +1634,14 @@
                   <div class="form-group mb-6">
                     <label>Destination</label>
                     <select id="inline-bk-storage"
-                      style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                     </select>
                   </div>
                   <!-- Advanced Features -->
                   <div class="form-group mb-4">
                     <label>Database Name</label>
                     <select id="inline-bk-dbname" onchange="onInlineBackupDbnameChange()"
-                      style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                       <option value="">— select connection first —</option>
                     </select>
                   </div>
@@ -1648,7 +1649,7 @@
                     <label>Backup Scope</label>
                     <select id="inline-bk-scope"
                       onchange="document.getElementById('inline-bk-collection-group').style.display = this.value === 'collection' ? 'block' : 'none';"
-                      style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                       <option value="full">Full Database</option>
                       <option value="collection">Specific Collection / Table</option>
                     </select>
@@ -1656,7 +1657,7 @@
                   <div class="form-group mb-4" id="inline-bk-collection-group" style="display:none">
                     <label>Collection / Table</label>
                     <select id="inline-bk-collection-select"
-                      style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                       <option value="">— select database name first —</option>
                     </select>
                   </div>
@@ -1670,7 +1671,7 @@
                       <div class="form-group mb-4">
                         <label>Indexing Mode</label>
                         <select id="inline-bk-indexing-mode"
-                          style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                          style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                           <option value="with_index">Include Indexes (Default)</option>
                           <option value="without_index">Exclude Indexes (Data Only)</option>
                           <option value="only_index">Only Indexes (Schema Only)</option>
@@ -1679,7 +1680,7 @@
                       <div class="form-group mb-2">
                         <label>Speed Profile</label>
                         <select id="inline-bk-speed-profile"
-                          style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                          style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                           <option value="default">Default</option>
                           <option value="extreme">Extreme</option>
                           <option value="balanced">Balanced</option>
@@ -1946,12 +1947,12 @@
                   <div class="form-group mb-6">
                     <label>Schedule Name</label>
                     <input type="text" id="inline-sc-name" placeholder="e.g. Nightly Full"
-                      style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500; width:100%; border-radius:var(--radius-sm); color:#fff; box-sizing:border-box;">
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500; width:100%; border-radius:var(--radius-sm); color:#fff; box-sizing:border-box;">
                   </div>
                   <div class="form-group mb-6">
                     <label>Database</label>
                     <select id="inline-sc-db"
-                      style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                     </select>
                   </div>
                   <div class="form-group mb-6">
@@ -1972,7 +1973,7 @@
                     <div class="form-group" style="flex:1;">
                       <label>Frequency</label>
                       <select id="inline-sc-freq"
-                        style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                        style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                         <option value="daily">Daily</option>
                         <option value="weekly">Weekly</option>
                         <option value="monthly">Monthly</option>
@@ -1983,7 +1984,7 @@
                     <div class="form-group" style="flex:1;">
                       <label>Time</label>
                       <input type="time" id="inline-sc-time" value="02:15"
-                        style="background:var(--surface-solid); border:1px solid var(--border); padding:12px 16px; font-weight:500; width:100%; border-radius:var(--radius-sm); color:#fff; box-sizing:border-box; outline:none;" />
+                        style="background-color:var(--surface-solid); border:1px solid var(--border); padding:12px 16px; font-weight:500; width:100%; border-radius:var(--radius-sm); color:#fff; box-sizing:border-box; outline:none;" />
                     </div>
                   </div>
 
@@ -1996,12 +1997,12 @@
                       <div class="form-group mb-4">
                         <label>Storage Destination</label>
                         <select id="inline-sc-storage"
-                          style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;"></select>
+                          style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;"></select>
                       </div>
                       <div class="form-group mb-4">
                         <label>Speed Profile</label>
                         <select id="inline-sc-speed-profile"
-                          style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                          style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                           <option value="default">Default</option>
                           <option value="extreme">Extreme</option>
                           <option value="balanced">Balanced</option>
@@ -2089,13 +2090,13 @@
                   <div class="form-group mb-6">
                     <label>Source Backup</label>
                     <select id="inline-rs-backup"
-                      style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                     </select>
                   </div>
                   <div class="form-group mb-6">
                     <label>Target Connection</label>
                     <select id="inline-rs-target" onchange="onInlineRestoreTargetChange()"
-                      style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                     </select>
                   </div>
 
@@ -2118,7 +2119,7 @@
                     <label>Target Database Name <span style="color:var(--muted);font-size:11px">(fetched from
                         server)</span></label>
                     <select id="inline-rs-dbname"
-                      style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                       <option value="">— select target connection first —</option>
                     </select>
                     <div class="info-banner warn" style="margin-top:12px; margin-bottom:0;">
@@ -2131,7 +2132,7 @@
                   <div id="inline-rs-new-fields" class="form-group mb-6" style="display:none;">
                     <label>New Database Name</label>
                     <input type="text" id="inline-rs-new-dbname" placeholder="e.g. prod_db_restored"
-                      style="background:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;" />
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;" />
                     <div class="info-banner" style="margin-top:12px; margin-bottom:0;">
                       <i data-lucide="check-circle-2"></i>
                       <span>A fresh database will be created — no existing data will be affected</span>
@@ -2622,7 +2623,7 @@
       </div>
 
       <div id="rs-info"
-        style="background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;font-size:13px;color:var(--text2);margin-bottom:16px;display:none">
+        style="background-color:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;font-size:13px;color:var(--text2);margin-bottom:16px;display:none">
         <span id="rs-info-text"></span>
       </div>
 
@@ -2832,7 +2833,7 @@
         stList.innerHTML = sts.map(s => `
       <div class="db-item" onclick="openEditStorage('${s.id}')" style="cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='rgba(255,255,255,0.02)'">
         <div class="db-item-left">
-          <div class="db-item-icon" style="background:var(--surface-solid);"><i data-lucide="cloud"></i></div>
+          <div class="db-item-icon" style="background-color:var(--surface-solid);"><i data-lucide="cloud"></i></div>
           <div class="db-item-info">
             <h4>${s.name}</h4>
             <span class="db-badge">${s.type === 'azure' ? 'Azure Blob' : 'Google Cloud Storage'}</span>
