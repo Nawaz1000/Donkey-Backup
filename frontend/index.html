@@ -69,6 +69,15 @@
       color-scheme: dark;
     }
 
+    select {
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 36px !important;
+    }
+
     /* ── Scrollbar ── */
     ::-webkit-scrollbar {
       width: 6px
@@ -2687,7 +2696,19 @@
     </div>
   </div>
 
-  <div class="toast-container" id="toasts"></div>
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Confirm Modal -->
+  <div class="modal-overlay" id="confirm-modal">
+    <div class="modal" style="max-width:400px; padding:24px;">
+      <h3 id="confirm-title" style="margin-top:0; font-size:18px; color:#fff;">Confirm</h3>
+      <div id="confirm-msg" style="margin:16px 0 24px; color:var(--text2); font-size:14px; line-height:1.5;"></div>
+      <div style="display:flex; justify-content:flex-end; gap:12px;">
+        <button class="btn btn-secondary" onclick="closeModal('confirm-modal')">Cancel</button>
+        <button class="btn btn-primary" id="confirm-ok-btn">OK</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     const API = '/api';
@@ -3185,10 +3206,10 @@
         const tbody = document.getElementById('databases-table');
         tbody.innerHTML = dbs.map(d => `
       <tr>
-        <td><strong>${d.name}</strong><br><span class="text-muted text-sm">${d.description || ''}</span></td>
+        <td><div style="max-width:180px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${d.name}"><strong>${d.name}</strong><br><span class="text-muted text-sm">${d.description || ''}</span></div></td>
         <td>${dbBadge(d.type)}</td>
-        <td class="mono text-sm">${d.host}:${d.port}</td>
-        <td class="mono text-sm">${d.database_name}</td>
+        <td><div class="mono text-sm" style="max-width:160px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${d.host}:${d.port}">${d.host}:${d.port}</div></td>
+        <td><div class="mono text-sm" style="max-width:160px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${d.database_name}">${d.database_name}</div></td>
         <td class="text-muted text-sm">${fmtDate(d.created_at)}</td>
         <td><div class="actions">
           <button class="btn btn-secondary btn-sm btn-icon" onclick="testConn('${d.id}')" title="Test Connection"><i data-lucide="plug" style="width:14px;height:14px"></i></button>
@@ -3317,11 +3338,12 @@
     }
 
     async function deleteDatabase(id) {
-      if (!confirm('Delete this database?')) return;
-      await apiFetch(`/databases/${id}`, { method: 'DELETE' });
-      toast('Deleted', 'success');
-      loadDatabases();
-      loadBackupPage();
+      appConfirm('Delete Database', 'Delete this database?', async () => {
+        await apiFetch(`/databases/${id}`, { method: 'DELETE' });
+        toast('Deleted', 'success');
+        loadDatabases();
+        loadBackupPage();
+      });
     }
 
     async function openEditDb(id) {
@@ -3424,11 +3446,12 @@
     }
 
     async function deleteStorage(id) {
-      if (!confirm('Delete this storage?')) return;
-      await apiFetch(`/storage/${id}`, { method: 'DELETE' });
-      toast('Deleted', 'success');
-      loadStorage();
-      loadBackupPage();
+      appConfirm('Delete Storage', 'Delete this storage?', async () => {
+        await apiFetch(`/storage/${id}`, { method: 'DELETE' });
+        toast('Deleted', 'success');
+        loadStorage();
+        loadBackupPage();
+      });
     }
 
     async function openEditStorage(id) {
@@ -4099,47 +4122,50 @@
     }
 
     async function cancelJob(id, type) {
-      if (!confirm('Are you sure you want to STOP this running job?')) return;
-      try {
-        const url = type === 'backups' ? `/backups/${id}/cancel` : `/backups/restores/${id}/cancel`;
-        const res = await apiFetch(url, { method: 'POST' });
-        if (res.success) {
-          toast('Job cancelled successfully.', 'success');
-          loadBackupPage();
-          if (type === 'backups') loadBackups();
-          else loadRestores();
-        } else {
-          toast(res.message, 'error');
+      appConfirm('Stop Job', 'Are you sure you want to STOP this running job?', async () => {
+        try {
+          const url = type === 'backups' ? `/backups/${id}/cancel` : `/backups/restores/${id}/cancel`;
+          const res = await apiFetch(url, { method: 'POST' });
+          if (res.success) {
+            toast('Job cancelled successfully.', 'success');
+            loadBackupPage();
+            if (type === 'backups') loadBackups();
+            else loadRestores();
+          } else {
+            toast(res.message, 'error');
+          }
+        } catch (e) {
+          toast(e.message, 'error');
         }
-      } catch (e) {
-        toast(e.message, 'error');
-      }
+      });
     }
 
     async function deleteBackup(id, deleteFromRemote = false) {
       const msg = deleteFromRemote
         ? 'Delete this backup history AND remove the file from remote cloud storage?'
         : 'Delete this backup history record? (Remote file will be kept)';
-      if (!confirm(msg)) return;
-      try {
-        await apiFetch(`/backups/${id}?delete_from_remote=${deleteFromRemote}`, { method: 'DELETE' });
-        toast('Deleted', 'success');
-        loadBackups();
-        loadBackupPage();
-      } catch (e) {
-        toast(e.message, 'error');
-      }
+      appConfirm('Delete Backup', msg, async () => {
+        try {
+          await apiFetch(`/backups/${id}?delete_from_remote=${deleteFromRemote}`, { method: 'DELETE' });
+          toast('Deleted', 'success');
+          loadBackups();
+          loadBackupPage();
+        } catch (e) {
+          toast(e.message, 'error');
+        }
+      });
     }
 
     async function deleteRestoreRecord(id) {
-      if (!confirm('Delete this restore record?')) return;
-      try {
-        await apiFetch(`/backups/restores/${id}`, { method: 'DELETE' });
-        toast('Deleted', 'success');
-        loadBackups();
-      } catch (e) {
-        toast(e.message, 'error');
-      }
+      appConfirm('Delete Record', 'Delete this restore record?', async () => {
+        try {
+          await apiFetch(`/backups/restores/${id}`, { method: 'DELETE' });
+          toast('Deleted', 'success');
+          loadBackups();
+        } catch (e) {
+          toast(e.message, 'error');
+        }
+      });
     }
 
     // ---- SCHEDULES ----
@@ -4328,9 +4354,10 @@
     }
 
     async function deleteSchedule(id) {
-      if (!confirm('Delete schedule?')) return;
-      await apiFetch(`/schedules/${id}`, { method: 'DELETE' });
-      toast('Deleted', 'success'); loadSchedules();
+      appConfirm('Delete Schedule', 'Delete schedule?', async () => {
+        await apiFetch(`/schedules/${id}`, { method: 'DELETE' });
+        toast('Deleted', 'success'); loadSchedules();
+      });
     }
 
     // ---- RESTORES ----
@@ -4350,12 +4377,13 @@
     }
 
     async function deleteRestore(id) {
-      if (!confirm('Delete this restore history?')) return;
-      try {
-        await apiFetch(`/backups/restores/${id}`, { method: 'DELETE' });
-        toast('Deleted', 'success');
-        loadRestores();
-      } catch (e) { toast(e.message, 'error'); }
+      appConfirm('Delete History', 'Delete this restore history?', async () => {
+        try {
+          await apiFetch(`/backups/restores/${id}`, { method: 'DELETE' });
+          toast('Deleted', 'success');
+          loadRestores();
+        } catch (e) { toast(e.message, 'error'); }
+      });
     }
 
     async function openRestoreFromBackup(backupId, backupLabel) {
@@ -4475,38 +4503,43 @@
       if (!targetDbId) { toast('Select a target database connection', 'error'); return; }
       if (!targetDbname) { toast(isNew ? 'Enter a new database name' : 'Select a target database name', 'error'); return; }
 
-      if (!isNew && !confirm(`Restore to "${targetDbname}"? Existing data will be overwritten.`)) return;
-      if (isNew && !confirm(`Create new database "${targetDbname}" and restore into it?`)) return;
+      const doRestore = async () => {
+        try {
+          await apiFetch(`/databases/${targetDbId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ database_name: targetDbname })
+          });
+        } catch (e) { }
 
-      try {
-        await apiFetch(`/databases/${targetDbId}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ database_name: targetDbname })
-        });
-      } catch (e) { }
+        try {
+          let payload = {
+            target_database_id: targetDbId,
+            new_database: isNew,
+            new_database_name: isNew ? targetDbname : null,
+            indexing_mode: v('rs-indexing-mode'),
+            speed_profile: v('rs-speed-profile') || 'default'
+          };
 
-      try {
-        let payload = {
-          target_database_id: targetDbId,
-          new_database: isNew,
-          new_database_name: isNew ? targetDbname : null,
-          indexing_mode: v('rs-indexing-mode'),
-          speed_profile: v('rs-speed-profile') || 'default'
-        };
+          if (isExternal) {
+            payload.storage_id = storageId;
+            payload.remote_name = file;
+          } else {
+            payload.backup_id = backupId;
+          }
 
-        if (isExternal) {
-          payload.storage_id = storageId;
-          payload.remote_name = file;
-        } else {
-          payload.backup_id = backupId;
-        }
+          const r = await apiFetch('/backups/restore', { method: 'POST', body: JSON.stringify(payload) });
+          closeModal('restore-modal');
+          toast(isNew ? `Creating "${targetDbname}" and restoring...` : 'Restore started!', 'info');
+          showPage('restores');
+          trackRestoreProgress(r.id);
+        } catch (e) { toast(e.message, 'error'); }
+      };
 
-        const r = await apiFetch('/backups/restore', { method: 'POST', body: JSON.stringify(payload) });
-        closeModal('restore-modal');
-        toast(isNew ? `Creating "${targetDbname}" and restoring...` : 'Restore started!', 'info');
-        showPage('restores');
-        trackRestoreProgress(r.id);
-      } catch (e) { toast(e.message, 'error'); }
+      if (!isNew) {
+        appConfirm('Confirm Restore', `Restore to "<b>${targetDbname}</b>"?<br><br><span style="color:var(--danger)">\u26A0 Existing data will be overwritten.</span>`, doRestore);
+      } else {
+        appConfirm('Confirm Restore', `Create new database "<b>${targetDbname}</b>" and restore into it?`, doRestore);
+      }
     }
 
     function trackRestoreProgress(restoreId) {
@@ -4543,6 +4576,14 @@
     }
     function closeModal(id) { document.getElementById(id).classList.remove('open'); }
     document.querySelectorAll('.modal-overlay').forEach(m => m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open') }));
+
+    function appConfirm(title, msg, onConfirm) {
+      document.getElementById('confirm-title').innerText = title;
+      document.getElementById('confirm-msg').innerHTML = msg;
+      const btn = document.getElementById('confirm-ok-btn');
+      btn.onclick = () => { closeModal('confirm-modal'); onConfirm(); };
+      document.getElementById('confirm-modal').classList.add('open');
+    }
 
     // ---- HELPERS ----
     function v(id) { return document.getElementById(id)?.value || '' }
