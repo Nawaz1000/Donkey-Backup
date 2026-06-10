@@ -2941,6 +2941,7 @@
           })
         });
         toast('Backup started!', 'info');
+        trackActiveOperation('backup', b.id, label);
         loadBackupPage();
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -2973,6 +2974,7 @@
               speed_profile: 'default'
             })
           });
+          document.getElementById('inline-rs-container').style.display = 'none';
           toast(isNew ? `Creating "${targetDbname}" and restoring...` : 'Restore started!', 'info');
           trackActiveOperation('restore', r.id, `Restoring ${backupId.substring(0, 8)}... to ${targetDbname}`);
         } catch (e) { toast(e.message, 'error'); }
