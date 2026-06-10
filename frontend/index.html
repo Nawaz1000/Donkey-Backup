@@ -558,6 +558,7 @@
       backdrop-filter: blur(16px);
       border: 1px solid var(--border);
       border-radius: var(--radius);
+      overflow: hidden;
       overflow-x: auto;
       transition: var(--transition);
     }
@@ -1496,7 +1497,7 @@
 
           #page-backups input,
           #page-backups select {
-            background: var(--bg) !important;
+            background-color: var(--bg) !important;
             border-color: rgba(255, 255, 255, 0.03) !important;
           }
 
@@ -2955,26 +2956,26 @@
       if (!targetDbname) { toast(isNew ? 'Enter a new database name' : 'Select a target database name', 'error'); return; }
 
       const msg = isNew
-        ? `Create new database "${targetDbname}" and restore into it?`
-        : `Restore to "${targetDbname}"? Existing data will be overwritten.`;
+        ? `Create new database "<b>${targetDbname}</b>" and restore into it?`
+        : `Restore to "<b>${targetDbname}</b>"?<br><br><span style="color:var(--danger)">\u26A0 Existing data will be overwritten.</span>`;
 
-      if (!confirm(msg)) return;
-
-      try {
-        const r = await apiFetch('/backups/restore', {
-          method: 'POST',
-          body: JSON.stringify({
-            backup_id: backupId,
-            target_database_id: targetDbId,
-            new_database: isNew,
-            new_database_name: targetDbname,
-            indexing_mode: 'with_index',
-            speed_profile: 'default'
-          })
-        });
-        toast(isNew ? `Creating "${targetDbname}" and restoring...` : 'Restore started!', 'info');
-        trackActiveOperation('restore', r.id, `Restoring ${backupId.substring(0, 8)}... to ${targetDbname}`);
-      } catch (e) { toast(e.message, 'error'); }
+      appConfirm('Confirm Restore', msg, async () => {
+        try {
+          const r = await apiFetch('/backups/restore', {
+            method: 'POST',
+            body: JSON.stringify({
+              backup_id: backupId,
+              target_database_id: targetDbId,
+              new_database: isNew,
+              new_database_name: targetDbname,
+              indexing_mode: 'with_index',
+              speed_profile: 'default'
+            })
+          });
+          toast(isNew ? `Creating "${targetDbname}" and restoring...` : 'Restore started!', 'info');
+          trackActiveOperation('restore', r.id, `Restoring ${backupId.substring(0, 8)}... to ${targetDbname}`);
+        } catch (e) { toast(e.message, 'error'); }
+      });
     }
 
     function setInlineRestoreMode(mode) {
