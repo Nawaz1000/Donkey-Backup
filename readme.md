@@ -97,6 +97,12 @@ backupvault/
   - Implements an advanced, case-insensitive URI parser that detects database options from both query parameters and path-based segments (such as `...:27017/authMechanism=...`), auto-corrects them, and connects securely using keyword argument credentials to bypass PyMongo URI decoding limitations with special characters (like `!`).
 - **Verbosity & Notification Logging:**
   - Job logs now track webhook notification dispatches and connection statuses in real-time, detailing successes and errors in the job's viewable console logs.
+- **MongoDB Cluster-Wide Scheduled Backups:**
+  - Automatically iterates over all available databases in the cluster for scheduled full backups, streaming each distinct database into a unified cluster-wide backup folder in Azure/GCS.
+- **Automated Cluster Restore:**
+  - Native detection of cluster-wide backup folders triggering sequential object discovery and database-specific restores directly from Azure/GCS without manual intervention.
+- **Local Timezone Scheduling:**
+  - Integrates local browser timezone offsets directly into the backend scheduling loop. This ensures background jobs always evaluate trigger times using exact local time rather than UTC, making scheduling foolproof across global regions.
 
 - **Actual Progress Tracking (Bar, Percentages, and Stderr Parsing):**
   - Parses real-time `mongodump` and `mongorestore` logs using background regex parsers to fetch progress percentages.

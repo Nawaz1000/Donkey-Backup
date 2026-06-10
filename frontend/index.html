@@ -4229,15 +4229,6 @@
 
     async function runInlineSchedule() {
       const localTime = v('inline-sc-time') || '02:00';
-      let timeStr = localTime;
-      try {
-        const [hr, min] = localTime.split(':').map(Number);
-        const date = new Date();
-        date.setHours(hr, min, 0, 0);
-        const utcHr = String(date.getUTCHours()).padStart(2, '0');
-        const utcMin = String(date.getUTCMinutes()).padStart(2, '0');
-        timeStr = `${utcHr}:${utcMin}`;
-      } catch (e) { }
 
       try {
         await apiFetch('/schedules/', {
@@ -4247,11 +4238,12 @@
             database_id: v('inline-sc-db'),
             storage_id: v('inline-sc-storage') || null,
             frequency: v('inline-sc-freq'),
-            time: timeStr,
+            time: localTime,
             enabled: true,
             backup_method: document.getElementById('inline-sc-type').value,
             incremental_field: v('inline-sc-incremental-field') || null,
-            speed_profile: v('inline-sc-speed-profile') || 'default'
+            speed_profile: v('inline-sc-speed-profile') || 'default',
+            timezone_offset: new Date().getTimezoneOffset()
           })
         });
         toast('Schedule created!', 'success');
@@ -4267,24 +4259,15 @@
       const method = v('sc-method');
       const localTime = v('sc-time') || '02:00';
 
-      let timeStr = localTime;
-      try {
-        const [hr, min] = localTime.split(':').map(Number);
-        const date = new Date();
-        date.setHours(hr, min, 0, 0);
-        const utcHr = String(date.getUTCHours()).padStart(2, '0');
-        const utcMin = String(date.getUTCMinutes()).padStart(2, '0');
-        timeStr = `${utcHr}:${utcMin}`;
-      } catch (e) { }
-
       try {
         await apiFetch('/schedules/', {
           method: 'POST', body: JSON.stringify({
             name: v('sc-name'), database_id: v('sc-db'), storage_id: v('sc-storage'),
-            frequency: freq, time: timeStr, enabled: true,
+            frequency: freq, time: localTime, enabled: true,
             backup_method: freq === 'weekly_mixed' ? 'full' : method,
             incremental_field: v('sc-incremental-field') || null,
-            speed_profile: v('sc-speed-profile') || 'default'
+            speed_profile: v('sc-speed-profile') || 'default',
+            timezone_offset: new Date().getTimezoneOffset()
           })
         });
         closeModal('schedule-modal');

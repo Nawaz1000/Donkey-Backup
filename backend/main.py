@@ -33,6 +33,10 @@ async def scheduler_loop():
 
                 freq = s.get("frequency")
                 target_time = s.get("time")
+                timezone_offset = s.get("timezone_offset", 0)
+                local_now = now - timedelta(minutes=timezone_offset)
+                day_of_week = local_now.weekday()
+                day_of_month = local_now.day
 
                 is_due = False
                 backup_method_override = None
@@ -48,11 +52,11 @@ async def scheduler_loop():
                 else:
                     try:
                         th, tm = map(int, target_time.split(":"))
-                        target_dt = now.replace(hour=th, minute=tm, second=0, microsecond=0)
+                        target_dt = local_now.replace(hour=th, minute=tm, second=0, microsecond=0)
                     except Exception:
                         continue
                         
-                    if target_dt <= now < target_dt + timedelta(minutes=5):
+                    if target_dt <= local_now < target_dt + timedelta(minutes=5):
                         day_ok = False
                         if freq in ("daily", "weekly_mixed"):
                             day_ok = True
@@ -67,7 +71,8 @@ async def scheduler_loop():
                                 is_due = True
                             else:
                                 last_run_dt = datetime.fromisoformat(last_run)
-                                if last_run_dt.date() < now.date():
+                                last_run_local = last_run_dt - timedelta(minutes=timezone_offset)
+                                if last_run_local.date() < local_now.date():
                                     is_due = True
                             
                             if is_due and freq == "weekly_mixed":
@@ -103,6 +108,7 @@ async def scheduler_loop():
                         "size_mb": None,
                         "remote_path": None,
                         "remote_name": None,
+                        "is_scheduled": True,
                         "error": None,
                         "created_at": now.isoformat(),
                         "completed_at": None,

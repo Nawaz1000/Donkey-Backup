@@ -707,10 +707,10 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
 
 # ─── MONGODB BACKUP ──────────────────────────────────────────────────────────
 
-def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default") -> str:
+def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", is_cluster: bool = False) -> str:
     m = parse_mongo_uri(db)
     dbname = m["dbname"]
-    if not dbname: raise ValueError("Database name is required.")
+    if not dbname and not is_cluster: raise ValueError("Database name is required.")
     
     collection = backup_info.get("collection", "full")
     backup_method = backup_info.get("backup_method", "full")
@@ -744,6 +744,47 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
             raise RuntimeError(f"Failed to backup MongoDB indexes: {e}")
 
     settings = get_speed_settings(speed_profile)
+    if is_cluster:
+        import pymongo
+        write_log(log_path, "INFO  Cluster-wide scheduled backup requested. Fetching databases...")
+        try:
+            client = pymongo.MongoClient(m["uri"])
+            db_names = [d for d in client.list_database_names() if d not in ("local", "config", "admin")]
+            client.close()
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch databases for cluster backup: {e}")
+            
+        write_log(log_path, f"INFO  Found {len(db_names)} databases to backup: {', '.join(db_names)}")
+        
+        comp_info = get_compressor_info(speed_profile, log_path)
+        ext = comp_info["ext"] if comp_info else "gz"
+        compression_cmd = comp_info["cmd"] if comp_info else None
+        
+        uri_no_db = m["uri"].replace(f"/{m['dbname']}?", "/?").replace(f"/{m['dbname']}", "/") if m['dbname'] else m["uri"]
+        
+        last_remote_path = ""
+        for idx, db_name in enumerate(db_names):
+            write_log(log_path, f"INFO  [Cluster Backup] Backing up database {idx+1}/{len(db_names)}: {db_name}")
+            file_remote_name = f"{remote_name}{db_name}.archive.{ext}"
+            
+            cmd = [
+                "mongodump",
+                f"--uri={uri_no_db}",
+                f"--db={db_name}",
+                "--archive",
+                f"--numParallelCollections={settings['mongo_parallel']}",
+                "--readPreference=secondaryPreferred",
+            ]
+            if not compression_cmd:
+                cmd.append("--gzip")
+                
+            env = os.environ.copy()
+            env["GOGC"] = "100"
+            env["GOMAXPROCS"] = str(settings["threads"])
+            last_remote_path = stream_backup_to_storage(cmd, env, storage, file_remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
+            
+        return remote_name # return the folder path
+
     cmd = [
         "mongodump",
         f"--uri={m['uri']}",
@@ -788,9 +829,9 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
 
 # ─── MONGODB RESTORE ─────────────────────────────────────────────────────────
 
-def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default"):
+def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", target_dbname: str = None):
     m = parse_mongo_uri(db)
-    dbname = m["dbname"]
+    dbname = target_dbname or m["dbname"]
     if not dbname: raise ValueError("Database name is required for restore.")
 
     if indexing_mode == "only_index":
@@ -1232,12 +1273,17 @@ def do_backup(backup_id: str):
             safe_db_name = db.get("name", "db").strip().replace(" ", "_")
         date_str = datetime.utcnow().strftime('%Y-%m-%d_%H-%M-%S')
         
-        if collection and collection != "full":
+        is_cluster = False
+        if db["type"] == "mongodb" and collection == "full" and backup.get("is_scheduled"):
+            is_cluster = True
+            base_name = "Mongdbbackup"
+            remote_name = f"{base_name}_{date_str}/"
+        elif collection and collection != "full":
             base_name = collection.strip().replace(" ", "_")
+            remote_name = f"{base_name}-{date_str}/backup.archive.{ext}"
         else:
             base_name = safe_db_name
-            
-        remote_name = f"{base_name}-{date_str}/backup.archive.{ext}"
+            remote_name = f"{base_name}-{date_str}/backup.archive.{ext}"
 
         # Initialize progress tracker
         total_size = 0
@@ -1250,7 +1296,7 @@ def do_backup(backup_id: str):
 
         source_dbname = None
         if db["type"] == "mongodb":
-            remote_path = run_mongo_backup(db, backup, storage, remote_name, log_path, indexing_mode=indexing_mode, tracker=tracker, speed_profile=speed_profile)
+            remote_path = run_mongo_backup(db, backup, storage, remote_name, log_path, indexing_mode=indexing_mode, tracker=tracker, speed_profile=speed_profile, is_cluster=is_cluster)
             m = parse_mongo_uri(db)
             source_dbname = m["dbname"]
         elif db["type"] == "postgresql":
@@ -1378,7 +1424,32 @@ def do_restore(restore_id: str):
         indexing_mode = restore.get("indexing_mode", "with_index")
 
         if target_db["type"] == "mongodb":
-            run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
+            if remote_name.endswith("/") or remote_name.startswith("Mongdbbackup"):
+                write_log(log_path, "INFO  Cluster restore detected. Discovering databases...")
+                objects = []
+                if storage["type"] == "azure":
+                    from azure.storage.blob import BlobServiceClient
+                    conn_str = f"DefaultEndpointsProtocol=https;AccountName={storage['azure_account_name']};AccountKey={storage['azure_account_key']};EndpointSuffix=core.windows.net"
+                    client = BlobServiceClient.from_connection_string(conn_str)
+                    container = client.get_container_client(storage["azure_container"])
+                    objects = [b.name for b in container.list_blobs(name_starts_with=remote_name) if ".archive." in b.name]
+                elif storage["type"] == "gcs":
+                    import json
+                    from google.cloud import storage as gcs
+                    from google.oauth2 import service_account
+                    creds_dict = json.loads(storage["gcs_credentials_json"])
+                    creds = service_account.Credentials.from_service_account_info(creds_dict)
+                    client = gcs.Client(credentials=creds)
+                    bucket = client.bucket(storage["gcs_bucket"])
+                    objects = [b.name for b in bucket.list_blobs(prefix=remote_name) if ".archive." in b.name]
+                
+                write_log(log_path, f"INFO  Found {len(objects)} databases to restore.")
+                for obj in objects:
+                    db_name = obj.split("/")[-1].split(".archive.")[0]
+                    write_log(log_path, f"INFO  [Cluster Restore] Restoring database: {db_name}")
+                    run_mongo_restore(target_db, "full", storage, obj, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=db_name, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=db_name)
+            else:
+                run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
         elif target_db["type"] == "postgresql":
             run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
         elif target_db["type"] == "solr":
