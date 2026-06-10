@@ -2802,7 +2802,7 @@
       if (dbList) {
         dbCount.textContent = `${dbs.length} databases online`;
         dbList.innerHTML = dbs.map(d => `
-      <div class="db-item">
+      <div class="db-item" onclick="openEditDb('${d.id}')" style="cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='rgba(255,255,255,0.02)'">
         <div class="db-item-left">
           <div class="db-item-icon"><i data-lucide="database"></i></div>
           <div class="db-item-info">
@@ -2822,7 +2822,7 @@
       if (stList) {
         stCount.textContent = `${sts.length} buckets configured`;
         stList.innerHTML = sts.map(s => `
-      <div class="db-item">
+      <div class="db-item" onclick="openEditStorage('${s.id}')" style="cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='rgba(255,255,255,0.02)'">
         <div class="db-item-left">
           <div class="db-item-icon" style="background:var(--surface-solid);"><i data-lucide="cloud"></i></div>
           <div class="db-item-info">
