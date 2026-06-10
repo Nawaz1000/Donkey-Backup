@@ -18,6 +18,8 @@ class ScheduleCreate(BaseModel):
     incremental_field: Optional[str] = None
     speed_profile: Literal["default", "safe", "balanced", "extreme"] = "default"
     timezone_offset: int = 0
+    database_name: Optional[str] = None
+    collection: Optional[str] = None
 
 @router.get("/")
 def list_schedules(user=Depends(get_current_user)):
@@ -52,9 +54,11 @@ def create_schedule(req: ScheduleCreate, user=Depends(get_current_user)):
         "incremental_field": req.incremental_field,
         "speed_profile": req.speed_profile,
         "timezone_offset": req.timezone_offset,
-        "created_at": datetime.utcnow().isoformat(),
+        "database_name": req.database_name,
+        "collection": req.collection,
+        "created_at": datetime.utcnow().isoformat() + "Z",
         "last_run": None,
-        "next_run": datetime.utcnow().isoformat(),
+        "next_run": datetime.utcnow().isoformat() + "Z",
     }
     schedules.append(schedule)
     write_json("data/schedules.json", schedules)

@@ -41,7 +41,7 @@ def add_storage(req: StorageCreate, user=Depends(get_current_user)):
         "azure_container": req.azure_container,
         "gcs_bucket": req.gcs_bucket,
         "gcs_credentials_json": req.gcs_credentials_json,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.utcnow().isoformat() + "Z",
     }
     storages.append(storage)
     write_json("data/storages.json", storages)

@@ -44,7 +44,7 @@ async def create_sync(req: SyncRequest, background_tasks: BackgroundTasks):
         "progress": 0,
         "size_mb": 0,
         "logs": "",
-        "created_at": datetime.utcnow().isoformat()
+        "created_at": datetime.utcnow().isoformat() + "Z"
     }
 
     syncs = read_json("data/syncs.json")

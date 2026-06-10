@@ -97,12 +97,13 @@ backupvault/
   - Implements an advanced, case-insensitive URI parser that detects database options from both query parameters and path-based segments (such as `...:27017/authMechanism=...`), auto-corrects them, and connects securely using keyword argument credentials to bypass PyMongo URI decoding limitations with special characters (like `!`).
 - **Verbosity & Notification Logging:**
   - Job logs now track webhook notification dispatches and connection statuses in real-time, detailing successes and errors in the job's viewable console logs.
-- **MongoDB Cluster-Wide Scheduled Backups:**
-  - Automatically iterates over all available databases in the cluster for scheduled full backups, streaming each distinct database into a unified cluster-wide backup folder in Azure/GCS.
+- **MongoDB Cluster-Wide & Targeted Scheduled Backups:**
+  - Schedule targeted backups for specific databases or granular collections right from the UI, or let the engine automatically iterate over all available databases in the cluster for a full backup, streaming each into a unified cluster-wide folder.
 - **Automated Cluster Restore:**
   - Native detection of cluster-wide backup folders triggering sequential object discovery and database-specific restores directly from Azure/GCS without manual intervention.
-- **Local Timezone Scheduling:**
+- **Local Timezone Scheduling & Accurate History:**
   - Integrates local browser timezone offsets directly into the backend scheduling loop. This ensures background jobs always evaluate trigger times using exact local time rather than UTC, making scheduling foolproof across global regions.
+  - The UI cleanly handles UTC conversions natively (via `Z` parsing) so your historical backup and restore logs reflect your exact local time down to the minute.
 
 - **Actual Progress Tracking (Bar, Percentages, and Stderr Parsing):**
   - Parses real-time `mongodump` and `mongorestore` logs using background regex parsers to fetch progress percentages.
@@ -150,8 +151,8 @@ backupvault/
 - **Job Management:**
   - Includes a global "Stop Job" functionality that allows users to instantly terminate active backup and restore background processes from the UI. 
   - Safely sets threading stop events (`ACTIVE_STOP_EVENTS`) to unblock cloud streaming pipes instantly, alongside forceful termination signals to prevent hanging streams or runaway I/O tasks.
-- **Webhook Notifications:**
-  - Configurable alerts for backup/restore success and failures directly to Slack, Microsoft Teams (using modern Adaptive Cards for Power Automate Workflows), and Telegram.
+- **Webhook Notifications (Comprehensive Triggers):**
+  - Configurable alerts triggered immediately when a backup or restore **Starts**, **Completes Successfully**, or **Fails**, dispatched directly to Slack, Microsoft Teams (using modern Adaptive Cards), and Telegram.
   - Fault-tolerant Webhook Pipeline: A failure to send to one provider (like Slack) will no longer abort notifications to other providers (like Telegram). Detailed HTTP error logs are now injected directly into the active job logs for rapid debugging.
   - Custom User-Agent headers to prevent gateway firewalls from blocking notifications.
   - Instant Webhook testing on the Settings page to verify delivery.

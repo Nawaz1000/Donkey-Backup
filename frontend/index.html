@@ -2517,7 +2517,26 @@
       </div>
       <div class="form-group">
         <label>Database</label>
-        <select id="sc-db"></select>
+        <select id="sc-db" onchange="onScheduleDbChange()"></select>
+      </div>
+      <div class="form-group" id="sc-dbname-group" style="display:none">
+        <label>Database Name <span style="color:var(--muted);font-size:11px">(fetched from server)</span></label>
+        <select id="sc-dbname" onchange="onScheduleDbnameChange()">
+          <option value="">— select database connection first —</option>
+        </select>
+      </div>
+      <div class="form-group" id="sc-type-group" style="display:none">
+        <label>Backup Scope</label>
+        <select id="sc-type" onchange="onScheduleTypeChange()">
+          <option value="full">Full Database</option>
+          <option value="collection">Specific Collection / Table</option>
+        </select>
+      </div>
+      <div class="form-group" id="sc-collection-group" style="display:none">
+        <label>Collection / Table <span style="color:var(--muted);font-size:11px">(fetched from server)</span></label>
+        <select id="sc-collection-select">
+          <option value="">— select database name first —</option>
+        </select>
       </div>
       <div class="form-group">
         <label>Storage Destination</label>
@@ -3615,27 +3634,30 @@
       if (dbs.length) onBackupDbChange();
     }
 
-    async function onBackupDbChange() {
-      const dbId = v('bk-db');
+    async function onBackupDbChange() { return handleDbChange('bk'); }
+    async function onScheduleDbChange() { return handleDbChange('sc'); }
+
+    async function handleDbChange(prefix) {
+      const dbId = v(`${prefix}-db`);
       if (!dbId) return;
-      const dbnameEl = document.getElementById('bk-dbname');
-      const collEl = document.getElementById('bk-collection-select');
+      const dbnameEl = document.getElementById(`${prefix}-dbname`);
+      const collEl = document.getElementById(`${prefix}-collection-select`);
       if (!dbnameEl) return;
 
-      const dbEl = document.getElementById('bk-db');
+      const dbEl = document.getElementById(`${prefix}-db`);
       const selectedOpt = dbEl.options[dbEl.selectedIndex];
       const dbType = selectedOpt ? selectedOpt.getAttribute('data-type') : '';
 
-      const dbnameGroup = document.getElementById('bk-dbname-group');
-      const typeGroup = document.getElementById('bk-type-group');
-      const collGroup = document.getElementById('bk-collection-group');
+      const dbnameGroup = document.getElementById(`${prefix}-dbname-group`);
+      const typeGroup = document.getElementById(`${prefix}-type-group`);
+      const collGroup = document.getElementById(`${prefix}-collection-group`);
 
       if (dbnameGroup) dbnameGroup.style.display = 'block';
       if (typeGroup) typeGroup.style.display = 'block';
 
       const dbnameLabel = dbnameGroup ? dbnameGroup.querySelector('label') : null;
       const collLabel = collGroup ? collGroup.querySelector('label') : null;
-      const typeSelect = document.getElementById('bk-type');
+      const typeSelect = document.getElementById(`${prefix}-type`);
 
       if (dbType === 'solr') {
         if (dbnameLabel) dbnameLabel.innerHTML = 'Collection / Core <span style="color:var(--muted);font-size:11px">(fetched from server)</span>';
@@ -3644,7 +3666,7 @@
           typeSelect.options[0].text = 'Full Core / Collection';
           typeSelect.options[1].text = 'Specific Schema Field';
         }
-        onBackupTypeChange();
+        handleTypeChange(prefix);
       } else {
         if (dbnameLabel) dbnameLabel.innerHTML = 'Database Name <span style="color:var(--muted);font-size:11px">(fetched from server)</span>';
         if (collLabel) collLabel.innerHTML = 'Collection / Table <span style="color:var(--muted);font-size:11px">(fetched from server)</span>';
@@ -3652,7 +3674,7 @@
           typeSelect.options[0].text = 'Full Database';
           typeSelect.options[1].text = 'Specific Collection / Table';
         }
-        onBackupTypeChange();
+        handleTypeChange(prefix);
       }
 
       dbnameEl.innerHTML = '<option>Loading...</option>';
@@ -3665,24 +3687,27 @@
         }
         optsHtml += r.databases.map(d => `<option value="${d}">${d}</option>`).join('');
         dbnameEl.innerHTML = optsHtml;
-        onBackupDbnameChange();
+        handleDbnameChange(prefix);
       } catch (e) {
         dbnameEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
       }
     }
 
-    async function onBackupDbnameChange() {
-      const dbId = v('bk-db');
-      const dbname = v('bk-dbname');
+    async function onBackupDbnameChange() { return handleDbnameChange('bk'); }
+    async function onScheduleDbnameChange() { return handleDbnameChange('sc'); }
+
+    async function handleDbnameChange(prefix) {
+      const dbId = v(`${prefix}-db`);
+      const dbname = v(`${prefix}-dbname`);
       if (!dbId || !dbname) return;
 
-      const dbEl = document.getElementById('bk-db');
+      const dbEl = document.getElementById(`${prefix}-db`);
       const selectedOpt = dbEl.options[dbEl.selectedIndex];
       const dbType = selectedOpt ? selectedOpt.getAttribute('data-type') : '';
 
-      const typeGroup = document.getElementById('bk-type-group');
-      const collGroup = document.getElementById('bk-collection-group');
-      const collEl = document.getElementById('bk-collection-select');
+      const typeGroup = document.getElementById(`${prefix}-type-group`);
+      const collGroup = document.getElementById(`${prefix}-collection-group`);
+      const collEl = document.getElementById(`${prefix}-collection-select`);
 
       if (dbType === 'solr' && dbname === 'all_collections') {
         if (typeGroup) typeGroup.style.display = 'none';
@@ -3703,9 +3728,12 @@
       }
     }
 
-    function onBackupTypeChange() {
-      const isCollection = document.getElementById('bk-type').value === 'collection';
-      document.getElementById('bk-collection-group').style.display = isCollection ? 'block' : 'none';
+    function onBackupTypeChange() { return handleTypeChange('bk'); }
+    function onScheduleTypeChange() { return handleTypeChange('sc'); }
+
+    function handleTypeChange(prefix) {
+      const isCollection = document.getElementById(`${prefix}-type`).value === 'collection';
+      document.getElementById(`${prefix}-collection-group`).style.display = isCollection ? 'block' : 'none';
     }
 
     async function runBackup() {
@@ -4258,6 +4286,9 @@
       const freq = v('sc-freq');
       const method = v('sc-method');
       const localTime = v('sc-time') || '02:00';
+      const dbType = v('sc-type');
+      const dbname = v('sc-dbname');
+      const collection = dbType === 'collection' ? v('sc-collection-select') : 'full';
 
       try {
         await apiFetch('/schedules/', {
@@ -4267,7 +4298,9 @@
             backup_method: freq === 'weekly_mixed' ? 'full' : method,
             incremental_field: v('sc-incremental-field') || null,
             speed_profile: v('sc-speed-profile') || 'default',
-            timezone_offset: new Date().getTimezoneOffset()
+            timezone_offset: new Date().getTimezoneOffset(),
+            database_name: dbname || null,
+            collection: collection || 'full'
           })
         });
         closeModal('schedule-modal');

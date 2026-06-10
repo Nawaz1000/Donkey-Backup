@@ -80,7 +80,7 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
         "remote_path": None,
         "remote_name": None,
         "error": None,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.utcnow().isoformat() + "Z",
         "completed_at": None,
         "duration_seconds": None,
     }
@@ -278,7 +278,7 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
         "speed_profile": req.speed_profile,
         "status": "running",
         "error": None,
-        "started_at": datetime.utcnow().isoformat(),
+        "started_at": datetime.utcnow().isoformat() + "Z",
         "completed_at": None,
         "duration_seconds": None,
     }

@@ -1248,7 +1248,7 @@ def do_backup(backup_id: str):
         logs = read_log(log_path)
         update_backup(backup_id,
             status="failed", error=msg, logs=logs,
-            completed_at=datetime.utcnow().isoformat(),
+            completed_at=datetime.utcnow().isoformat() + "Z",
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
         if backup.get("send_notifications", True):
@@ -1323,7 +1323,7 @@ def do_backup(backup_id: str):
             compression=compression,
             source_dbname=source_dbname if db["type"] == "mongodb" else None,
             logs=logs, error=None,
-            completed_at=datetime.utcnow().isoformat(),
+            completed_at=datetime.utcnow().isoformat() + "Z",
             duration_seconds=duration
         )
         if backup.get("send_notifications", True):
@@ -1367,7 +1367,7 @@ def do_restore(restore_id: str):
         logs = read_log(log_path)
         update_restore(restore_id,
             status="failed", error=msg, logs=logs,
-            completed_at=datetime.utcnow().isoformat(),
+            completed_at=datetime.utcnow().isoformat() + "Z",
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
         send_notification("Restore Failed \u274c", f"Restore for {restore.get('remote_name', 'backup')} to {target_db and target_db.get('name')} failed at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}. Error: {msg}", is_error=True, log_path=log_path)
@@ -1376,6 +1376,9 @@ def do_restore(restore_id: str):
     try:
         if not target_db:
             return fail("Target database not found")
+        
+        send_notification("Restore Started \u23f3", f"Restore to {target_db.get('name')} started at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}", is_error=False, log_path=log_path)
+
 
         if restore.get("backup_id"):
             backup = next((b for b in backups if b["id"] == restore["backup_id"]), None)
@@ -1466,7 +1469,7 @@ def do_restore(restore_id: str):
         logs = read_log(log_path)
         update_restore(restore_id,
             status="completed", error=None, logs=logs,
-            completed_at=datetime.utcnow().isoformat(),
+            completed_at=datetime.utcnow().isoformat() + "Z",
             duration_seconds=duration
         )
         send_notification("Restore Successful \u2705", f"Restore for {remote_name} to {target_db and target_db.get('name')} completed at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}. Duration: {duration}s", is_error=False, log_path=log_path)
@@ -1614,7 +1617,7 @@ def do_sync(sync_id: str):
         logs = read_log(log_path)
         update_sync(sync_id,
             status="failed", error=msg, logs=logs,
-            completed_at=datetime.utcnow().isoformat(),
+            completed_at=datetime.utcnow().isoformat() + "Z",
             duration_seconds=int((datetime.utcnow() - start).total_seconds())
         )
         send_notification("Sync Failed \u274c", f"Job ID: {sync_id}\nError: {msg}", is_error=True, log_path=log_path)
@@ -1656,7 +1659,7 @@ def do_sync(sync_id: str):
         
         update_sync(sync_id,
             status="completed", size_mb=size_mb, logs=logs, error=None,
-            completed_at=datetime.utcnow().isoformat(),
+            completed_at=datetime.utcnow().isoformat() + "Z",
             duration_seconds=duration,
             progress=100
         )

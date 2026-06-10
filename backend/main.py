@@ -85,7 +85,7 @@ async def scheduler_loop():
                     method = backup_method_override or s.get("backup_method", "full")
                     method_label = f" [{method.upper()}]" if freq == "weekly_mixed" else ""
                     print(f"Triggering scheduled backup: {s['name']}{method_label}")
-                    s["last_run"] = now.isoformat()
+                    s["last_run"] = now.isoformat() + "Z"
                     modified = True
                     
                     profile = s.get("speed_profile", "default")
@@ -99,7 +99,8 @@ async def scheduler_loop():
                         "database_id": s["database_id"],
                         "storage_id": s["storage_id"],
                         "label": f"{s['name']}-{method}-{now.strftime('%Y%m%d-%H%M%S')}",
-                        "collection": "full",
+                        "collection": s.get("collection", "full") or "full",
+                        "database_name": s.get("database_name"),
                         "backup_method": method,
                         "incremental_field": s.get("incremental_field", None),
                         "send_notifications": True,
@@ -110,7 +111,7 @@ async def scheduler_loop():
                         "remote_name": None,
                         "is_scheduled": True,
                         "error": None,
-                        "created_at": now.isoformat(),
+                        "created_at": now.isoformat() + "Z",
                         "completed_at": None,
                         "duration_seconds": None,
                     }

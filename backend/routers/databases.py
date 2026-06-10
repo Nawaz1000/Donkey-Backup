@@ -130,7 +130,7 @@ def add_database(req: DatabaseCreate, user=Depends(get_current_user)):
         "description": req.description,
         "mongo_uri": req.mongo_uri or "",
 
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.utcnow().isoformat() + "Z",
         "status": "active",
     }
     dbs.append(db)
