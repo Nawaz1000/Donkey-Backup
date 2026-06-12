@@ -3047,6 +3047,7 @@
     // ---- API HELPERS ----
     async function apiFetch(path, opts = {}) {
       const r = await fetch(`${API}${path}`, {
+        cache: 'no-store',
         ...opts,
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, ...(opts.headers || {}) }
       });
@@ -3948,7 +3949,13 @@
             apiFetch(logApi).catch(() => null)
           ]);
           const job = list.find(x => x.id === jobId);
-          if (!job) return;
+          if (!job) {
+            clearInterval(activeOpInterval);
+            const cont = document.getElementById(containerId);
+            if (cont) cont.innerHTML = '';
+            if (opType === 'restore') loadRestores(); else { loadBackups(); loadBackupPage(); }
+            return;
+          }
 
           if (true) {
             const bar = document.getElementById(`${opType}-bar`);

@@ -142,6 +142,37 @@ async def lifespan(app: FastAPI):
         if not os.path.exists(f):
             with open(f, "w") as fp:
                 json.dump(default, fp)
+
+    # Clean up stale running backups and restores on startup
+    try:
+        if os.path.exists("data/backups.json"):
+            backups = read_json("data/backups.json")
+            updated = False
+            for b in backups:
+                if b.get("status") == "running":
+                    b["status"] = "failed"
+                    b["error"] = "Job interrupted due to system shutdown or restart."
+                    b["completed_at"] = datetime.utcnow().isoformat() + "Z"
+                    updated = True
+            if updated:
+                write_json("data/backups.json", backups)
+    except Exception as e:
+        print(f"Error cleaning stale backups: {e}")
+
+    try:
+        if os.path.exists("data/restores.json"):
+            restores = read_json("data/restores.json")
+            updated = False
+            for r in restores:
+                if r.get("status") == "running":
+                    r["status"] = "failed"
+                    r["error"] = "Job interrupted due to system shutdown or restart."
+                    r["completed_at"] = datetime.utcnow().isoformat() + "Z"
+                    updated = True
+            if updated:
+                write_json("data/restores.json", restores)
+    except Exception as e:
+        print(f"Error cleaning stale restores: {e}")
                 
     asyncio.create_task(scheduler_loop())
     yield
