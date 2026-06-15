@@ -803,7 +803,6 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     if indexing_mode == "only_index":
         import pymongo
         import json
-        import tempfile
         write_log(log_path, "INFO  MongoDB only_index backup requested. Fetching indexes via PyMongo.")
         try:
             client = pymongo.MongoClient(m["uri"])
@@ -811,18 +810,30 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
             indexes = {}
             collections = [collection] if collection and collection != "full" else mongo_db.list_collection_names()
             for coll in collections:
-                idx_info = mongo_db[coll].index_information()
-                if idx_info:
-                    indexes[coll] = idx_info
-            
-            tmp_json = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}_indexes.json")
-            with open(tmp_json, "w") as f:
-                json.dump(indexes, f)
-            
-            cmd = ["cat", tmp_json] if os.name != 'nt' else ["cmd", "/c", "type", tmp_json]
-            res = stream_backup_to_storage(cmd, os.environ.copy(), storage, remote_name, log_path, tracker=tracker, speed_profile=speed_profile)
-            os.remove(tmp_json)
+                try:
+                    idx_info = mongo_db[coll].index_information()
+                    if idx_info:
+                        indexes[coll] = idx_info
+                except Exception as e:
+                    write_log(log_path, f"WARN  Could not read index info for {dbname}.{coll}: {e}")
             client.close()
+            
+            indexes_json = json.dumps(indexes)
+            upload_metadata_file(storage, remote_name, indexes_json)
+            
+            # Update size for history records
+            stream_backup_to_storage.last_size_bytes = len(indexes_json.encode('utf-8'))
+            
+            if storage["type"] == "azure":
+                res = f"azure://{storage['azure_container']}/{remote_name}"
+            elif storage["type"] == "gcs":
+                res = f"gcs://{storage['gcs_bucket']}/{remote_name}"
+            else:
+                res = f"unknown://{remote_name}"
+                
+            write_log(log_path, "INFO  only_index backup completed successfully.")
+            if tracker:
+                tracker.update_pct(100)
             return res
         except Exception as e:
             raise RuntimeError(f"Failed to backup MongoDB indexes: {e}")
@@ -934,20 +945,89 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     if indexing_mode == "only_index":
         import pymongo
         import json
-        import tempfile
         write_log(log_path, "INFO  MongoDB only_index restore requested. Applying indexes via PyMongo.")
         try:
-            tmp_json = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}_indexes.json")
-            cmd = ["cat"] if os.name != 'nt' else ["findstr", "^"]
-            with open(tmp_json, "wb") as f:
-                p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=f)
-                stream_restore_from_storage(["cat"] if os.name != 'nt' else ["findstr", "^"], os.environ.copy(), storage, remote_name, log_path, tracker=tracker)
+            indexes_metadata = download_metadata_file(storage, remote_name)
+            if not indexes_metadata:
+                # Try with .indexes.json extension if the main file was a standard backup
+                indexes_metadata = download_metadata_file(storage, remote_name + ".indexes.json")
+                
+            if not indexes_metadata:
+                raise RuntimeError("Index metadata file not found on storage")
+                
+            indexes_data = json.loads(indexes_metadata)
             
-            # This requires custom download logic for only_index since stream_restore pipes to stdout/file.
-            # Instead of modifying stream_restore heavily, we can rely on standard Python storage SDKs directly.
-            write_log(log_path, "WARN  only_index for Mongo relies on backend python script execution.")
+            # Check if it is the new format:
+            is_new_format = False
+            for k, v in indexes_data.items():
+                if isinstance(v, dict):
+                    for sub_k, sub_v in v.items():
+                        if isinstance(sub_v, dict) and "key" not in sub_v:
+                            is_new_format = True
+                            break
+                    if is_new_format:
+                        break
+            
+            write_log(log_path, f"INFO  Applying indexes to database: {dbname}")
+            client = pymongo.MongoClient(m["uri"])
+            
+            if is_new_format:
+                for src_db_name, collections_data in indexes_data.items():
+                    mongo_db = client[dbname]
+                    for coll, idx_info in collections_data.items():
+                        if collection and collection != "full" and coll != collection:
+                            continue
+                        write_log(log_path, f"INFO  Creating indexes for collection {dbname}.{coll} ({len(idx_info)} indexes total)...")
+                        for index_name, index_spec in idx_info.items():
+                            if index_name == "_id_":
+                                continue
+                            try:
+                                keys = index_spec["key"]
+                                key_tuples = [(k[0], k[1]) for k in keys]
+                                
+                                options = {}
+                                for opt in ["unique", "sparse", "expireAfterSeconds", "partialFilterExpression", "collation", "weights", "default_language", "language_override", "textIndexVersion"]:
+                                    if opt in index_spec:
+                                        options[opt] = index_spec[opt]
+                                        
+                                write_log(log_path, f"INFO    - Building index: {index_name} on {coll}...")
+                                mongo_db[coll].create_index(key_tuples, name=index_name, **options)
+                                write_log(log_path, f"INFO    - Successfully built index: {index_name}")
+                            except Exception as idx_err:
+                                write_log(log_path, f"WARN    - Failed to build index {index_name} on {coll}: {idx_err}")
+            else:
+                # Old format: { collection_name: index_spec }
+                mongo_db = client[dbname]
+                for coll, idx_info in indexes_data.items():
+                    if collection and collection != "full" and coll != collection:
+                        continue
+                    write_log(log_path, f"INFO  Creating indexes for collection {dbname}.{coll} ({len(idx_info)} indexes total)...")
+                    for index_name, index_spec in idx_info.items():
+                        if index_name == "_id_":
+                            continue
+                        try:
+                            keys = index_spec["key"]
+                            key_tuples = [(k[0], k[1]) for k in keys]
+                            
+                            options = {}
+                            for opt in ["unique", "sparse", "expireAfterSeconds", "partialFilterExpression", "collation", "weights", "default_language", "language_override", "textIndexVersion"]:
+                                if opt in index_spec:
+                                    options[opt] = index_spec[opt]
+                                    
+                            write_log(log_path, f"INFO    - Building index: {index_name} on {coll}...")
+                            mongo_db[coll].create_index(key_tuples, name=index_name, **options)
+                            write_log(log_path, f"INFO    - Successfully built index: {index_name}")
+                        except Exception as idx_err:
+                            write_log(log_path, f"WARN    - Failed to build index {index_name} on {coll}: {idx_err}")
+                            
+            client.close()
+            write_log(log_path, "INFO  only_index restore completed successfully.")
+            if tracker:
+                tracker.update_pct(100)
+            return
         except Exception as e:
-            pass
+            write_log(log_path, f"ERROR Failed to restore indexes: {e}")
+            raise RuntimeError(f"Failed to restore MongoDB indexes: {e}")
             
     settings = get_speed_settings(speed_profile)
     workers = max(10, settings['threads'] * 4)
