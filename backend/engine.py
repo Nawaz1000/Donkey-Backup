@@ -119,6 +119,60 @@ def read_log(log_path: str) -> str:
 
 
 
+def upload_metadata_file(storage: dict, remote_name: str, data_str: str):
+    if storage["type"] == "azure":
+        from azure.storage.blob import BlobServiceClient
+        conn_str = (
+            f"DefaultEndpointsProtocol=https;"
+            f"AccountName={storage['azure_account_name']};"
+            f"AccountKey={storage['azure_account_key']};"
+            f"EndpointSuffix=core.windows.net"
+        )
+        client = BlobServiceClient.from_connection_string(conn_str)
+        container = client.get_container_client(storage["azure_container"])
+        container.upload_blob(name=remote_name, data=data_str, overwrite=True)
+    elif storage["type"] == "gcs":
+        import json
+        from google.cloud import storage as gcs
+        from google.oauth2 import service_account
+        creds_dict = json.loads(storage["gcs_credentials_json"])
+        creds = service_account.Credentials.from_service_account_info(creds_dict)
+        client = gcs.Client(credentials=creds)
+        bucket = client.bucket(storage["gcs_bucket"])
+        blob = bucket.blob(remote_name)
+        blob.upload_from_string(data_str)
+
+def download_metadata_file(storage: dict, remote_name: str) -> str:
+    try:
+        if storage["type"] == "azure":
+            from azure.storage.blob import BlobServiceClient
+            conn_str = (
+                f"DefaultEndpointsProtocol=https;"
+                f"AccountName={storage['azure_account_name']};"
+                f"AccountKey={storage['azure_account_key']};"
+                f"EndpointSuffix=core.windows.net"
+            )
+            client = BlobServiceClient.from_connection_string(conn_str)
+            container = client.get_container_client(storage["azure_container"])
+            blob_client = container.get_blob_client(remote_name)
+            if blob_client.exists():
+                return blob_client.download_blob().readall().decode("utf-8")
+        elif storage["type"] == "gcs":
+            import json
+            from google.cloud import storage as gcs
+            from google.oauth2 import service_account
+            creds_dict = json.loads(storage["gcs_credentials_json"])
+            creds = service_account.Credentials.from_service_account_info(creds_dict)
+            client = gcs.Client(credentials=creds)
+            bucket = client.bucket(storage["gcs_bucket"])
+            blob = bucket.blob(remote_name)
+            if blob.exists():
+                return blob.download_as_string().decode("utf-8")
+    except Exception:
+        pass
+    return None
+
+
 # ─── STORAGE STREAMING ───────────────────────────────────────────────────────
 
 import io
@@ -705,6 +759,36 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
         write_log(log_path, f"INFO  Streaming restore successful.")
 
 
+def backup_mongo_indexes(uri: str, dbname: str, collection_name: str, storage: dict, remote_indexes_name: str, log_path: str):
+    import pymongo
+    import json
+    try:
+        write_log(log_path, f"INFO  Fetching index definitions from database: {dbname or 'all'}")
+        client = pymongo.MongoClient(uri)
+        db_names = [dbname] if dbname else [d for d in client.list_database_names() if d not in ("local", "config", "admin")]
+        
+        all_indexes = {}
+        for db_name in db_names:
+            mongo_db = client[db_name]
+            all_indexes[db_name] = {}
+            colls = [collection_name] if collection_name and collection_name != "full" else mongo_db.list_collection_names()
+            for coll in colls:
+                try:
+                    idx_info = mongo_db[coll].index_information()
+                    if idx_info:
+                        all_indexes[db_name][coll] = idx_info
+                except Exception as e:
+                    write_log(log_path, f"WARN  Could not read index info for {db_name}.{coll}: {e}")
+                    
+        client.close()
+        
+        indexes_json = json.dumps(all_indexes, default=str)
+        upload_metadata_file(storage, remote_indexes_name, indexes_json)
+        write_log(log_path, f"INFO  Successfully uploaded index definitions metadata file: {remote_indexes_name}")
+    except Exception as e:
+        write_log(log_path, f"WARN  Failed to fetch or upload MongoDB index metadata: {e}")
+
+
 # ─── MONGODB BACKUP ──────────────────────────────────────────────────────────
 
 def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", is_cluster: bool = False) -> str:
@@ -767,6 +851,8 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
             write_log(log_path, f"INFO  [Cluster Backup] Backing up database {idx+1}/{len(db_names)}: {db_name}")
             file_remote_name = f"{remote_name}{db_name}.archive.{ext}"
             
+            backup_mongo_indexes(uri_no_db, db_name, "full", storage, file_remote_name + ".indexes.json", log_path)
+            
             cmd = [
                 "mongodump",
                 f"--uri={uri_no_db}",
@@ -824,6 +910,9 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     env = os.environ.copy()
     env["GOGC"] = "100"
     env["GOMAXPROCS"] = str(settings["threads"])
+    
+    backup_mongo_indexes(m["uri"], dbname, collection, storage, remote_name + ".indexes.json", log_path)
+    
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
 
 
@@ -833,6 +922,14 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     m = parse_mongo_uri(db)
     dbname = target_dbname or m["dbname"]
     if not dbname: raise ValueError("Database name is required for restore.")
+
+    use_no_index_restore = False
+    indexes_metadata = None
+    if indexing_mode == "with_index":
+        indexes_metadata = download_metadata_file(storage, remote_name + ".indexes.json")
+        if indexes_metadata:
+            use_no_index_restore = True
+            write_log(log_path, "INFO  Found index metadata file on storage. Enabling sequential index restoration.")
 
     if indexing_mode == "only_index":
         import pymongo
@@ -873,7 +970,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         "--verbose=1",
     ]
 
-    if indexing_mode == "without_index":
+    if indexing_mode == "without_index" or use_no_index_restore:
         cmd.append("--noIndexRestore")
 
     # Always use wildcard namespace remapping to force restore to dbname
@@ -906,6 +1003,45 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     env["GOGC"] = "100"
     env["GOMAXPROCS"] = str(settings["threads"])
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile)
+
+    if use_no_index_restore and indexes_metadata:
+        try:
+            import pymongo
+            import json
+            all_indexes = json.loads(indexes_metadata)
+            write_log(log_path, f"INFO  Starting sequential index creation for database: {dbname}")
+            
+            client = pymongo.MongoClient(m["uri"])
+            for src_db_name, collections_data in all_indexes.items():
+                mongo_db = client[dbname]
+                for coll, idx_info in collections_data.items():
+                    if collection and collection != "full" and coll != collection:
+                        continue
+                        
+                    write_log(log_path, f"INFO  Creating indexes for collection {dbname}.{coll} ({len(idx_info)} indexes total)...")
+                    for index_name, index_spec in idx_info.items():
+                        if index_name == "_id_":
+                            continue
+                        
+                        try:
+                            keys = index_spec["key"]
+                            key_tuples = [(k[0], k[1]) for k in keys]
+                            
+                            options = {}
+                            for opt in ["unique", "sparse", "expireAfterSeconds", "partialFilterExpression", "collation", "weights", "default_language", "language_override", "textIndexVersion"]:
+                                if opt in index_spec:
+                                    options[opt] = index_spec[opt]
+                                    
+                            write_log(log_path, f"INFO    - Building index: {index_name} on {coll}...")
+                            mongo_db[coll].create_index(key_tuples, name=index_name, **options)
+                            write_log(log_path, f"INFO    - Successfully built index: {index_name}")
+                        except Exception as idx_err:
+                            write_log(log_path, f"WARN    - Failed to build index {index_name} on {coll}: {idx_err}")
+                            
+            client.close()
+            write_log(log_path, "INFO  Sequential index creation completed successfully.")
+        except Exception as e:
+            write_log(log_path, f"WARN  Error during sequential index restoration: {e}")
 
 
 # ─── POSTGRESQL BACKUP ───────────────────────────────────────────────────────
