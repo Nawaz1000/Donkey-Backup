@@ -2974,7 +2974,8 @@
               speed_profile: 'default'
             })
           });
-          document.getElementById('inline-rs-container').style.display = 'none';
+          const container = document.getElementById('inline-rs-container');
+          if (container) container.style.display = 'none';
           toast(isNew ? `Creating "${targetDbname}" and restoring...` : 'Restore started!', 'info');
           trackActiveOperation('restore', r.id, `Restoring ${backupId.substring(0, 8)}... to ${targetDbname}`);
         } catch (e) { toast(e.message, 'error'); }
@@ -4635,7 +4636,7 @@
     }
 
     function toast(msg, type = 'info') {
-      const c = document.getElementById('toasts');
+      const c = document.getElementById('toast-container');
       const icons = { success: 'check-circle-2', error: 'x-circle', info: 'info' };
       const t = document.createElement('div');
       t.className = `toast toast-${type}`;
