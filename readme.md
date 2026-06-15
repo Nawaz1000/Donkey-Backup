@@ -119,8 +119,9 @@ backupvault/
 - **Server-Side Resource Control (Database Engine Internal Limits):**
   - **MongoDB Server:** `--readPreference=secondaryPreferred` offloads backup reads to replica secondaries to reduce primary server load. `--bypassDocumentValidation` skips server-side document validation during restores (saves server CPU). `--writeConcern=1` (standard `w:1`) ensures acknowledged writes on the primary/standalone node without replica set blocking.
   - **PostgreSQL Server:** `max_parallel_workers_per_gather=0` prevents the Postgres server from spawning parallel worker processes (the #1 cause of server CPU spikes). `effective_io_concurrency=1` limits IO prefetching. `--disable-triggers` in `pg_restore` prevents trigger execution during data load, massively reducing server CPU during restores.
-- **Granular Indexing Modes:**
+- **Granular Indexing Modes & Sequential Restoration:**
   - Introduced API/UI options for Backups and Restores: **Include Indexes**, **Exclude Indexes (Fast Data)**, and **Only Indexes (Schema)**.
+  - **Sequential MongoDB Index Restoration (Low Memory Indexing):** Dynamically extracts index structures via PyMongo during backup and uploads them as a `{remote_name}.indexes.json` metadata file. During restore, it uses `--noIndexRestore` to load raw data instantly, then rebuilds each index sequentially (one-by-one) via PyMongo. This prevents MongoDB from spilling index builds to disk when concurrent limits are exceeded, making index restoration up to **10x faster** on limited-resource servers.
   - "Exclude Indexes" mode skips costly `mongorestore` background index rebuilds and Postgres `post-data` sections, driving restore speeds beyond 100GB in 20 minutes natively.
   - Auto-fetches database schema and indexes instantly on connection via PyMongo and `psql` querying.
 - **Incremental & Differential Backups:**
