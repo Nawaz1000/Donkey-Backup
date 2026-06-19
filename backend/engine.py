@@ -793,7 +793,7 @@ def backup_mongo_indexes(uri: str, dbname: str, collection_name: str, storage: d
 
 def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", is_cluster: bool = False) -> str:
     m = parse_mongo_uri(db)
-    dbname = m["dbname"]
+    dbname = db.get("database_name") or m["dbname"]
     if not dbname and not is_cluster: raise ValueError("Database name is required.")
     
     collection = backup_info.get("collection", "full")
@@ -885,6 +885,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     cmd = [
         "mongodump",
         f"--uri={m['uri']}",
+        f"--db={dbname}",
         "--archive",
         f"--numParallelCollections={settings['mongo_parallel']}",
         "--readPreference=secondaryPreferred",  # Offload reads to secondary replicas, reduces primary server load
@@ -931,7 +932,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
 
 def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", target_dbname: str = None):
     m = parse_mongo_uri(db)
-    dbname = target_dbname or m["dbname"]
+    dbname = target_dbname or db.get("database_name") or m["dbname"]
     if not dbname: raise ValueError("Database name is required for restore.")
 
     use_no_index_restore = False
@@ -1205,7 +1206,7 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
 
 # ─── POSTGRESQL RESTORE ──────────────────────────────────────────────────────
 
-def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default"):
+def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", collection: str = None):
     dbname = db.get("database_name", "").strip()
     if new_database:
         create_cmd = [
@@ -1225,6 +1226,9 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
     ]
     if not new_database:
         cmd += ["--clean", "--if-exists"]
+        
+    if collection and collection != "full":
+        cmd += ["-t", collection]
         
     if indexing_mode == "without_index":
         cmd += ["--section=pre-data", "--section=data"]
@@ -1635,6 +1639,8 @@ def do_restore(restore_id: str):
             if not remote_name:
                 return fail("Backup has no remote file")
             collection = backup.get("collection", "full")
+            if restore.get("collection") and restore.get("collection") != "full":
+                collection = restore["collection"]
             compression = backup.get("compression")
             source_db_connection = next((d for d in dbs if d["id"] == backup.get("database_id")), None)
             fallback_source_dbname = source_db_connection["database_name"] if source_db_connection else None
@@ -1645,7 +1651,7 @@ def do_restore(restore_id: str):
             if not storage:
                 return fail("Storage not found")
             remote_name = restore["remote_name"]
-            collection = "full"
+            collection = restore.get("collection") or "full"
             if ".zst" in remote_name:
                 compression = "zstd"
             elif ".gz" in remote_name:
@@ -1668,12 +1674,17 @@ def do_restore(restore_id: str):
             is_error=False, log_path=log_path
         )
 
-        # Override dbname if new database
+        # Override dbname if new database or if explicit target database is specified
         if restore.get("new_database") and restore.get("new_database_name"):
             new_dbname = restore["new_database_name"].strip()
             write_log(log_path, f"INFO  Restoring to NEW database: {new_dbname}")
             log.info(f"Restoring to NEW database: {new_dbname}")
             target_db = {**target_db, "database_name": new_dbname}
+        elif restore.get("target_database_name"):
+            explicit_dbname = restore["target_database_name"].strip()
+            write_log(log_path, f"INFO  Restoring to database: {explicit_dbname}")
+            log.info(f"Restoring to database: {explicit_dbname}")
+            target_db = {**target_db, "database_name": explicit_dbname}
 
         # Initialize progress tracker
         tracker = ProgressTracker(restore_id, is_restore=True, total_size=total_size, log_path=log_path)
@@ -1705,9 +1716,9 @@ def do_restore(restore_id: str):
                     write_log(log_path, f"INFO  [Cluster Restore] Restoring database: {db_name}")
                     run_mongo_restore(target_db, "full", storage, obj, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=db_name, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=db_name)
             else:
-                run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
+                run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db.get("database_name"))
         elif target_db["type"] == "postgresql":
-            run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
+            run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection)
         elif target_db["type"] == "solr":
             run_solr_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
         else:

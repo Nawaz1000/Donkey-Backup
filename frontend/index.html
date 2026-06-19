@@ -2118,7 +2118,7 @@
                   <div id="inline-rs-existing-fields" class="form-group mb-6">
                     <label>Target Database Name <span style="color:var(--muted);font-size:11px">(fetched from
                         server)</span></label>
-                    <select id="inline-rs-dbname"
+                    <select id="inline-rs-dbname" onchange="onInlineRestoreDbnameChange()"
                       style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                       <option value="">— select target connection first —</option>
                     </select>
@@ -2131,12 +2131,31 @@
                   <!-- New DB fields -->
                   <div id="inline-rs-new-fields" class="form-group mb-6" style="display:none;">
                     <label>New Database Name</label>
-                    <input type="text" id="inline-rs-new-dbname" placeholder="e.g. prod_db_restored"
+                    <input type="text" id="inline-rs-new-dbname" placeholder="e.g. prod_db_restored" oninput="onInlineRestoreDbnameChange()"
                       style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;" />
                     <div class="info-banner" style="margin-top:12px; margin-bottom:0;">
                       <i data-lucide="check-circle-2"></i>
                       <span>A fresh database will be created — no existing data will be affected</span>
                     </div>
+                  </div>
+
+                  <!-- Restore Scope (Full or Collection) -->
+                  <div class="form-group mb-6">
+                    <label>Restore Scope</label>
+                    <select id="inline-rs-scope" onchange="onInlineRestoreScopeChange()"
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      <option value="full">Full Database / All Collections</option>
+                      <option value="collection">Specific Collection / Table</option>
+                    </select>
+                  </div>
+
+                  <!-- Specific Collection select -->
+                  <div class="form-group mb-6" id="inline-rs-collection-group" style="display:none">
+                    <label>Select Collection / Table to Restore</label>
+                    <select id="inline-rs-collection"
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      <option value="">— select target database first —</option>
+                    </select>
                   </div>
 
                   <button class="btn btn-full"
@@ -2669,7 +2688,7 @@
 
       <div id="rs-existing-fields" class="form-group">
         <label>Target Database Name <span style="color:var(--muted);font-size:11px">(fetched from server)</span></label>
-        <select id="rs-target-dbname">
+        <select id="rs-target-dbname" onchange="onRestoreTargetDbnameChange()">
           <option value="">— select connection first —</option>
         </select>
         <div class="info-banner warn" style="margin-top:8px;margin-bottom:0">
@@ -2682,12 +2701,30 @@
       <div id="rs-new-fields" style="display:none">
         <div class="form-group">
           <label>New Database Name</label>
-          <input type="text" id="rs-new-dbname" placeholder="e.g. HotelStaticData_restored" />
+          <input type="text" id="rs-new-dbname" placeholder="e.g. HotelStaticData_restored" oninput="onRestoreTargetDbnameChange()" />
         </div>
+        .info-banner
         <div class="info-banner">
           <i data-lucide="check-circle-2"></i>
           <span>A fresh database will be created — no existing data will be affected</span>
         </div>
+      </div>
+
+      <!-- Restore Scope (Full or Collection) -->
+      <div class="form-group">
+        <label>Restore Scope</label>
+        <select id="rs-scope" onchange="onRestoreScopeChange()">
+          <option value="full">Full Database / All Collections</option>
+          <option value="collection">Specific Collection / Table</option>
+        </select>
+      </div>
+
+      <!-- Specific Collection select -->
+      <div class="form-group" id="rs-collection-group" style="display:none">
+        <label>Select Collection / Table to Restore</label>
+        <select id="rs-collection">
+          <option value="">— select target database first —</option>
+        </select>
       </div>
 
       <div class="modal-actions">
@@ -2969,7 +3006,9 @@
               backup_id: backupId,
               target_database_id: targetDbId,
               new_database: isNew,
-              new_database_name: targetDbname,
+              new_database_name: isNew ? targetDbname : null,
+              target_database_name: targetDbname,
+              collection: (v('inline-rs-scope') === 'collection') ? v('inline-rs-collection') : 'full',
               indexing_mode: 'with_index',
               speed_profile: 'default'
             })
@@ -3024,6 +3063,7 @@
       try {
         const r = await apiFetch(`/databases/${targetId}/databases`);
         dbnameEl.innerHTML = r.databases.map(d => `<option value="${d}">${d}</option>`).join('');
+        onInlineRestoreDbnameChange();
       } catch (e) {
         dbnameEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
       }
@@ -4472,8 +4512,83 @@
       try {
         const r = await apiFetch(`/databases/${dbId}/databases`);
         el.innerHTML = r.databases.map(d => `<option value="${d}">${d}</option>`).join('');
+        onRestoreTargetDbnameChange();
       } catch (e) {
         el.innerHTML = `<option value="">⚠ ${e.message}</option>`;
+      }
+    }
+
+    async function onRestoreTargetDbnameChange() {
+      const dbId = v('rs-target-db');
+      const isNew = document.getElementById('rs-new-fields').style.display !== 'none';
+      const dbname = isNew ? v('rs-new-dbname').trim() : v('rs-target-dbname');
+      if (!dbId || !dbname) return;
+      const collEl = document.getElementById('rs-collection');
+      if (!collEl) return;
+      collEl.innerHTML = '<option>Loading collections...</option>';
+      try {
+        const r = await apiFetch(`/databases/${dbId}/collections?database=${encodeURIComponent(dbname)}`);
+        
+        let colls = r.collections || [];
+        const backupSel = document.getElementById('rs-backup');
+        if (backupSel && backupSel.selectedIndex >= 0) {
+          const opt = backupSel.options[backupSel.selectedIndex];
+          const backupColl = opt?.dataset?.collection;
+          if (backupColl && backupColl !== 'full' && !colls.includes(backupColl)) {
+            colls = [backupColl, ...colls];
+          }
+        }
+        
+        collEl.innerHTML = colls.length 
+          ? colls.map(c => `<option value="${c}">${c}</option>`).join('')
+          : '<option value="">— no collections found —</option>';
+      } catch (e) {
+        collEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
+      }
+    }
+
+    async function onInlineRestoreDbnameChange() {
+      const dbId = v('inline-rs-target');
+      const isNew = document.getElementById('inline-rs-new-fields') && document.getElementById('inline-rs-new-fields').style.display !== 'none';
+      const dbname = isNew ? v('inline-rs-new-dbname').trim() : v('inline-rs-dbname');
+      if (!dbId || !dbname) return;
+      const collEl = document.getElementById('inline-rs-collection');
+      if (!collEl) return;
+      collEl.innerHTML = '<option>Loading collections...</option>';
+      try {
+        const r = await apiFetch(`/databases/${dbId}/collections?database=${encodeURIComponent(dbname)}`);
+        
+        let colls = r.collections || [];
+        const backupSel = document.getElementById('inline-rs-backup');
+        if (backupSel && backupSel.selectedIndex >= 0) {
+          const opt = backupSel.options[backupSel.selectedIndex];
+          const backupColl = opt?.dataset?.collection;
+          if (backupColl && backupColl !== 'full' && !colls.includes(backupColl)) {
+            colls = [backupColl, ...colls];
+          }
+        }
+        
+        collEl.innerHTML = colls.length 
+          ? colls.map(c => `<option value="${c}">${c}</option>`).join('')
+          : '<option value="">— no collections found —</option>';
+      } catch (e) {
+        collEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
+      }
+    }
+
+    function onRestoreScopeChange() {
+      const isCollection = v('rs-scope') === 'collection';
+      document.getElementById('rs-collection-group').style.display = isCollection ? 'block' : 'none';
+      if (isCollection) {
+        onRestoreTargetDbnameChange();
+      }
+    }
+
+    function onInlineRestoreScopeChange() {
+      const isCollection = v('inline-rs-scope') === 'collection';
+      document.getElementById('inline-rs-collection-group').style.display = isCollection ? 'block' : 'none';
+      if (isCollection) {
+        onInlineRestoreDbnameChange();
       }
     }
 
@@ -4528,6 +4643,8 @@
             target_database_id: targetDbId,
             new_database: isNew,
             new_database_name: isNew ? targetDbname : null,
+            target_database_name: targetDbname,
+            collection: (v('rs-scope') === 'collection') ? v('rs-collection') : 'full',
             indexing_mode: v('rs-indexing-mode'),
             speed_profile: v('rs-speed-profile') || 'default'
           };
