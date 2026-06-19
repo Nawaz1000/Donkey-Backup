@@ -28,6 +28,7 @@ class RestoreRequest(BaseModel):
     new_database: bool = False
     new_database_name: Optional[str] = None
     target_database_name: Optional[str] = None
+    collection: Optional[str] = ""
     indexing_mode: Literal["with_index", "without_index", "only_index"] = "with_index"
     speed_profile: Literal["default", "safe", "balanced", "extreme"] = "default"
 
@@ -279,6 +280,7 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
         "new_database": req.new_database,
         "new_database_name": req.new_database_name if req.new_database else None,
         "target_database_name": req.target_database_name,
+        "collection": req.collection or "full",
         "indexing_mode": req.indexing_mode,
         "speed_profile": req.speed_profile,
         "status": "running",

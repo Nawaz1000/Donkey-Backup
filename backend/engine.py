@@ -1206,7 +1206,7 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
 
 # ─── POSTGRESQL RESTORE ──────────────────────────────────────────────────────
 
-def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default"):
+def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", collection: str = None):
     dbname = db.get("database_name", "").strip()
     if new_database:
         create_cmd = [
@@ -1226,6 +1226,9 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
     ]
     if not new_database:
         cmd += ["--clean", "--if-exists"]
+        
+    if collection and collection != "full":
+        cmd += ["-t", collection]
         
     if indexing_mode == "without_index":
         cmd += ["--section=pre-data", "--section=data"]
@@ -1636,6 +1639,8 @@ def do_restore(restore_id: str):
             if not remote_name:
                 return fail("Backup has no remote file")
             collection = backup.get("collection", "full")
+            if restore.get("collection") and restore.get("collection") != "full":
+                collection = restore["collection"]
             compression = backup.get("compression")
             source_db_connection = next((d for d in dbs if d["id"] == backup.get("database_id")), None)
             fallback_source_dbname = source_db_connection["database_name"] if source_db_connection else None
@@ -1646,7 +1651,7 @@ def do_restore(restore_id: str):
             if not storage:
                 return fail("Storage not found")
             remote_name = restore["remote_name"]
-            collection = "full"
+            collection = restore.get("collection") or "full"
             if ".zst" in remote_name:
                 compression = "zstd"
             elif ".gz" in remote_name:
@@ -1713,7 +1718,7 @@ def do_restore(restore_id: str):
             else:
                 run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db.get("database_name"))
         elif target_db["type"] == "postgresql":
-            run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
+            run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection)
         elif target_db["type"] == "solr":
             run_solr_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
         else:
