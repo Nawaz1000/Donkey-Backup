@@ -27,6 +27,7 @@ class RestoreRequest(BaseModel):
     target_database_id: str
     new_database: bool = False
     new_database_name: Optional[str] = None
+    target_database_name: Optional[str] = None
     indexing_mode: Literal["with_index", "without_index", "only_index"] = "with_index"
     speed_profile: Literal["default", "safe", "balanced", "extreme"] = "default"
 
@@ -211,7 +212,7 @@ def list_restores(user=Depends(get_current_user)):
             bk = next((b for b in backups if b["id"] == r["backup_id"]), {})
             result.append({**r,
                 "target_connection_name": db.get("name",""),
-                "target_actual_db_name": db.get("database_name",""),
+                "target_actual_db_name": r.get("target_database_name") or db.get("database_name",""),
                 "target_database_name": db.get("name",""),
                 "backup_label": bk.get("label",""),
                 "backup_collection": bk.get("collection","full"),
@@ -277,6 +278,7 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
         "target_database_id": req.target_database_id,
         "new_database": req.new_database,
         "new_database_name": req.new_database_name if req.new_database else None,
+        "target_database_name": req.target_database_name,
         "indexing_mode": req.indexing_mode,
         "speed_profile": req.speed_profile,
         "status": "running",

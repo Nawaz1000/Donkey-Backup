@@ -2969,7 +2969,8 @@
               backup_id: backupId,
               target_database_id: targetDbId,
               new_database: isNew,
-              new_database_name: targetDbname,
+              new_database_name: isNew ? targetDbname : null,
+              target_database_name: targetDbname,
               indexing_mode: 'with_index',
               speed_profile: 'default'
             })
@@ -4528,6 +4529,7 @@
             target_database_id: targetDbId,
             new_database: isNew,
             new_database_name: isNew ? targetDbname : null,
+            target_database_name: targetDbname,
             indexing_mode: v('rs-indexing-mode'),
             speed_profile: v('rs-speed-profile') || 'default'
           };

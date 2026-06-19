@@ -1669,12 +1669,17 @@ def do_restore(restore_id: str):
             is_error=False, log_path=log_path
         )
 
-        # Override dbname if new database
+        # Override dbname if new database or if explicit target database is specified
         if restore.get("new_database") and restore.get("new_database_name"):
             new_dbname = restore["new_database_name"].strip()
             write_log(log_path, f"INFO  Restoring to NEW database: {new_dbname}")
             log.info(f"Restoring to NEW database: {new_dbname}")
             target_db = {**target_db, "database_name": new_dbname}
+        elif restore.get("target_database_name"):
+            explicit_dbname = restore["target_database_name"].strip()
+            write_log(log_path, f"INFO  Restoring to database: {explicit_dbname}")
+            log.info(f"Restoring to database: {explicit_dbname}")
+            target_db = {**target_db, "database_name": explicit_dbname}
 
         # Initialize progress tracker
         tracker = ProgressTracker(restore_id, is_restore=True, total_size=total_size, log_path=log_path)
