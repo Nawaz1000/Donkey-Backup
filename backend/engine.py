@@ -1125,6 +1125,46 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
             write_log(log_path, f"WARN  Error during sequential index restoration: {e}")
 
 
+_pg_options_support_cache = {}
+
+def check_pg_options_supported(db: dict, test_options: str = "-c statement_timeout=0", dbname: str = None) -> bool:
+    """
+    Check if PGOPTIONS can be passed safely to PostgreSQL.
+    Connection poolers like PgBouncer (commonly on port 6432 or proxies) reject startup parameters
+    in PGOPTIONS with 'FATAL: unsupported startup parameter in options: statement_timeout'.
+    """
+    host = str(db.get("host", "")).strip()
+    port = str(db.get("port", "")).strip()
+    cache_key = f"{host}:{port}"
+    if cache_key in _pg_options_support_cache:
+        return _pg_options_support_cache[cache_key]
+
+    if port == "6432":
+        _pg_options_support_cache[cache_key] = False
+        return False
+
+    target_db = (dbname or db.get("database_name") or "postgres").strip()
+    try:
+        env = pg_env(db)
+        env["PGOPTIONS"] = test_options
+        cmd = [
+            "psql", f"--host={host}", f"--port={port}",
+            f"--username={db.get('username', '')}", "--no-password", f"--dbname={target_db}",
+            "-t", "-A", "-c", "SELECT 1;"
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=4)
+        if res.returncode != 0:
+            err = (res.stderr or "").lower()
+            if "unsupported startup parameter in options" in err or "pgbouncer" in err:
+                _pg_options_support_cache[cache_key] = False
+                return False
+        _pg_options_support_cache[cache_key] = True
+        return True
+    except Exception:
+        _pg_options_support_cache[cache_key] = False
+        return False
+
+
 # ─── POSTGRESQL BACKUP ───────────────────────────────────────────────────────
 
 def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default") -> str:
@@ -1194,12 +1234,19 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
         write_log(log_path, "INFO  No fast compressor found in PATH. Using single-threaded native pg_dump compression.")
         
     env = pg_env(db)
+    pg_opts = None
     if speed_profile == "extreme":
-        env["PGOPTIONS"] = f"-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
+        pg_opts = "-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
     elif speed_profile == "balanced":
-        env["PGOPTIONS"] = f"-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB -c max_parallel_workers_per_gather=2 -c effective_io_concurrency=4"
+        pg_opts = "-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB -c max_parallel_workers_per_gather=2 -c effective_io_concurrency=4"
     else:
-        env["PGOPTIONS"] = f"-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
+        pg_opts = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
+
+    if pg_opts:
+        if check_pg_options_supported(db, pg_opts, dbname):
+            env["PGOPTIONS"] = pg_opts
+        else:
+            write_log(log_path, "INFO  Connection pooler / proxy detected (or startup parameters unsupported). Skipping PGOPTIONS for connection compatibility.")
         
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
 
@@ -1258,7 +1305,11 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
         maint_work_mem = "1GB"
         cmd += ["--disable-triggers"] # Redundant but safe
         
-    env["PGOPTIONS"] = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit}"
+    pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit}"
+    if check_pg_options_supported(db, pg_opts, dbname):
+        env["PGOPTIONS"] = pg_opts
+    else:
+        write_log(log_path, "INFO  Connection pooler / proxy detected. Skipping PGOPTIONS for restore compatibility.")
         
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile)
 
