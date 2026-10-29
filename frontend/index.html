@@ -1908,13 +1908,16 @@
           </div>
 
           <div class="card" style="border:none; background:var(--surface); margin-bottom:24px;">
-            <div class="card-header" style="border-bottom:1px solid rgba(255,255,255,0.05); padding:24px;">
+            <div class="card-header" style="border-bottom:1px solid rgba(255,255,255,0.05); padding:24px; display:flex; justify-content:space-between; align-items:center;">
               <div>
                 <div class="card-title" style="font-size:16px; font-weight:700;"><i data-lucide="list"
                     style="display:none"></i> Active Schedules</div>
                 <div style="font-size:12px; color:var(--text2); margin-top:4px;">Recurring backup jobs across your
                   databases</div>
               </div>
+              <button class="btn btn-secondary btn-sm" onclick="triggerSchedulerCheck()" style="display:flex; align-items:center; gap:6px;">
+                <i data-lucide="play-circle" style="width:14px;height:14px"></i> Trigger Scheduler
+              </button>
             </div>
             <table style="width:100%; text-align:left; border-collapse:collapse;">
               <thead>
@@ -4253,11 +4256,12 @@
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${s.database_name}</td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);"><span style="background:rgba(255,255,255,0.05); padding:4px 8px; border-radius:4px; font-size:11px; border:1px solid rgba(255,255,255,0.1);">${typeDisplay}</span></td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2); text-transform:capitalize;">${freqDisplay}</td>
-        <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${s.frequency === 'hourly' ? 'Hourly' : ('At ' + s.time)}</td>
+        <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${s.next_run ? new Date(s.next_run).toLocaleString() : (s.frequency === 'hourly' ? 'Hourly' : ('At ' + s.time))}</td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${s.last_run ? new Date(s.last_run).toLocaleString() : 'Never'}</td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);">${statusHtml}</td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); text-align:right;">
           <div class="actions">
+            <button class="btn btn-primary btn-sm" onclick="runScheduleNow('${s.id}')" title="Run Schedule Now" style="padding:4px 10px; font-size:12px; display:inline-flex; align-items:center; gap:4px;"><i data-lucide="play" style="width:12px;height:12px"></i> Run Now</button>
             <button class="btn btn-secondary btn-sm" onclick="toggleSchedule('${s.id}')">${s.enabled ? 'Pause' : 'Resume'}</button>
             <button class="btn btn-danger btn-sm btn-icon" onclick="deleteSchedule('${s.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
           </div>
@@ -4398,6 +4402,30 @@
         toast('Schedule created!', 'success');
         loadSchedules();
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function runScheduleNow(id) {
+      try {
+        toast('Starting scheduled backup...', 'info');
+        const res = await apiFetch(`/schedules/${id}/run`, { method: 'POST' });
+        toast(res.message || 'Scheduled backup started!', 'success');
+        loadSchedules();
+        if (typeof loadBackups === 'function') loadBackups();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    }
+
+    async function triggerSchedulerCheck() {
+      try {
+        toast('Running scheduler check...', 'info');
+        const res = await apiFetch('/schedules/trigger', { method: 'POST' });
+        toast(res.message || 'Scheduler check complete!', 'success');
+        loadSchedules();
+        if (typeof loadBackups === 'function') loadBackups();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
     }
 
     async function toggleSchedule(id) {

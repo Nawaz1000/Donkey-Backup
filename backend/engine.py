@@ -793,7 +793,7 @@ def backup_mongo_indexes(uri: str, dbname: str, collection_name: str, storage: d
 
 def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", is_cluster: bool = False) -> str:
     m = parse_mongo_uri(db)
-    dbname = db.get("database_name") or m["dbname"]
+    dbname = backup_info.get("database_name") or db.get("database_name") or m["dbname"]
     if not dbname and not is_cluster: raise ValueError("Database name is required.")
     
     collection = backup_info.get("collection", "full")
@@ -1128,7 +1128,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
 # ─── POSTGRESQL BACKUP ───────────────────────────────────────────────────────
 
 def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default") -> str:
-    dbname = db.get("database_name", "").strip()
+    dbname = (backup_info.get("database_name") or db.get("database_name") or "").strip()
     collection = backup_info.get("collection", "full")
     backup_method = backup_info.get("backup_method", "full")
     
@@ -1207,7 +1207,7 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
 # ─── POSTGRESQL RESTORE ──────────────────────────────────────────────────────
 
 def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", collection: str = None):
-    dbname = db.get("database_name", "").strip()
+    dbname = (db.get("database_name") or "").strip()
     if new_database:
         create_cmd = [
             "psql", f"--host={db['host']}", f"--port={db['port']}",
@@ -1490,13 +1490,12 @@ def do_backup(backup_id: str):
         ext = comp_info["ext"] if comp_info else "gz"
         compression = comp_info["type"] if comp_info else "native"
         
-        safe_db_name = db.get("database_name", "db").strip().replace(" ", "_")
-        if not safe_db_name:
-            safe_db_name = db.get("name", "db").strip().replace(" ", "_")
+        safe_db_name = str(db.get("database_name") or db.get("name") or "db").strip().replace(" ", "_")
         date_str = datetime.utcnow().strftime('%Y-%m-%d_%H-%M-%S')
         
+        target_db_name = backup.get("database_name") or db.get("database_name")
         is_cluster = False
-        if db["type"] == "mongodb" and collection == "full" and backup.get("is_scheduled"):
+        if db["type"] == "mongodb" and collection == "full" and backup.get("is_scheduled") and not target_db_name:
             is_cluster = True
             base_name = "Mongdbbackup"
             remote_name = f"{base_name}_{date_str}/"

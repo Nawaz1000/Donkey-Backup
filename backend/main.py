@@ -9,7 +9,7 @@ import asyncio
 from datetime import datetime, timedelta
 import threading
 import uuid
-from utils import read_json, write_json
+from utils import read_json, write_json, parse_iso_datetime, calculate_next_run
 from engine import do_backup
 
 from routers import auth, databases, backups, storage, schedules, settings
@@ -23,8 +23,6 @@ async def scheduler_loop():
                 
             schedules = read_json("data/schedules.json")
             now = datetime.utcnow()
-            day_of_week = now.weekday()
-            day_of_month = now.day
 
             modified = False
             for s in schedules:
@@ -32,7 +30,7 @@ async def scheduler_loop():
                     continue
 
                 freq = s.get("frequency")
-                target_time = s.get("time")
+                target_time = s.get("time") or "02:00"
                 timezone_offset = s.get("timezone_offset", 0)
                 local_now = now - timedelta(minutes=timezone_offset)
                 day_of_week = local_now.weekday()
@@ -46,8 +44,8 @@ async def scheduler_loop():
                     if not last_run:
                         is_due = True
                     else:
-                        last_run_dt = datetime.fromisoformat(last_run)
-                        if now - last_run_dt >= timedelta(hours=1):
+                        last_run_dt = parse_iso_datetime(last_run)
+                        if not last_run_dt or (now - last_run_dt >= timedelta(hours=1)):
                             is_due = True
                 else:
                     try:
@@ -70,10 +68,13 @@ async def scheduler_loop():
                             if not last_run:
                                 is_due = True
                             else:
-                                last_run_dt = datetime.fromisoformat(last_run)
-                                last_run_local = last_run_dt - timedelta(minutes=timezone_offset)
-                                if last_run_local.date() < local_now.date():
+                                last_run_dt = parse_iso_datetime(last_run)
+                                if not last_run_dt:
                                     is_due = True
+                                else:
+                                    last_run_local = last_run_dt - timedelta(minutes=timezone_offset)
+                                    if last_run_local.date() < local_now.date():
+                                        is_due = True
                             
                             if is_due and freq == "weekly_mixed":
                                 if day_of_week == 6:  # Sunday
@@ -86,6 +87,7 @@ async def scheduler_loop():
                     method_label = f" [{method.upper()}]" if freq == "weekly_mixed" else ""
                     print(f"Triggering scheduled backup: {s['name']}{method_label}")
                     s["last_run"] = now.isoformat() + "Z"
+                    s["next_run"] = calculate_next_run(s, now)
                     modified = True
                     
                     profile = s.get("speed_profile", "default")
@@ -93,16 +95,22 @@ async def scheduler_loop():
                         profile = "extreme"
                         print("Night-time window detected. Overriding speed_profile to 'extreme'.")
                     
+                    dbs = read_json("data/databases.json")
+                    db = next((d for d in dbs if d["id"] == s["database_id"]), {})
+                    target_dbname = s.get("database_name") or db.get("database_name")
+
                     backups = read_json("data/backups.json")
                     backup = {
                         "id": str(uuid.uuid4()),
                         "database_id": s["database_id"],
+                        "source_dbname": target_dbname or "",
                         "storage_id": s["storage_id"],
                         "label": f"{s['name']}-{method}-{now.strftime('%Y%m%d-%H%M%S')}",
                         "collection": s.get("collection", "full") or "full",
-                        "database_name": s.get("database_name"),
+                        "database_name": target_dbname,
                         "backup_method": method,
                         "incremental_field": s.get("incremental_field", None),
+                        "indexing_mode": s.get("indexing_mode", "with_index"),
                         "send_notifications": True,
                         "speed_profile": profile,
                         "status": "running",
@@ -122,6 +130,7 @@ async def scheduler_loop():
             
             if modified:
                 write_json("data/schedules.json", schedules)
+
                 
         except Exception as e:
             print(f"Scheduler error: {e}")

@@ -37,6 +37,65 @@ def decode_token(token: str) -> dict:
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     return {"sub": "local-user", "email": "admin@local"}
 
+def parse_iso_datetime(dt_str: str):
+    if not dt_str:
+        return None
+    try:
+        clean = dt_str.rstrip("Z")
+        if "+" in clean:
+            clean = clean.split("+")[0]
+        dt = datetime.fromisoformat(clean)
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+def calculate_next_run(s: dict, from_dt: datetime = None) -> str:
+    now_utc = from_dt or datetime.utcnow()
+    freq = s.get("frequency", "daily")
+    tz_offset = s.get("timezone_offset", 0)
+    local_now = now_utc - timedelta(minutes=tz_offset)
+    
+    target_time = s.get("time") or "02:00"
+    try:
+        th, tm = map(int, target_time.split(":"))
+    except Exception:
+        th, tm = 2, 0
+
+    if freq == "hourly":
+        next_local = local_now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    elif freq in ("daily", "weekly_mixed"):
+        candidate = local_now.replace(hour=th, minute=tm, second=0, microsecond=0)
+        if candidate <= local_now:
+            candidate += timedelta(days=1)
+        next_local = candidate
+    elif freq == "weekly":
+        days_ahead = (0 - local_now.weekday()) % 7
+        candidate = local_now.replace(hour=th, minute=tm, second=0, microsecond=0) + timedelta(days=days_ahead)
+        if candidate <= local_now:
+            candidate += timedelta(days=7)
+        next_local = candidate
+    elif freq == "monthly":
+        if local_now.month == 12:
+            candidate = local_now.replace(year=local_now.year + 1, month=1, day=1, hour=th, minute=tm, second=0, microsecond=0)
+        else:
+            candidate = local_now.replace(month=local_now.month + 1, day=1, hour=th, minute=tm, second=0, microsecond=0)
+        if local_now.day == 1:
+            same_day = local_now.replace(hour=th, minute=tm, second=0, microsecond=0)
+            if same_day > local_now:
+                candidate = same_day
+        next_local = candidate
+    else:
+        candidate = local_now.replace(hour=th, minute=tm, second=0, microsecond=0)
+        if candidate <= local_now:
+            candidate += timedelta(days=1)
+        next_local = candidate
+
+    next_utc = next_local + timedelta(minutes=tz_offset)
+    return next_utc.isoformat() + "Z"
+
+
 def read_json(path: str):
     try:
         with open(path) as f:
