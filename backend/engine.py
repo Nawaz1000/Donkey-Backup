@@ -1867,7 +1867,53 @@ def do_restore(restore_id: str):
             else:
                 run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db.get("database_name"))
         elif target_db["type"] == "postgresql":
-            run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection)
+            if remote_name.endswith("/"):
+                # Instance backup — folder contains individual database archives
+                write_log(log_path, "INFO  PostgreSQL instance restore detected. Discovering database archives...")
+                objects = []
+                if storage["type"] == "azure":
+                    from azure.storage.blob import BlobServiceClient
+                    conn_str = f"DefaultEndpointsProtocol=https;AccountName={storage['azure_account_name']};AccountKey={storage['azure_account_key']};EndpointSuffix=core.windows.net"
+                    client = BlobServiceClient.from_connection_string(conn_str)
+                    container = client.get_container_client(storage["azure_container"])
+                    objects = [b.name for b in container.list_blobs(name_starts_with=remote_name) if ".archive." in b.name]
+                elif storage["type"] == "gcs":
+                    import json as _json
+                    from google.cloud import storage as gcs
+                    from google.oauth2 import service_account
+                    creds_dict = _json.loads(storage["gcs_credentials_json"])
+                    creds = service_account.Credentials.from_service_account_info(creds_dict)
+                    client = gcs.Client(credentials=creds)
+                    bucket = client.bucket(storage["gcs_bucket"])
+                    objects = [b.name for b in bucket.list_blobs(prefix=remote_name) if ".archive." in b.name]
+
+                if not objects:
+                    return fail(f"No database archives found in instance backup folder: {remote_name}")
+
+                write_log(log_path, f"INFO  Found {len(objects)} database archives to restore.")
+
+                for idx_obj, obj in enumerate(objects):
+                    db_file = obj.split("/")[-1]
+                    db_name = db_file.split(".archive.")[0]
+                    write_log(log_path, f"INFO  [Instance Restore] Restoring database {idx_obj+1}/{len(objects)}: {db_name}")
+
+                    # Detect compression from filename
+                    obj_compression = compression
+                    if ".zst" in obj:
+                        obj_compression = "zstd"
+                    elif ".gz" in obj:
+                        obj_compression = "gzip"
+
+                    # Reset stop_event for each database restore iteration
+                    if tracker and tracker.job_id in ACTIVE_STOP_EVENTS:
+                        ACTIVE_STOP_EVENTS[tracker.job_id] = threading.Event()
+
+                    restore_db = {**target_db, "database_name": db_name}
+                    run_pg_restore(restore_db, storage, obj, log_path, new_database=restore.get("new_database", False), compression=obj_compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection)
+
+                write_log(log_path, f"INFO  Instance restore completed: {len(objects)} databases restored.")
+            else:
+                run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection)
         elif target_db["type"] == "solr":
             run_solr_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
         else:
