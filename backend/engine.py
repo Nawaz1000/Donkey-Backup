@@ -859,6 +859,11 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         
         last_remote_path = ""
         for idx, db_name in enumerate(db_names):
+            # Reset the stop_event before each database so the previous iteration's
+            # finally-block stop_event.set() doesn't cancel this one immediately.
+            if tracker and tracker.job_id in ACTIVE_STOP_EVENTS:
+                ACTIVE_STOP_EVENTS[tracker.job_id] = threading.Event()
+
             write_log(log_path, f"INFO  [Cluster Backup] Backing up database {idx+1}/{len(db_names)}: {db_name}")
             file_remote_name = f"{remote_name}{db_name}.archive.{ext}"
             
@@ -1200,6 +1205,11 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
         success_count = 0
 
         for idx, single_db in enumerate(db_names):
+            # Reset the stop_event before each database so the previous iteration's
+            # finally-block stop_event.set() doesn't cancel this one immediately.
+            if tracker and tracker.job_id in ACTIVE_STOP_EVENTS:
+                ACTIVE_STOP_EVENTS[tracker.job_id] = threading.Event()
+
             write_log(log_path, f"INFO  [Instance Backup] Backing up database {idx+1}/{len(db_names)}: {single_db}")
             file_remote_name = f"{folder_remote_name}{single_db}.archive.{ext}"
 
