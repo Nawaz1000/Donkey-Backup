@@ -36,7 +36,17 @@ def list_schedules(user=Depends(get_current_user)):
             # Ensure next_run is populated
             if not s.get("next_run"):
                 s["next_run"] = calculate_next_run(s)
-            result.append({**s, "database_name": db.get("name",""), "storage_name": st.get("name","")})
+            target_db = s.get("database_name")
+            if not target_db or (db.get("type") == "postgresql" and target_db in ("postgres", "ADMIN_CLIENT_PROD") and s.get("collection", "full") in ("full", "", None)):
+                target_db = "__all__"
+            db_display = f"{db.get('name', '')} (All Databases)" if target_db == "__all__" else f"{db.get('name', '')} ({target_db})"
+            result.append({
+                **s,
+                "target_database": target_db,
+                "database_name": db_display,
+                "connection_name": db.get("name", ""),
+                "storage_name": st.get("name", "")
+            })
     return result
 
 @router.post("/")
@@ -46,7 +56,9 @@ def create_schedule(req: ScheduleCreate, user=Depends(get_current_user)):
     if not db:
         raise HTTPException(404, "Database not found")
     schedules = read_json("data/schedules.json")
-    target_dbname = req.database_name or db.get("database_name")
+    target_dbname = req.database_name
+    if not target_dbname:
+        target_dbname = "__all__"
     schedule = {
         "id": str(uuid.uuid4()),
         "name": req.name,
@@ -92,13 +104,15 @@ def trigger_schedule(schedule_id: str, background_tasks: BackgroundTasks, user=D
     now = datetime.utcnow()
     method = s.get("backup_method", "full")
     profile = s.get("speed_profile", "default")
-    target_dbname = s.get("database_name") or db.get("database_name")
+    target_dbname = s.get("database_name")
+    if not target_dbname or target_dbname == "__all__" or (db.get("type") == "postgresql" and s.get("collection", "full") in ("full", "", None) and target_dbname in ("postgres", "ADMIN_CLIENT_PROD")):
+        target_dbname = "__all__"
 
     backups = read_json("data/backups.json")
     backup = {
         "id": str(uuid.uuid4()),
         "database_id": s["database_id"],
-        "source_dbname": target_dbname or "",
+        "source_dbname": target_dbname or "__all__",
         "storage_id": s["storage_id"],
         "label": f"{s['name']}-{method}-{now.strftime('%Y%m%d-%H%M%S')}",
         "collection": s.get("collection", "full") or "full",
@@ -147,13 +161,15 @@ def trigger_all_schedules(background_tasks: BackgroundTasks, user=Depends(get_cu
 
         method = s.get("backup_method", "full")
         profile = s.get("speed_profile", "default")
-        target_dbname = s.get("database_name") or db.get("database_name")
+        target_dbname = s.get("database_name")
+        if not target_dbname or target_dbname == "__all__" or (db.get("type") == "postgresql" and s.get("collection", "full") in ("full", "", None) and target_dbname in ("postgres", "ADMIN_CLIENT_PROD")):
+            target_dbname = "__all__"
 
         backups = read_json("data/backups.json")
         backup = {
             "id": str(uuid.uuid4()),
             "database_id": s["database_id"],
-            "source_dbname": target_dbname or "",
+            "source_dbname": target_dbname or "__all__",
             "storage_id": s["storage_id"],
             "label": f"{s['name']}-{method}-{now.strftime('%Y%m%d-%H%M%S')}",
             "collection": s.get("collection", "full") or "full",

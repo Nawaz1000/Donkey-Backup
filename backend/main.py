@@ -97,13 +97,15 @@ async def scheduler_loop():
                     
                     dbs = read_json("data/databases.json")
                     db = next((d for d in dbs if d["id"] == s["database_id"]), {})
-                    target_dbname = s.get("database_name") or db.get("database_name")
+                    target_dbname = s.get("database_name")
+                    if not target_dbname or target_dbname == "__all__" or (db.get("type") == "postgresql" and s.get("collection", "full") in ("full", "", None) and target_dbname in ("postgres", "ADMIN_CLIENT_PROD")):
+                        target_dbname = "__all__"
 
                     backups = read_json("data/backups.json")
                     backup = {
                         "id": str(uuid.uuid4()),
                         "database_id": s["database_id"],
-                        "source_dbname": target_dbname or "",
+                        "source_dbname": target_dbname or "__all__",
                         "storage_id": s["storage_id"],
                         "label": f"{s['name']}-{method}-{now.strftime('%Y%m%d-%H%M%S')}",
                         "collection": s.get("collection", "full") or "full",
@@ -182,6 +184,20 @@ async def lifespan(app: FastAPI):
                 write_json("data/restores.json", restores)
     except Exception as e:
         print(f"Error cleaning stale restores: {e}")
+
+    # Ensure existing full schedules default to whole instance backup
+    try:
+        if os.path.exists("data/schedules.json"):
+            schedules = read_json("data/schedules.json")
+            updated = False
+            for s in schedules:
+                if not s.get("database_name") or s.get("database_name") in ("postgres", "ADMIN_CLIENT_PROD"):
+                    s["database_name"] = "__all__"
+                    updated = True
+            if updated:
+                write_json("data/schedules.json", schedules)
+    except Exception as e:
+        print(f"Error migrating schedules: {e}")
                 
     asyncio.create_task(scheduler_loop())
     yield

@@ -1622,13 +1622,14 @@ def do_backup(backup_id: str):
         ext = comp_info["ext"] if comp_info else "gz"
         compression = comp_info["type"] if comp_info else "native"
         
-        safe_db_name = str(db.get("database_name") or db.get("name") or "db").strip().replace(" ", "_")
+        safe_db_name = str(db.get("name") or db.get("database_name") or "db").strip().replace(" ", "_")
         date_str = datetime.utcnow().strftime('%Y-%m-%d_%H-%M-%S')
         
         target_db_name = backup.get("database_name") or db.get("database_name")
         is_cluster = False
-        if target_db_name == "__all__":
+        if target_db_name == "__all__" or (db["type"] == "postgresql" and collection == "full" and backup.get("is_scheduled") and target_db_name in ("postgres", "ADMIN_CLIENT_PROD", None, "")):
             is_cluster = True
+            target_db_name = "__all__"
             base_name = f"{safe_db_name}_all"
             remote_name = f"{base_name}_{date_str}/"
         elif db["type"] == "mongodb" and collection == "full" and backup.get("is_scheduled") and not target_db_name:

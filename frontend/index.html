@@ -1953,9 +1953,16 @@
                       style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500; width:100%; border-radius:var(--radius-sm); color:#fff; box-sizing:border-box;">
                   </div>
                   <div class="form-group mb-6">
-                    <label>Database</label>
-                    <select id="inline-sc-db"
+                    <label>Database Connection</label>
+                    <select id="inline-sc-db" onchange="onInlineScheduleDbChange()"
                       style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                    </select>
+                  </div>
+                  <div class="form-group mb-6" id="inline-sc-dbname-group">
+                    <label>Database Name</label>
+                    <select id="inline-sc-dbname"
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      <option value="__all__">⚡ All Databases (Whole Instance)</option>
                     </select>
                   </div>
                   <div class="form-group mb-6">
@@ -4289,11 +4296,35 @@
         const sts = await apiFetch('/storage/');
         const dbSelect = document.getElementById('inline-sc-db');
         const stSelect = document.getElementById('inline-sc-storage');
-        if (dbSelect) dbSelect.innerHTML = dbs.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+        if (dbSelect) {
+          dbSelect.innerHTML = dbs.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+          if (dbs.length) {
+            onInlineScheduleDbChange();
+          }
+        }
         if (stSelect) stSelect.innerHTML = sts.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
 
         renderScheduleCalendar();
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function onInlineScheduleDbChange() {
+      const dbId = v('inline-sc-db');
+      if (!dbId) return;
+      const dbnameEl = document.getElementById('inline-sc-dbname');
+      if (!dbnameEl) return;
+
+      dbnameEl.innerHTML = '<option>Loading...</option>';
+      try {
+        const r = await apiFetch(`/databases/${dbId}/databases`);
+        let opts = '<option value="__all__" selected>⚡ All Databases (Whole Instance)</option>';
+        if (r.databases && r.databases.length) {
+          opts += r.databases.map(d => `<option value="${d}">${d}</option>`).join('');
+        }
+        dbnameEl.innerHTML = opts;
+      } catch (e) {
+        dbnameEl.innerHTML = '<option value="__all__" selected>⚡ All Databases (Whole Instance)</option>';
+      }
     }
 
     function changeCalendarMonth(delta) {
@@ -4367,6 +4398,7 @@
 
     async function runInlineSchedule() {
       const localTime = v('inline-sc-time') || '02:00';
+      const dbname = v('inline-sc-dbname') || '__all__';
 
       try {
         await apiFetch('/schedules/', {
@@ -4374,6 +4406,7 @@
           body: JSON.stringify({
             name: v('inline-sc-name') || 'New Schedule',
             database_id: v('inline-sc-db'),
+            database_name: dbname,
             storage_id: v('inline-sc-storage') || null,
             frequency: v('inline-sc-freq'),
             time: localTime,
@@ -4397,7 +4430,7 @@
       const method = v('sc-method');
       const localTime = v('sc-time') || '02:00';
       const dbType = v('sc-type');
-      const dbname = v('sc-dbname');
+      const dbname = v('sc-dbname') || '__all__';
       const collection = dbType === 'collection' ? v('sc-collection-select') : 'full';
 
       try {
@@ -4409,7 +4442,7 @@
             incremental_field: v('sc-incremental-field') || null,
             speed_profile: v('sc-speed-profile') || 'default',
             timezone_offset: new Date().getTimezoneOffset(),
-            database_name: dbname || null,
+            database_name: dbname,
             collection: collection || 'full'
           })
         });
