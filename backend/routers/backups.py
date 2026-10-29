@@ -11,6 +11,7 @@ router = APIRouter()
 
 class BackupCreate(BaseModel):
     database_id: str
+    database_name: Optional[str] = None
     storage_id: str
     label: Optional[str] = ""
     collection: Optional[str] = ""
@@ -65,10 +66,12 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
         raise HTTPException(404, "Storage not found")
 
     backups = read_json("data/backups.json")
+    target_dbname = req.database_name if req.database_name is not None else db.get("database_name", "")
     backup = {
         "id": str(uuid.uuid4()),
         "database_id": req.database_id,
-        "source_dbname": db.get("database_name", ""),
+        "database_name": target_dbname,
+        "source_dbname": target_dbname,
         "storage_id": req.storage_id,
         "label": req.label or f"backup-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}",
         "collection": req.collection or "full",

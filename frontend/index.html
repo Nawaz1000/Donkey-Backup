@@ -2934,7 +2934,9 @@
       dbnameEl.innerHTML = '<option>Loading...</option>';
       try {
         const r = await apiFetch(`/databases/${dbId}/databases`);
-        dbnameEl.innerHTML = r.databases.map(d => `<option value="${d}">${d}</option>`).join('');
+        let opts = '<option value="__all__">⚡ All Databases (Whole Instance)</option>';
+        opts += r.databases.map(d => `<option value="${d}">${d}</option>`).join('');
+        dbnameEl.innerHTML = opts;
         onInlineBackupDbnameChange();
       } catch (e) {
         dbnameEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
@@ -2944,9 +2946,18 @@
     async function onInlineBackupDbnameChange() {
       const dbId = v('inline-bk-db');
       const dbname = v('inline-bk-dbname');
-      if (!dbId || !dbname) return;
-
+      const scopeGroup = document.getElementById('inline-bk-scope-group');
+      const collGroup = document.getElementById('inline-bk-collection-group');
       const collEl = document.getElementById('inline-bk-collection-select');
+
+      if (dbname === '__all__') {
+        if (scopeGroup) scopeGroup.style.display = 'none';
+        if (collGroup) collGroup.style.display = 'none';
+        return;
+      }
+      if (scopeGroup) scopeGroup.style.display = 'block';
+
+      if (!dbId || !dbname) return;
       if (!collEl) return;
       collEl.innerHTML = '<option>Loading collections...</option>';
       try {
@@ -2962,7 +2973,7 @@
       const dbname = v('inline-bk-dbname') || '';
       const type = document.getElementById('inline-bk-type') ? document.getElementById('inline-bk-type').value : 'full';
       const scope = document.getElementById('inline-bk-scope') ? document.getElementById('inline-bk-scope').value : 'full';
-      const collection = (scope === 'collection') ? v('inline-bk-collection-select') : '';
+      const collection = (scope === 'collection' && dbname !== '__all__') ? v('inline-bk-collection-select') : '';
       const label = `backup-${Date.now()}`;
 
       if (!dbId) { toast('Select a database connection', 'error'); return; }
@@ -2970,14 +2981,14 @@
       const indexingMode = v('inline-bk-indexing-mode') || 'with_index';
       const speedProfile = v('inline-bk-speed-profile') || 'default';
 
-      if (dbname) {
+      if (dbname && dbname !== '__all__') {
         try { await apiFetch(`/databases/${dbId}`, { method: 'PATCH', body: JSON.stringify({ database_name: dbname }) }); } catch (e) { }
       }
 
       try {
         const b = await apiFetch('/backups/', {
           method: 'POST', body: JSON.stringify({
-            database_id: dbId, storage_id: v('inline-bk-storage'), label, collection, backup_method: type, indexing_mode: indexingMode, send_notifications: true, speed_profile: speedProfile
+            database_id: dbId, database_name: dbname, storage_id: v('inline-bk-storage'), label, collection, backup_method: type, indexing_mode: indexingMode, send_notifications: true, speed_profile: speedProfile
           })
         });
         toast('Backup started!', 'info');
@@ -3769,6 +3780,8 @@
         let optsHtml = '';
         if (dbType === 'solr') {
           optsHtml += '<option value="all_collections">All Collections / Cores</option>';
+        } else {
+          optsHtml += '<option value="__all__">⚡ All Databases (Whole Instance)</option>';
         }
         optsHtml += r.databases.map(d => `<option value="${d}">${d}</option>`).join('');
         dbnameEl.innerHTML = optsHtml;
@@ -3794,10 +3807,10 @@
       const collGroup = document.getElementById(`${prefix}-collection-group`);
       const collEl = document.getElementById(`${prefix}-collection-select`);
 
-      if (dbType === 'solr' && dbname === 'all_collections') {
+      if ((dbType === 'solr' && dbname === 'all_collections') || dbname === '__all__') {
         if (typeGroup) typeGroup.style.display = 'none';
         if (collGroup) collGroup.style.display = 'none';
-        if (collEl) collEl.innerHTML = '<option value="">— N/A for all collections —</option>';
+        if (collEl) collEl.innerHTML = '<option value="">— N/A for whole instance —</option>';
         return;
       } else {
         if (typeGroup) typeGroup.style.display = 'block';
@@ -3841,16 +3854,18 @@
       const speedProfile = v('bk-speed-profile') || 'default';
       const sendNotifications = document.getElementById('bk-send-notifications') ? document.getElementById('bk-send-notifications').checked : true;
 
-      try { await apiFetch(`/databases/${dbId}`, { method: 'PATCH', body: JSON.stringify({ database_name: dbname }) }); } catch (e) { }
-      await startBackupNow(dbId, v('bk-storage'), label, collection, indexingMode, sendNotifications, speedProfile);
+      if (dbname && dbname !== '__all__') {
+        try { await apiFetch(`/databases/${dbId}`, { method: 'PATCH', body: JSON.stringify({ database_name: dbname }) }); } catch (e) { }
+      }
+      await startBackupNow(dbId, v('bk-storage'), label, collection, indexingMode, sendNotifications, speedProfile, dbname);
       closeModal('backup-modal');
     }
 
-    async function startBackupNow(dbId, storageId, label, collection = '', indexingMode = 'with_index', sendNotifications = true, speedProfile = 'default') {
+    async function startBackupNow(dbId, storageId, label, collection = '', indexingMode = 'with_index', sendNotifications = true, speedProfile = 'default', dbname = '') {
       try {
         const b = await apiFetch('/backups/', {
           method: 'POST', body: JSON.stringify({
-            database_id: dbId, storage_id: storageId, label, collection, indexing_mode: indexingMode, send_notifications: sendNotifications, speed_profile: speedProfile
+            database_id: dbId, database_name: dbname, storage_id: storageId, label, collection, indexing_mode: indexingMode, send_notifications: sendNotifications, speed_profile: speedProfile
           })
         });
         toast('Backup started!', 'info');

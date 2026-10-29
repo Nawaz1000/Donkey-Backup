@@ -1172,66 +1172,81 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
     collection = backup_info.get("collection", "full")
     backup_method = backup_info.get("backup_method", "full")
     
-    incremental_tables = None
-    if backup_method in ("incremental", "differential"):
-        # Find last successful backup for this database
-        backups = read_json("data/backups.json")
-        last_success = None
-        for b in sorted(backups, key=lambda x: x.get("created_at", ""), reverse=True):
-            if (b.get("status") == "completed" and 
-                b.get("database_id") == backup_info.get("database_id") and
-                b.get("id") != backup_info.get("id")):
-                if backup_method == "incremental" or b.get("backup_method") == "full":
-                    last_success = b.get("completed_at") or b.get("created_at")
-                    break
+    if dbname == "__all__":
+        write_log(log_path, "INFO  All Databases selected: dumping entire PostgreSQL instance via pg_dumpall.")
+        cmd = [
+            "pg_dumpall",
+            f"--host={db['host']}", f"--port={db['port']}",
+            f"--username={db['username']}",
+            "--no-password",
+            "--clean",
+            "--verbose"
+        ]
+    else:
+        incremental_tables = None
+        if backup_method in ("incremental", "differential"):
+            # Find last successful backup for this database
+            backups = read_json("data/backups.json")
+            last_success = None
+            for b in sorted(backups, key=lambda x: x.get("created_at", ""), reverse=True):
+                if (b.get("status") == "completed" and 
+                    b.get("database_id") == backup_info.get("database_id") and
+                    b.get("id") != backup_info.get("id")):
+                    if backup_method == "incremental" or b.get("backup_method") == "full":
+                        last_success = b.get("completed_at") or b.get("created_at")
+                        break
+            
+            if last_success:
+                write_log(log_path, f"INFO  PostgreSQL {backup_method} mode: detecting tables modified since {last_success}")
+                incremental_tables = get_pg_modified_tables(db, dbname, last_success, log_path)
+                if incremental_tables is not None and len(incremental_tables) == 0:
+                    write_log(log_path, f"INFO  No tables modified since last {backup_method} backup. Creating minimal archive.")
+                    # Still create a backup record but with 0 tables — very fast
+                elif incremental_tables is None:
+                    write_log(log_path, "WARN  Could not detect modified tables. Falling back to full backup.")
+            else:
+                write_log(log_path, f"INFO  No previous successful {'Full ' if backup_method == 'differential' else ''}backup found. Performing full backup.")
+            
+        cmd = [
+            "pg_dump",
+            f"--host={db['host']}", f"--port={db['port']}",
+            f"--username={db['username']}", f"--dbname={dbname}",
+            "--no-password", "--format=custom",
+            "--compress=0",
+            "--no-acl", "--no-owner",
+            "--verbose"
+        ]
         
-        if last_success:
-            write_log(log_path, f"INFO  PostgreSQL {backup_method} mode: detecting tables modified since {last_success}")
-            incremental_tables = get_pg_modified_tables(db, dbname, last_success, log_path)
-            if incremental_tables is not None and len(incremental_tables) == 0:
-                write_log(log_path, f"INFO  No tables modified since last {backup_method} backup. Creating minimal archive.")
-                # Still create a backup record but with 0 tables — very fast
-            elif incremental_tables is None:
-                write_log(log_path, "WARN  Could not detect modified tables. Falling back to full backup.")
-        else:
-            write_log(log_path, f"INFO  No previous successful {'Full ' if backup_method == 'differential' else ''}backup found. Performing full backup.")
+        if indexing_mode == "without_index":
+            cmd += ["--section=pre-data", "--section=data"]
+            write_log(log_path, "INFO  PostgreSQL backup without_index: omitting post-data section.")
+        elif indexing_mode == "only_index":
+            cmd += ["--section=post-data"]
+            write_log(log_path, "INFO  PostgreSQL backup only_index: dumping post-data section only.")
         
-    cmd = [
-        "pg_dump",
-        f"--host={db['host']}", f"--port={db['port']}",
-        f"--username={db['username']}", f"--dbname={dbname}",
-        "--no-password", "--format=custom",
-        "--compress=0",
-        "--no-acl", "--no-owner",
-        "--verbose"
-    ]
-    
-    if indexing_mode == "without_index":
-        cmd += ["--section=pre-data", "--section=data"]
-        write_log(log_path, "INFO  PostgreSQL backup without_index: omitting post-data section.")
-    elif indexing_mode == "only_index":
-        cmd += ["--section=post-data"]
-        write_log(log_path, "INFO  PostgreSQL backup only_index: dumping post-data section only.")
-    
-    if incremental_tables is not None and len(incremental_tables) > 0:
-        # Incremental: dump only modified tables
-        for tbl in incremental_tables:
-            cmd += [f"--table={tbl}"]
-        write_log(log_path, f"INFO  Incremental: dumping {len(incremental_tables)} modified tables: {', '.join(incremental_tables[:10])}{'...' if len(incremental_tables)>10 else ''}")
-    elif collection and collection != "full":
-        cmd += [f"--table={collection}"]
-        
+        if incremental_tables is not None and len(incremental_tables) > 0:
+            # Incremental: dump only modified tables
+            for tbl in incremental_tables:
+                cmd += [f"--table={tbl}"]
+            write_log(log_path, f"INFO  Incremental: dumping {len(incremental_tables)} modified tables: {', '.join(incremental_tables[:10])}{'...' if len(incremental_tables)>10 else ''}")
+        elif collection and collection != "full":
+            cmd += [f"--table={collection}"]
+            
     comp_info = get_compressor_info(speed_profile, log_path)
     compression_cmd = None
     if comp_info:
         compression_cmd = comp_info["cmd"]
     else:
-        # Find the --compress=0 index dynamically
-        for i, c in enumerate(cmd):
-            if c == "--compress=0":
-                cmd[i] = "--compress=1"
-                break
-        write_log(log_path, "INFO  No fast compressor found in PATH. Using single-threaded native pg_dump compression.")
+        if dbname == "__all__":
+            if shutil.which("gzip"):
+                compression_cmd = ["gzip", "-c"]
+        else:
+            # Find the --compress=0 index dynamically
+            for i, c in enumerate(cmd):
+                if c == "--compress=0":
+                    cmd[i] = "--compress=1"
+                    break
+            write_log(log_path, "INFO  No fast compressor found in PATH. Using single-threaded native pg_dump compression.")
         
     env = pg_env(db)
     pg_opts = None
@@ -1546,7 +1561,11 @@ def do_backup(backup_id: str):
         
         target_db_name = backup.get("database_name") or db.get("database_name")
         is_cluster = False
-        if db["type"] == "mongodb" and collection == "full" and backup.get("is_scheduled") and not target_db_name:
+        if target_db_name == "__all__":
+            is_cluster = True
+            base_name = f"{safe_db_name}_all"
+            remote_name = f"{base_name}_{date_str}/" if db["type"] == "mongodb" else f"{base_name}-{date_str}/backup.archive.{ext}"
+        elif db["type"] == "mongodb" and collection == "full" and backup.get("is_scheduled") and not target_db_name:
             is_cluster = True
             base_name = "Mongdbbackup"
             remote_name = f"{base_name}_{date_str}/"
@@ -1560,8 +1579,9 @@ def do_backup(backup_id: str):
         # Initialize progress tracker
         total_size = 0
         if db["type"] == "postgresql":
-            total_size = get_pg_db_size(db, db.get("database_name", ""))
-            write_log(log_path, f"INFO  Estimated database size: {round(total_size / (1024*1024), 2)} MB")
+            if target_db_name != "__all__":
+                total_size = get_pg_db_size(db, target_db_name or db.get("database_name", ""))
+                write_log(log_path, f"INFO  Estimated database size: {round(total_size / (1024*1024), 2)} MB")
 
         tracker = ProgressTracker(backup_id, is_restore=False, total_size=total_size, log_path=log_path)
         indexing_mode = backup.get("indexing_mode", "with_index")
