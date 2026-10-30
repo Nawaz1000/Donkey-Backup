@@ -186,11 +186,49 @@ def read_log(log_path: str) -> str:
 
 
 
-def get_bunny_host(region: str = None) -> str:
-    r = (region or "").strip().lower()
-    if not r or r in ("de", "falkenstein", "default", "main"):
-        return "storage.bunnycdn.com"
-    return f"{r}.storage.bunnycdn.com"
+def resolve_bunny_hosts(region_url_or_code: str = "") -> tuple:
+    """
+    Returns (rest_host, s3_endpoint_url) based on region url or region code.
+    E.g.
+    'https://de-s3.storage.bunnycdn.com' -> ('storage.bunnycdn.com', 'https://de-s3.storage.bunnycdn.com')
+    'https://ny-s3.storage.bunnycdn.com' -> ('ny.storage.bunnycdn.com', 'https://ny-s3.storage.bunnycdn.com')
+    'https://ny.storage.bunnycdn.com'    -> ('ny.storage.bunnycdn.com', 'https://ny-s3.storage.bunnycdn.com')
+    'https://storage.bunnycdn.com'       -> ('storage.bunnycdn.com', 'https://de-s3.storage.bunnycdn.com')
+    'ny'                                 -> ('ny.storage.bunnycdn.com', 'https://ny-s3.storage.bunnycdn.com')
+    'de' or ''                           -> ('storage.bunnycdn.com', 'https://de-s3.storage.bunnycdn.com')
+    """
+    raw = (region_url_or_code or "").strip().lower()
+    if raw.startswith("http://"):
+        raw = raw[7:]
+    elif raw.startswith("https://"):
+        raw = raw[8:]
+    raw = raw.strip("/")
+
+    if "storage.bunnycdn.com" in raw:
+        prefix = raw.split(".")[0]
+        if prefix in ("storage", "de", "de-s3"):
+            return "storage.bunnycdn.com", "https://de-s3.storage.bunnycdn.com"
+        reg = prefix.replace("-s3", "")
+        return f"{reg}.storage.bunnycdn.com", f"https://{reg}-s3.storage.bunnycdn.com"
+
+    if not raw or raw in ("de", "falkenstein", "default", "main"):
+        return "storage.bunnycdn.com", "https://de-s3.storage.bunnycdn.com"
+
+    reg = raw.replace("-s3", "")
+    return f"{reg}.storage.bunnycdn.com", f"https://{reg}-s3.storage.bunnycdn.com"
+
+
+def get_bunny_host(region_or_storage: any = None) -> str:
+    if isinstance(region_or_storage, dict):
+        reg = region_or_storage.get("bunny_region_url") or region_or_storage.get("bunny_region") or ""
+    else:
+        reg = region_or_storage or ""
+    rest_host, _ = resolve_bunny_hosts(reg)
+    return rest_host
+
+
+def get_bunny_key(storage: dict) -> str:
+    return (storage.get("bunny_password") or storage.get("bunny_access_key") or "").strip()
 
 
 def get_s3_client(storage: dict):
@@ -244,8 +282,9 @@ def list_storage_objects(storage: dict, prefix: str) -> list:
         return results
     elif stype == "bunny":
         import requests
-        bunny_host = get_bunny_host(storage.get("bunny_region"))
-        headers = {"AccessKey": storage["bunny_access_key"], "Accept": "application/json"}
+        bunny_host = get_bunny_host(storage)
+        bunny_key = get_bunny_key(storage)
+        headers = {"AccessKey": bunny_key, "Accept": "application/json"}
         results = []
 
         def list_bunny_dir(subpath=""):
@@ -302,9 +341,10 @@ def upload_metadata_file(storage: dict, remote_name: str, data_str: str):
         )
     elif stype == "bunny":
         import requests
-        bunny_host = get_bunny_host(storage.get("bunny_region"))
+        bunny_host = get_bunny_host(storage)
+        bunny_key = get_bunny_key(storage)
         url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{remote_name.lstrip('/')}"
-        headers = {"AccessKey": storage["bunny_access_key"], "Content-Type": "application/json"}
+        headers = {"AccessKey": bunny_key, "Content-Type": "application/json"}
         requests.put(url, headers=headers, data=data_str.encode("utf-8"), timeout=30)
 
 def download_metadata_file(storage: dict, remote_name: str) -> str:
@@ -340,9 +380,10 @@ def download_metadata_file(storage: dict, remote_name: str) -> str:
             return obj["Body"].read().decode("utf-8")
         elif stype == "bunny":
             import requests
-            bunny_host = get_bunny_host(storage.get("bunny_region"))
+            bunny_host = get_bunny_host(storage)
+            bunny_key = get_bunny_key(storage)
             url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{remote_name.lstrip('/')}"
-            headers = {"AccessKey": storage["bunny_access_key"]}
+            headers = {"AccessKey": bunny_key}
             resp = requests.get(url, headers=headers, timeout=30)
             if resp.status_code == 200:
                 return resp.text
@@ -816,18 +857,19 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
 
         elif storage["type"] == "bunny":
             import requests
-            bunny_host = get_bunny_host(storage.get("bunny_region"))
+            bunny_host = get_bunny_host(storage)
+            bunny_key = get_bunny_key(storage)
             clean_remote = remote_name.lstrip("/")
             url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{clean_remote}"
             headers = {
-                "AccessKey": storage["bunny_access_key"],
+                "AccessKey": bunny_key,
                 "Content-Type": "application/octet-stream",
             }
             resp = requests.put(url, headers=headers, data=queue_reader, timeout=(30, 3600))
             if resp.status_code not in (200, 201):
                 raise RuntimeError(f"Bunny storage upload failed ({resp.status_code}): {resp.text}")
             try:
-                head = requests.head(url, headers={"AccessKey": storage["bunny_access_key"]}, timeout=30)
+                head = requests.head(url, headers={"AccessKey": bunny_key}, timeout=30)
                 if head.status_code == 200 and "Content-Length" in head.headers:
                     stream_backup_to_storage.last_size_bytes = int(head.headers["Content-Length"])
             except Exception:
@@ -1008,10 +1050,11 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
 
             elif storage["type"] == "bunny":
                 import requests
-                bunny_host = get_bunny_host(storage.get("bunny_region"))
+                bunny_host = get_bunny_host(storage)
+                bunny_key = get_bunny_key(storage)
                 clean_remote = remote_name.lstrip("/")
                 url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{clean_remote}"
-                headers = {"AccessKey": storage["bunny_access_key"]}
+                headers = {"AccessKey": bunny_key}
                 with requests.get(url, headers=headers, stream=True, timeout=(30, 3600)) as resp:
                     if resp.status_code != 200:
                         raise RuntimeError(f"Bunny storage download failed ({resp.status_code}): {resp.text}")

@@ -2398,28 +2398,44 @@
       </div>
       <div id="bunny-fields" style="display:none">
         <div class="form-group">
-          <label>Storage Zone Name</label>
-          <input type="text" id="st-bunny-zone" placeholder="my-storage-zone" />
+          <label>Access Key ID (name of zone)</label>
+          <input type="text" id="st-bunny-zone" placeholder="e.g. databasus-poc" oninput="if(!document.getElementById('st-bunny-access-key').value || document.getElementById('st-bunny-access-key').dataset.autoFilled === 'true') { document.getElementById('st-bunny-access-key').value = this.value; document.getElementById('st-bunny-access-key').dataset.autoFilled = 'true'; }" />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Access Key</label>
+            <input type="text" id="st-bunny-access-key" placeholder="Access Key / Zone Name" oninput="delete this.dataset.autoFilled" />
+          </div>
+          <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="st-bunny-password" placeholder="Storage Zone Password" />
+          </div>
         </div>
         <div class="form-group">
-          <label>Storage Zone Password / Access Key</label>
-          <input type="password" id="st-bunny-key" placeholder="BunnyCDN Storage Password" />
-        </div>
-        <div class="form-group">
-          <label>Storage Region</label>
-          <select id="st-bunny-region">
-            <option value="">Falkenstein (Main / Europe - Default)</option>
-            <option value="ny">New York (US East)</option>
-            <option value="la">Los Angeles (US West)</option>
-            <option value="sg">Singapore (Asia)</option>
-            <option value="syd">Sydney (Oceania)</option>
-            <option value="uk">London (United Kingdom)</option>
-            <option value="jh">Johannesburg (Africa)</option>
-            <option value="br">São Paulo (South America)</option>
-            <option value="se">Stockholm (Europe North)</option>
-          </select>
+          <label>Region URL</label>
+          <input type="text" id="st-bunny-region-url" list="bunny-regions-list" placeholder="https://de-s3.storage.bunnycdn.com" />
+          <datalist id="bunny-regions-list">
+            <option value="https://de-s3.storage.bunnycdn.com">Falkenstein / Europe (de-s3)</option>
+            <option value="https://ny-s3.storage.bunnycdn.com">New York / US East (ny-s3)</option>
+            <option value="https://la-s3.storage.bunnycdn.com">Los Angeles / US West (la-s3)</option>
+            <option value="https://sg-s3.storage.bunnycdn.com">Singapore / Asia (sg-s3)</option>
+            <option value="https://syd-s3.storage.bunnycdn.com">Sydney / Oceania (syd-s3)</option>
+            <option value="https://uk-s3.storage.bunnycdn.com">London / UK (uk-s3)</option>
+            <option value="https://jh-s3.storage.bunnycdn.com">Johannesburg / Africa (jh-s3)</option>
+            <option value="https://br-s3.storage.bunnycdn.com">São Paulo / South America (br-s3)</option>
+            <option value="https://se-s3.storage.bunnycdn.com">Stockholm / Europe North (se-s3)</option>
+            <option value="https://storage.bunnycdn.com">REST API (storage.bunnycdn.com)</option>
+          </datalist>
+          <div style="font-size:12px;color:var(--muted);margin-top:6px">
+            Enter S3 Region Endpoint URL (e.g. <code style="color:var(--accent)">https://de-s3.storage.bunnycdn.com</code>) or REST hostname.
+          </div>
         </div>
       </div>
+      <div id="st-test-result"
+        style="display:none;padding:12px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:8px">
+      </div>
+      <button class="btn btn-secondary btn-full" style="margin-bottom:8px" onclick="testModalStorageConnection()"><i
+          data-lucide="plug" style="width:15px;height:15px"></i> Test Connection</button>
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="closeModal('storage-modal')">Cancel</button>
         <button class="btn btn-primary" onclick="addStorage()"><i data-lucide="plus" style="width:15px;height:15px"></i>
@@ -2498,28 +2514,44 @@
       </div>
       <div id="edit-bunny-fields" style="display:none">
         <div class="form-group">
-          <label>Storage Zone Name</label>
-          <input type="text" id="edit-st-bunny-zone" />
+          <label>Access Key ID (name of zone)</label>
+          <input type="text" id="edit-st-bunny-zone" placeholder="e.g. databasus-poc" />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Access Key</label>
+            <input type="text" id="edit-st-bunny-access-key" placeholder="Access Key / Zone Name" />
+          </div>
+          <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="edit-st-bunny-password" placeholder="Leave blank to keep current" />
+          </div>
         </div>
         <div class="form-group">
-          <label>Storage Zone Password / Access Key</label>
-          <input type="password" id="edit-st-bunny-key" placeholder="Leave blank to keep current" />
-        </div>
-        <div class="form-group">
-          <label>Storage Region</label>
-          <select id="edit-st-bunny-region">
-            <option value="">Falkenstein (Main / Europe - Default)</option>
-            <option value="ny">New York (US East)</option>
-            <option value="la">Los Angeles (US West)</option>
-            <option value="sg">Singapore (Asia)</option>
-            <option value="syd">Sydney (Oceania)</option>
-            <option value="uk">London (United Kingdom)</option>
-            <option value="jh">Johannesburg (Africa)</option>
-            <option value="br">São Paulo (South America)</option>
-            <option value="se">Stockholm (Europe North)</option>
-          </select>
+          <label>Region URL</label>
+          <input type="text" id="edit-st-bunny-region-url" list="edit-bunny-regions-list" placeholder="https://de-s3.storage.bunnycdn.com" />
+          <datalist id="edit-bunny-regions-list">
+            <option value="https://de-s3.storage.bunnycdn.com">Falkenstein / Europe (de-s3)</option>
+            <option value="https://ny-s3.storage.bunnycdn.com">New York / US East (ny-s3)</option>
+            <option value="https://la-s3.storage.bunnycdn.com">Los Angeles / US West (la-s3)</option>
+            <option value="https://sg-s3.storage.bunnycdn.com">Singapore / Asia (sg-s3)</option>
+            <option value="https://syd-s3.storage.bunnycdn.com">Sydney / Oceania (syd-s3)</option>
+            <option value="https://uk-s3.storage.bunnycdn.com">London / UK (uk-s3)</option>
+            <option value="https://jh-s3.storage.bunnycdn.com">Johannesburg / Africa (jh-s3)</option>
+            <option value="https://br-s3.storage.bunnycdn.com">São Paulo / South America (br-s3)</option>
+            <option value="https://se-s3.storage.bunnycdn.com">Stockholm / Europe North (se-s3)</option>
+            <option value="https://storage.bunnycdn.com">REST API (storage.bunnycdn.com)</option>
+          </datalist>
+          <div style="font-size:12px;color:var(--muted);margin-top:6px">
+            Enter S3 Region Endpoint URL (e.g. <code style="color:var(--accent)">https://de-s3.storage.bunnycdn.com</code>) or REST hostname.
+          </div>
         </div>
       </div>
+      <div id="edit-st-test-result"
+        style="display:none;padding:12px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:8px">
+      </div>
+      <button class="btn btn-secondary btn-full" style="margin-bottom:8px" onclick="testEditStorageConnection()"><i
+          data-lucide="plug" style="width:15px;height:15px"></i> Test Connection</button>
       <div class="modal-actions" style="justify-content: space-between;">
         <button class="btn btn-danger" onclick="deleteStorage(document.getElementById('edit-st-id').value); closeModal('edit-storage-modal')"><i data-lucide="trash-2" style="width:15px;height:15px"></i> Remove</button>
         <div>
@@ -3633,6 +3665,136 @@
       } catch (e) { toast(e.message, 'error'); }
     }
 
+    async function testModalStorageConnection() {
+      const type = v('st-type');
+      let payload = { name: v('st-name') || 'Test Storage', type };
+
+      if (type === 'azure') {
+        payload.azure_account_name = v('st-azure-account');
+        payload.azure_account_key = v('st-azure-key');
+        payload.azure_container = v('st-azure-container');
+        if (!payload.azure_account_name || !payload.azure_account_key || !payload.azure_container) {
+          toast('Please fill all Azure credentials', 'error'); return;
+        }
+      } else if (type === 'gcs') {
+        payload.gcs_bucket = v('st-gcs-bucket');
+        payload.gcs_credentials_json = v('st-gcs-creds');
+        if (!payload.gcs_bucket || !payload.gcs_credentials_json) {
+          toast('Please fill GCS bucket and JSON credentials', 'error'); return;
+        }
+      } else if (type === 's3') {
+        payload.s3_bucket = v('st-s3-bucket');
+        payload.s3_access_key = v('st-s3-access-key');
+        payload.s3_secret_key = v('st-s3-secret-key');
+        payload.s3_region = v('st-s3-region');
+        payload.s3_endpoint_url = v('st-s3-endpoint-url');
+        if (!payload.s3_bucket || !payload.s3_access_key || !payload.s3_secret_key) {
+          toast('Please fill S3 Bucket, Access Key, and Secret Key', 'error'); return;
+        }
+      } else if (type === 'bunny') {
+        const zone = v('st-bunny-zone').trim();
+        const accessKey = v('st-bunny-access-key').trim();
+        const password = v('st-bunny-password').trim();
+        const regionUrl = v('st-bunny-region-url').trim();
+
+        if (!zone) { toast('Please enter Access Key ID (name of zone)', 'error'); return; }
+        if (!password && !accessKey) { toast('Please enter Password or Access Key', 'error'); return; }
+
+        payload.bunny_storage_zone = zone;
+        payload.bunny_access_key = accessKey || zone;
+        payload.bunny_password = password || accessKey;
+        payload.bunny_region_url = regionUrl;
+      }
+
+      const resultBox = document.getElementById('st-test-result');
+      resultBox.style.display = 'block';
+      resultBox.style.background = 'rgba(99,102,241,.1)';
+      resultBox.style.border = '1px solid rgba(99,102,241,.3)';
+      resultBox.style.color = '#818cf8';
+      resultBox.textContent = 'Testing storage connection...';
+
+      try {
+        const r = await apiFetch('/storage/test-connection', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        resultBox.style.background = 'var(--success-dim)';
+        resultBox.style.border = '1px solid rgba(0,212,170,.3)';
+        resultBox.style.color = 'var(--accent)';
+        resultBox.textContent = `✓ ${r.message || 'Connection successful!'}`;
+        toast('Storage connection successful!', 'success');
+      } catch (e) {
+        resultBox.style.background = 'var(--danger-dim)';
+        resultBox.style.border = '1px solid rgba(239,68,68,.3)';
+        resultBox.style.color = 'var(--danger)';
+        resultBox.textContent = `✗ ${e.message}`;
+        toast(`Connection failed: ${e.message}`, 'error');
+      }
+    }
+
+    async function testEditStorageConnection() {
+      const id = v('edit-st-id');
+      const type = v('edit-st-type');
+      const resultBox = document.getElementById('edit-st-test-result');
+      resultBox.style.display = 'block';
+      resultBox.style.background = 'rgba(99,102,241,.1)';
+      resultBox.style.border = '1px solid rgba(99,102,241,.3)';
+      resultBox.style.color = '#818cf8';
+      resultBox.textContent = 'Testing storage connection...';
+
+      let payload = { name: v('edit-st-name') || 'Test Storage', type };
+      let useSaved = false;
+
+      if (type === 'azure') {
+        payload.azure_account_name = v('edit-st-azure-account');
+        payload.azure_container = v('edit-st-azure-container');
+        const key = v('edit-st-azure-key');
+        if (key) payload.azure_account_key = key;
+        else useSaved = true;
+      } else if (type === 'gcs') {
+        payload.gcs_bucket = v('edit-st-gcs-bucket');
+        const creds = v('edit-st-gcs-creds');
+        if (creds) payload.gcs_credentials_json = creds;
+        else useSaved = true;
+      } else if (type === 's3') {
+        payload.s3_bucket = v('edit-st-s3-bucket');
+        payload.s3_access_key = v('edit-st-s3-access-key');
+        payload.s3_region = v('edit-st-s3-region');
+        payload.s3_endpoint_url = v('edit-st-s3-endpoint-url');
+        const secret = v('edit-st-s3-secret-key');
+        if (secret) payload.s3_secret_key = secret;
+        else useSaved = true;
+      } else if (type === 'bunny') {
+        payload.bunny_storage_zone = v('edit-st-bunny-zone').trim();
+        payload.bunny_region_url = v('edit-st-bunny-region-url').trim();
+        const accessKey = v('edit-st-bunny-access-key').trim();
+        const password = v('edit-st-bunny-password').trim();
+        if (accessKey) payload.bunny_access_key = accessKey;
+        if (password) payload.bunny_password = password;
+        if (!password && !accessKey) useSaved = true;
+      }
+
+      try {
+        let r;
+        if (useSaved && id) {
+          r = await apiFetch(`/storage/${id}/test`, { method: 'POST' });
+        } else {
+          r = await apiFetch('/storage/test-connection', { method: 'POST', body: JSON.stringify(payload) });
+        }
+        resultBox.style.background = 'var(--success-dim)';
+        resultBox.style.border = '1px solid rgba(0,212,170,.3)';
+        resultBox.style.color = 'var(--accent)';
+        resultBox.textContent = `✓ ${r.message || 'Connection successful!'}`;
+        toast('Storage connection successful!', 'success');
+      } catch (e) {
+        resultBox.style.background = 'var(--danger-dim)';
+        resultBox.style.border = '1px solid rgba(239,68,68,.3)';
+        resultBox.style.color = 'var(--danger)';
+        resultBox.textContent = `✗ ${e.message}`;
+        toast(`Connection failed: ${e.message}`, 'error');
+      }
+    }
+
     async function addStorage() {
       const type = v('st-type');
       if (!v('st-name')) { toast('Please enter a storage name', 'error'); return; }
@@ -3652,9 +3814,18 @@
         payload.s3_region = v('st-s3-region');
         payload.s3_endpoint_url = v('st-s3-endpoint-url');
       } else if (type === 'bunny') {
-        payload.bunny_storage_zone = v('st-bunny-zone');
-        payload.bunny_access_key = v('st-bunny-key');
-        payload.bunny_region = v('st-bunny-region');
+        const zone = v('st-bunny-zone').trim();
+        const accessKey = v('st-bunny-access-key').trim();
+        const password = v('st-bunny-password').trim();
+        const regionUrl = v('st-bunny-region-url').trim();
+
+        if (!zone) { toast('Please enter Access Key ID (name of zone)', 'error'); return; }
+        if (!password && !accessKey) { toast('Please enter Password or Access Key', 'error'); return; }
+
+        payload.bunny_storage_zone = zone;
+        payload.bunny_access_key = accessKey || zone;
+        payload.bunny_password = password || accessKey;
+        payload.bunny_region_url = regionUrl;
       }
 
       try {
@@ -3705,9 +3876,12 @@
         document.getElementById('edit-st-s3-endpoint-url').value = s.s3_endpoint_url || '';
       } else if (s.type === 'bunny') {
         document.getElementById('edit-st-bunny-zone').value = s.bunny_storage_zone || '';
-        document.getElementById('edit-st-bunny-key').value = '';
-        document.getElementById('edit-st-bunny-region').value = s.bunny_region || '';
+        document.getElementById('edit-st-bunny-access-key').value = s.bunny_access_key || s.bunny_storage_zone || '';
+        document.getElementById('edit-st-bunny-password').value = '';
+        document.getElementById('edit-st-bunny-region-url').value = s.bunny_region_url || (s.bunny_region ? `https://${s.bunny_region}-s3.storage.bunnycdn.com` : '');
       }
+      const editRes = document.getElementById('edit-st-test-result');
+      if (editRes) editRes.style.display = 'none';
       openModal('edit-storage-modal');
     }
 
@@ -3736,10 +3910,12 @@
         const secret = v('edit-st-s3-secret-key');
         if (secret) payload.s3_secret_key = secret;
       } else if (type === 'bunny') {
-        payload.bunny_storage_zone = v('edit-st-bunny-zone');
-        payload.bunny_region = v('edit-st-bunny-region');
-        const bkey = v('edit-st-bunny-key');
-        if (bkey) payload.bunny_access_key = bkey;
+        payload.bunny_storage_zone = v('edit-st-bunny-zone').trim();
+        payload.bunny_region_url = v('edit-st-bunny-region-url').trim();
+        const bAccessKey = v('edit-st-bunny-access-key').trim();
+        const bPassword = v('edit-st-bunny-password').trim();
+        if (bAccessKey) payload.bunny_access_key = bAccessKey;
+        if (bPassword) payload.bunny_password = bPassword;
       }
 
       try {
@@ -4953,6 +5129,14 @@
         document.getElementById('db-desc').value = '';
         document.getElementById('db-test-result').style.display = 'none';
         onDbTypeChange('db');
+      }
+      if (id === 'storage-modal') {
+        const stRes = document.getElementById('st-test-result');
+        if (stRes) stRes.style.display = 'none';
+      }
+      if (id === 'edit-storage-modal') {
+        const editRes = document.getElementById('edit-st-test-result');
+        if (editRes) editRes.style.display = 'none';
       }
       if (id === 'schedule-modal') {
         onFreqChange();

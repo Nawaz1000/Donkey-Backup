@@ -7,7 +7,7 @@ from utils import get_current_user, read_json, write_json
 
 router = APIRouter()
 
-SECRET_FIELDS = {"azure_account_key", "gcs_credentials_json", "s3_secret_key", "bunny_access_key"}
+SECRET_FIELDS = {"azure_account_key", "gcs_credentials_json", "s3_secret_key", "bunny_access_key", "bunny_password"}
 
 class StorageCreate(BaseModel):
     name: str
@@ -26,9 +26,11 @@ class StorageCreate(BaseModel):
     s3_region: Optional[str] = None
     s3_endpoint_url: Optional[str] = None
     # BunnyCDN Storage fields
-    bunny_storage_zone: Optional[str] = None
-    bunny_access_key: Optional[str] = None
-    bunny_region: Optional[str] = None
+    bunny_storage_zone: Optional[str] = None       # Access Key ID (name of zone)
+    bunny_access_key: Optional[str] = None         # Access Key
+    bunny_password: Optional[str] = None           # Password (Secret Key)
+    bunny_region_url: Optional[str] = None         # Region URL (e.g. https://de-s3.storage.bunnycdn.com)
+    bunny_region: Optional[str] = None             # Region code fallback
 
 def _mask_storage(s: dict) -> dict:
     return {k: ("********" if k in SECRET_FIELDS and v else v) for k, v in s.items()}
@@ -65,7 +67,9 @@ def add_storage(req: StorageCreate, user=Depends(get_current_user)):
         "s3_endpoint_url": req.s3_endpoint_url,
         # BunnyCDN
         "bunny_storage_zone": req.bunny_storage_zone,
-        "bunny_access_key": req.bunny_access_key,
+        "bunny_access_key": req.bunny_access_key or req.bunny_password,
+        "bunny_password": req.bunny_password or req.bunny_access_key,
+        "bunny_region_url": req.bunny_region_url,
         "bunny_region": req.bunny_region or "de",
         "created_at": datetime.utcnow().isoformat() + "Z",
     }
@@ -81,6 +85,7 @@ def delete_storage(storage_id: str, user=Depends(get_current_user)):
     return {"message": "Deleted"}
 
 @router.put("/{storage_id}")
+@router.patch("/{storage_id}")
 def update_storage(storage_id: str, req: StorageCreate, user=Depends(get_current_user)):
     storages = read_json("data/storages.json")
     for s in storages:
@@ -107,61 +112,102 @@ def update_storage(storage_id: str, req: StorageCreate, user=Depends(get_current
             s["bunny_storage_zone"] = req.bunny_storage_zone
             if req.bunny_access_key and req.bunny_access_key != "********":
                 s["bunny_access_key"] = req.bunny_access_key
+            if req.bunny_password and req.bunny_password != "********":
+                s["bunny_password"] = req.bunny_password
+            if not s.get("bunny_access_key") and s.get("bunny_password"):
+                s["bunny_access_key"] = s["bunny_password"]
+            if not s.get("bunny_password") and s.get("bunny_access_key"):
+                s["bunny_password"] = s["bunny_access_key"]
+            s["bunny_region_url"] = req.bunny_region_url
             s["bunny_region"] = req.bunny_region or "de"
 
             write_json("data/storages.json", storages)
             return _mask_storage(s)
     raise HTTPException(404, "Storage not found")
 
-@router.post("/{storage_id}/test")
-def test_storage_connection(storage_id: str, user=Depends(get_current_user)):
-    storages = read_json("data/storages.json")
-    storage = next((s for s in storages if s["id"] == storage_id and s["user_id"] == user["sub"]), None)
-    if not storage:
-        raise HTTPException(404, "Storage not found")
-
+def perform_test_storage(storage: dict) -> dict:
     stype = storage.get("type")
     try:
         if stype == "azure":
             from azure.storage.blob import BlobServiceClient
-            conn_str = f"DefaultEndpointsProtocol=https;AccountName={storage['azure_account_name']};AccountKey={storage['azure_account_key']};EndpointSuffix=core.windows.net"
+            conn_str = f"DefaultEndpointsProtocol=https;AccountName={storage.get('azure_account_name')};AccountKey={storage.get('azure_account_key')};EndpointSuffix=core.windows.net"
             client = BlobServiceClient.from_connection_string(conn_str)
-            container = client.get_container_client(storage["azure_container"])
+            container = client.get_container_client(storage.get("azure_container"))
             container.get_container_properties()
-            return {"success": True, "message": f"Successfully connected to Azure container '{storage['azure_container']}'."}
+            return {"success": True, "message": f"Successfully connected to Azure container '{storage.get('azure_container')}'."}
 
         elif stype == "gcs":
             import json as _json
             from google.cloud import storage as gcs
             from google.oauth2 import service_account
-            creds_dict = _json.loads(storage["gcs_credentials_json"])
+            creds_dict = _json.loads(storage.get("gcs_credentials_json") or "{}")
             creds = service_account.Credentials.from_service_account_info(creds_dict)
             client = gcs.Client(credentials=creds)
-            bucket = client.bucket(storage["gcs_bucket"])
+            bucket = client.bucket(storage.get("gcs_bucket"))
             bucket.exists()
-            return {"success": True, "message": f"Successfully connected to GCS bucket '{storage['gcs_bucket']}'."}
+            return {"success": True, "message": f"Successfully connected to GCS bucket '{storage.get('gcs_bucket')}'."}
 
         elif stype == "s3":
             from engine import get_s3_client
             client = get_s3_client(storage)
-            client.head_bucket(Bucket=storage["s3_bucket"])
-            return {"success": True, "message": f"Successfully connected to S3 bucket '{storage['s3_bucket']}'."}
+            client.head_bucket(Bucket=storage.get("s3_bucket"))
+            return {"success": True, "message": f"Successfully connected to S3 bucket '{storage.get('s3_bucket')}'."}
 
         elif stype == "bunny":
             import requests
-            from engine import get_bunny_host
-            bunny_host = get_bunny_host(storage.get("bunny_region"))
-            url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/"
-            headers = {"AccessKey": storage["bunny_access_key"], "Accept": "application/json"}
-            resp = requests.get(url, headers=headers, timeout=15)
-            if resp.status_code == 200:
-                return {"success": True, "message": f"Successfully connected to BunnyCDN Storage Zone '{storage['bunny_storage_zone']}'."}
-            elif resp.status_code == 401:
-                raise HTTPException(400, "Invalid BunnyCDN Storage Password / Access Key (Unauthorized).")
-            elif resp.status_code == 404:
-                raise HTTPException(400, f"BunnyCDN Storage Zone '{storage['bunny_storage_zone']}' not found.")
-            else:
-                raise HTTPException(400, f"BunnyCDN Storage error ({resp.status_code}): {resp.text}")
+            from engine import resolve_bunny_hosts
+            zone = (storage.get("bunny_storage_zone") or "").strip()
+            pwd = (storage.get("bunny_password") or storage.get("bunny_access_key") or "").strip()
+            region_url = (storage.get("bunny_region_url") or storage.get("bunny_region") or "").strip()
+
+            if not zone:
+                raise HTTPException(400, "Access Key ID (name of zone) is required.")
+            if not pwd:
+                raise HTTPException(400, "Password / Access Key is required.")
+
+            rest_host, s3_url = resolve_bunny_hosts(region_url)
+            rest_err_msg = ""
+
+            # 1. Attempt test via REST API
+            rest_url = f"https://{rest_host}/{zone}/"
+            headers = {"AccessKey": pwd, "Accept": "application/json"}
+            try:
+                resp = requests.get(rest_url, headers=headers, timeout=12)
+                if resp.status_code == 200:
+                    return {"success": True, "message": f"Successfully connected to BunnyCDN Storage Zone '{zone}' ({rest_host})."}
+                elif resp.status_code == 401:
+                    raise HTTPException(400, "Invalid BunnyCDN Password / Access Key (Unauthorized).")
+                elif resp.status_code == 404:
+                    raise HTTPException(400, f"BunnyCDN Storage Zone '{zone}' not found. Please verify Access Key ID (zone name).")
+                else:
+                    rest_err_msg = f"HTTP {resp.status_code}: {resp.text}"
+            except HTTPException:
+                raise
+            except Exception as e:
+                rest_err_msg = str(e)
+
+            # 2. Also attempt S3-compatible API test
+            try:
+                import boto3
+                from botocore.config import Config
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=s3_url,
+                    aws_access_key_id=zone,
+                    aws_secret_access_key=pwd,
+                    region_name="de",
+                    config=Config(signature_version="s3v4", connect_timeout=10, read_timeout=10)
+                )
+                s3.head_bucket(Bucket=zone)
+                return {"success": True, "message": f"Successfully connected to BunnyCDN Storage Zone '{zone}' via S3 API ({s3_url})."}
+            except Exception as s3_err:
+                err_str = str(s3_err)
+                if "403" in err_str or "Forbidden" in err_str or "InvalidAccessKeyId" in err_str:
+                    raise HTTPException(400, "Invalid BunnyCDN Password / Access Key or Zone Name.")
+                elif "404" in err_str or "NoSuchBucket" in err_str:
+                    raise HTTPException(400, f"BunnyCDN Storage Zone '{zone}' not found.")
+                else:
+                    raise HTTPException(400, f"BunnyCDN connection failed: {rest_err_msg or err_str}")
         else:
             raise HTTPException(400, f"Unknown storage type: {stype}")
 
@@ -169,6 +215,18 @@ def test_storage_connection(storage_id: str, user=Depends(get_current_user)):
         raise
     except Exception as e:
         raise HTTPException(400, f"Storage connection failed: {str(e)}")
+
+@router.post("/test-connection")
+def test_new_storage_connection(req: StorageCreate, user=Depends(get_current_user)):
+    return perform_test_storage(req.dict())
+
+@router.post("/{storage_id}/test")
+def test_storage_connection(storage_id: str, user=Depends(get_current_user)):
+    storages = read_json("data/storages.json")
+    storage = next((s for s in storages if s["id"] == storage_id and s["user_id"] == user["sub"]), None)
+    if not storage:
+        raise HTTPException(404, "Storage not found")
+    return perform_test_storage(storage)
 
 @router.get("/{storage_id}/files")
 def list_storage_files(storage_id: str, user=Depends(get_current_user)):
@@ -231,9 +289,9 @@ def list_storage_files(storage_id: str, user=Depends(get_current_user)):
 
         elif storage["type"] == "bunny":
             import requests
-            from engine import get_bunny_host
-            bunny_host = get_bunny_host(storage.get("bunny_region"))
-            headers = {"AccessKey": storage["bunny_access_key"], "Accept": "application/json"}
+            from engine import get_bunny_host, get_bunny_key
+            bunny_host = get_bunny_host(storage)
+            headers = {"AccessKey": get_bunny_key(storage), "Accept": "application/json"}
 
             def list_bunny_dir(subpath=""):
                 clean = subpath.strip("/")

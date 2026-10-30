@@ -161,9 +161,9 @@ def delete_backup(backup_id: str, delete_from_remote: bool = False, user=Depends
                             s3.delete_objects(Bucket=storage["s3_bucket"], Delete={'Objects': objects_to_delete})
                 elif storage["type"] == "bunny":
                     import requests
-                    from engine import get_bunny_host, list_storage_objects
-                    bunny_host = get_bunny_host(storage.get("bunny_region"))
-                    headers = {"AccessKey": storage["bunny_access_key"]}
+                    from engine import get_bunny_host, get_bunny_key, list_storage_objects
+                    bunny_host = get_bunny_host(storage)
+                    headers = {"AccessKey": get_bunny_key(storage)}
                     objects = list_storage_objects(storage, backup["remote_name"])
                     clean_rn = backup["remote_name"].strip("/")
                     if clean_rn not in objects and not backup["remote_name"].endswith("/"):
