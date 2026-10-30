@@ -37,9 +37,12 @@ def list_schedules(user=Depends(get_current_user)):
             if not s.get("next_run"):
                 s["next_run"] = calculate_next_run(s)
             target_db = s.get("database_name")
-            if not target_db or (db.get("type") == "postgresql" and target_db in ("postgres", "ADMIN_CLIENT_PROD") and s.get("collection", "full") in ("full", "", None)):
-                target_db = "__all__"
-            db_display = f"{db.get('name', '')} (All Databases)" if target_db == "__all__" else f"{db.get('name', '')} ({target_db})"
+            if target_db == "__all__":
+                db_display = f"{db.get('name', '')} (All Databases)"
+            elif target_db:
+                db_display = f"{db.get('name', '')} ({target_db})"
+            else:
+                db_display = db.get("name", "")
             result.append({
                 **s,
                 "target_database": target_db,
@@ -58,7 +61,7 @@ def create_schedule(req: ScheduleCreate, user=Depends(get_current_user)):
     schedules = read_json("data/schedules.json")
     target_dbname = req.database_name
     if not target_dbname:
-        target_dbname = "__all__"
+        target_dbname = db.get("database_name")
     schedule = {
         "id": str(uuid.uuid4()),
         "name": req.name,
@@ -104,9 +107,7 @@ def trigger_schedule(schedule_id: str, background_tasks: BackgroundTasks, user=D
     now = datetime.utcnow()
     method = s.get("backup_method", "full")
     profile = s.get("speed_profile", "default")
-    target_dbname = s.get("database_name")
-    if not target_dbname or target_dbname == "__all__" or (db.get("type") == "postgresql" and s.get("collection", "full") in ("full", "", None) and target_dbname in ("postgres", "ADMIN_CLIENT_PROD")):
-        target_dbname = "__all__"
+    target_dbname = s.get("database_name") or db.get("database_name")
 
     backups = read_json("data/backups.json")
     backup = {
@@ -161,9 +162,7 @@ def trigger_all_schedules(background_tasks: BackgroundTasks, user=Depends(get_cu
 
         method = s.get("backup_method", "full")
         profile = s.get("speed_profile", "default")
-        target_dbname = s.get("database_name")
-        if not target_dbname or target_dbname == "__all__" or (db.get("type") == "postgresql" and s.get("collection", "full") in ("full", "", None) and target_dbname in ("postgres", "ADMIN_CLIENT_PROD")):
-            target_dbname = "__all__"
+        target_dbname = s.get("database_name") or db.get("database_name")
 
         backups = read_json("data/backups.json")
         backup = {

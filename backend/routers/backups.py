@@ -328,3 +328,33 @@ def cancel_restore(restore_id: str, user=Depends(get_current_user)):
                 return {"success": True, "message": "Restore cancelled"}
             return {"success": False, "message": "Restore is not running"}
     raise HTTPException(404, "Restore not found")
+
+
+@router.post("/cleanup-stale")
+def cleanup_stale(user=Depends(get_current_user)):
+    from engine import kill_stale_backup_subprocesses
+    killed = kill_stale_backup_subprocesses()
+
+    # Mark any dangling 'running' jobs as failed
+    backups = read_json("data/backups.json")
+    b_updated = False
+    for b in backups:
+        if b.get("status") == "running":
+            b["status"] = "failed"
+            b["error"] = "Cleaned up stale interrupted job"
+            b_updated = True
+    if b_updated:
+        write_json("data/backups.json", backups)
+
+    if os.path.exists("data/restores.json"):
+        restores = read_json("data/restores.json")
+        r_updated = False
+        for r in restores:
+            if r.get("status") == "running":
+                r["status"] = "failed"
+                r["error"] = "Cleaned up stale interrupted job"
+                r_updated = True
+        if r_updated:
+            write_json("data/restores.json", restores)
+
+    return {"success": True, "killed_processes": killed, "message": f"Cleaned up {killed} stale backup/restore process(es)."}

@@ -30,21 +30,88 @@ ACTIVE_STOP_EVENTS = {}
 
 def cancel_job(job_id: str) -> bool:
     found = False
-    if job_id in ACTIVE_PROCESSES:
-        for p in ACTIVE_PROCESSES[job_id]:
-            try:
-                p.terminate()
-                p.kill()
-            except Exception:
-                pass
-        found = True
     if job_id in ACTIVE_STOP_EVENTS:
         try:
             ACTIVE_STOP_EVENTS[job_id].set()
             found = True
         except Exception:
             pass
+
+    if job_id in ACTIVE_PROCESSES:
+        for p in ACTIVE_PROCESSES[job_id]:
+            try:
+                if p.poll() is None:
+                    p.terminate()
+            except Exception:
+                pass
+        for p in ACTIVE_PROCESSES[job_id]:
+            try:
+                p.wait(timeout=1.0)
+            except Exception:
+                try:
+                    p.kill()
+                    p.wait(timeout=1.0)
+                except Exception:
+                    pass
+        found = True
+        ACTIVE_PROCESSES.pop(job_id, None)
+
+    ACTIVE_STOP_EVENTS.pop(job_id, None)
     return found
+
+
+def kill_stale_backup_subprocesses() -> int:
+    """
+    Terminates and reaps any orphaned backup/compression CLI processes
+    (e.g., pg_dump, pg_dumpall, zstd, pigz, mongodump, mongorestore, psql)
+    left behind by aborted, crashed, or interrupted jobs.
+    Returns the count of killed stale processes.
+    """
+    killed_count = 0
+    target_names = {"pg_dump", "pg_dumpall", "zstd", "pigz", "mongodump", "mongorestore"}
+
+    # 1. Kill any active processes tracked in memory
+    for j_id in list(ACTIVE_PROCESSES.keys()):
+        try:
+            cancel_job(j_id)
+            killed_count += 1
+        except Exception:
+            pass
+    ACTIVE_PROCESSES.clear()
+    ACTIVE_STOP_EVENTS.clear()
+
+    # 2. On Linux, scan /proc for any orphaned tool processes running without an active job
+    if os.path.exists("/proc"):
+        my_pid = os.getpid()
+        import signal
+        try:
+            for pid_dir in os.listdir("/proc"):
+                if not pid_dir.isdigit():
+                    continue
+                pid = int(pid_dir)
+                if pid == my_pid or pid == 1:
+                    continue
+                comm_path = f"/proc/{pid}/comm"
+                if os.path.exists(comm_path):
+                    try:
+                        with open(comm_path, "r") as f:
+                            comm = f.read().strip()
+                        if comm in target_names:
+                            log.warning(f"Reaping stale orphan backup process: {comm} (PID {pid})")
+                            try:
+                                os.kill(pid, signal.SIGTERM)
+                                time.sleep(0.05)
+                                os.kill(pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            killed_count += 1
+                    except Exception:
+                        pass
+        except Exception as e:
+            log.warning(f"Could not inspect /proc for stale processes: {e}")
+
+    return killed_count
+
 
 
 
@@ -252,8 +319,13 @@ def pipe_and_count(src, dest, tracker: ProgressTracker = None):
     finally:
         try:
             dest.close()
-        except:
+        except Exception:
             pass
+        try:
+            src.close()
+        except Exception:
+            pass
+
 
 
 def log_and_parse_stderr(stderr_stream, log_path: str, tracker: ProgressTracker = None):
@@ -428,6 +500,10 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
     except Exception as e:
         print(f"Error in reader thread: {e}")
     finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
         q.put(None)
 
 
@@ -479,7 +555,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     
     processes = []
     if tracker:
-        ACTIVE_PROCESSES[tracker.job_id] = processes
+        ACTIVE_PROCESSES.setdefault(tracker.job_id, [])
         if tracker.job_id in ACTIVE_STOP_EVENTS and ACTIVE_STOP_EVENTS[tracker.job_id].is_set():
             raise RuntimeError("Backup cancelled by user.")
     pipe_thread = None
@@ -500,6 +576,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 creationflags=creationflags
             )
             processes.append(p_dump)
+            if tracker:
+                ACTIVE_PROCESSES[tracker.job_id].append(p_dump)
             
             p_comp = subprocess.Popen(
                 compression_cmd,
@@ -509,6 +587,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 creationflags=creationflags
             )
             processes.append(p_comp)
+            if tracker:
+                ACTIVE_PROCESSES[tracker.job_id].append(p_comp)
             
             # Start pipe thread
             pipe_thread = threading.Thread(
@@ -528,6 +608,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 creationflags=creationflags
             )
             processes.append(p_dump)
+            if tracker:
+                ACTIVE_PROCESSES[tracker.job_id].append(p_dump)
             stdout_stream = p_dump.stdout
             
         if is_mongo:
@@ -612,25 +694,38 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     finally:
         stop_event.set()
         if pipe_thread:
-            pipe_thread.join(timeout=5.0)
+            pipe_thread.join(timeout=2.0)
+        if reader_thread:
+            reader_thread.join(timeout=2.0)
+        try:
+            stdout_stream.close()
+        except Exception:
+            pass
         for p in processes:
             try:
-                p.wait()
+                if p.poll() is None:
+                    p.terminate()
             except Exception:
                 pass
         for p in processes:
             try:
-                p.wait()
+                p.wait(timeout=2.0)
             except Exception:
-                pass
+                try:
+                    p.kill()
+                    p.wait(timeout=1.0)
+                except Exception:
+                    pass
+        if tracker and tracker.job_id in ACTIVE_PROCESSES:
+            ACTIVE_PROCESSES[tracker.job_id] = [p for p in ACTIVE_PROCESSES[tracker.job_id] if p not in processes]
+            if not ACTIVE_PROCESSES[tracker.job_id]:
+                ACTIVE_PROCESSES.pop(tracker.job_id, None)
 
     for p in processes:
         if p.returncode != 0:
             raise RuntimeError(f"Backup process failed with exit code {p.returncode}. Check logs.")
         
     write_log(log_path, f"INFO  Streaming upload successful.")
-    
-        
     return remote_path
 
 
@@ -642,7 +737,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
     processes = []
     stop_event = ACTIVE_STOP_EVENTS.get(tracker.job_id) if tracker else threading.Event()
     if tracker:
-        ACTIVE_PROCESSES[tracker.job_id] = processes
+        ACTIVE_PROCESSES.setdefault(tracker.job_id, [])
         if tracker.job_id not in ACTIVE_STOP_EVENTS:
             ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
         if stop_event.is_set():
@@ -663,6 +758,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     creationflags=creationflags
                 )
                 processes.append(p_dec)
+                if tracker:
+                    ACTIVE_PROCESSES[tracker.job_id].append(p_dec)
                 
                 p_restore = subprocess.Popen(
                     cmd,
@@ -673,6 +770,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     creationflags=creationflags
                 )
                 processes.append(p_restore)
+                if tracker:
+                    ACTIVE_PROCESSES[tracker.job_id].append(p_restore)
                 p_dec.stdout.close()
                 stdin_stream = p_dec.stdin
             else:
@@ -685,6 +784,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     creationflags=creationflags
                 )
                 processes.append(p_restore)
+                if tracker:
+                    ACTIVE_PROCESSES[tracker.job_id].append(p_restore)
                 stdin_stream = p_restore.stdin
                 
             # Log stderr and optionally parse progress for Mongo
@@ -745,9 +846,25 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 try: p.kill()
                 except Exception: pass
             raise RuntimeError(f"Streaming download failed: {e}")
-
-        for p in reversed(processes):
-            p.wait()
+        finally:
+            stop_event.set()
+            try:
+                stdin_stream.close()
+            except Exception:
+                pass
+            for p in reversed(processes):
+                try:
+                    p.wait(timeout=5.0)
+                except Exception:
+                    try:
+                        p.kill()
+                        p.wait(timeout=1.0)
+                    except Exception:
+                        pass
+            if tracker and tracker.job_id in ACTIVE_PROCESSES:
+                ACTIVE_PROCESSES[tracker.job_id] = [p for p in ACTIVE_PROCESSES[tracker.job_id] if p not in processes]
+                if not ACTIVE_PROCESSES[tracker.job_id]:
+                    ACTIVE_PROCESSES.pop(tracker.job_id, None)
 
         p_restore = processes[-1]
         if p_restore.returncode != 0:
@@ -1582,6 +1699,7 @@ def do_backup(backup_id: str):
     def fail(msg):
         log.error(f"=== BACKUP FAILED | id={backup_id} | {msg} ===")
         write_log(log_path, f"ERROR {msg}")
+        cancel_job(backup_id)
         logs = read_log(log_path)
         update_backup(backup_id,
             status="failed", error=msg, logs=logs,
@@ -1627,9 +1745,8 @@ def do_backup(backup_id: str):
         
         target_db_name = backup.get("database_name") or db.get("database_name")
         is_cluster = False
-        if target_db_name == "__all__" or (db["type"] == "postgresql" and collection == "full" and backup.get("is_scheduled") and target_db_name in ("postgres", "ADMIN_CLIENT_PROD", None, "")):
+        if target_db_name == "__all__":
             is_cluster = True
-            target_db_name = "__all__"
             base_name = f"{safe_db_name}_all"
             remote_name = f"{base_name}_{date_str}/"
         elif db["type"] == "mongodb" and collection == "full" and backup.get("is_scheduled") and not target_db_name:
@@ -1714,6 +1831,7 @@ def do_backup(backup_id: str):
     except Exception as e:
         fail(str(e))
     finally:
+        cancel_job(backup_id)
         shutil.rmtree(tmp_dir, ignore_errors=True)
         # Keep log file for a bit, cleanup old ones
         _cleanup_old_logs()
@@ -1746,6 +1864,7 @@ def do_restore(restore_id: str):
     def fail(msg):
         log.error(f"=== RESTORE FAILED | id={restore_id} | {msg} ===")
         write_log(log_path, f"ERROR {msg}")
+        cancel_job(restore_id)
         logs = read_log(log_path)
         update_restore(restore_id,
             status="failed", error=msg, logs=logs,
@@ -1946,6 +2065,7 @@ def do_restore(restore_id: str):
     except Exception as e:
         fail(str(e))
     finally:
+        cancel_job(restore_id)
         shutil.rmtree(tmp_dir, ignore_errors=True)
         _cleanup_old_logs()
 

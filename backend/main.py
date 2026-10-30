@@ -97,9 +97,7 @@ async def scheduler_loop():
                     
                     dbs = read_json("data/databases.json")
                     db = next((d for d in dbs if d["id"] == s["database_id"]), {})
-                    target_dbname = s.get("database_name")
-                    if not target_dbname or target_dbname == "__all__" or (db.get("type") == "postgresql" and s.get("collection", "full") in ("full", "", None) and target_dbname in ("postgres", "ADMIN_CLIENT_PROD")):
-                        target_dbname = "__all__"
+                    target_dbname = s.get("database_name") or db.get("database_name")
 
                     backups = read_json("data/backups.json")
                     backup = {
@@ -154,6 +152,15 @@ async def lifespan(app: FastAPI):
             with open(f, "w") as fp:
                 json.dump(default, fp)
 
+    # Clean up any stale/orphaned backup subprocesses on container startup
+    try:
+        from engine import kill_stale_backup_subprocesses
+        killed = kill_stale_backup_subprocesses()
+        if killed:
+            print(f"Cleaned up {killed} stale backup/restore subprocesses on startup.")
+    except Exception as e:
+        print(f"Error cleaning stale subprocesses: {e}")
+
     # Clean up stale running backups and restores on startup
     try:
         if os.path.exists("data/backups.json"):
@@ -184,20 +191,6 @@ async def lifespan(app: FastAPI):
                 write_json("data/restores.json", restores)
     except Exception as e:
         print(f"Error cleaning stale restores: {e}")
-
-    # Ensure existing full schedules default to whole instance backup
-    try:
-        if os.path.exists("data/schedules.json"):
-            schedules = read_json("data/schedules.json")
-            updated = False
-            for s in schedules:
-                if not s.get("database_name") or s.get("database_name") in ("postgres", "ADMIN_CLIENT_PROD"):
-                    s["database_name"] = "__all__"
-                    updated = True
-            if updated:
-                write_json("data/schedules.json", schedules)
-    except Exception as e:
-        print(f"Error migrating schedules: {e}")
                 
     asyncio.create_task(scheduler_loop())
     yield
