@@ -21,6 +21,7 @@ class ScheduleCreate(BaseModel):
     timezone_offset: int = 0
     database_name: Optional[str] = None
     collection: Optional[str] = None
+    folder_name: Optional[str] = None
 
 @router.get("/")
 def list_schedules(user=Depends(get_current_user)):
@@ -48,7 +49,8 @@ def list_schedules(user=Depends(get_current_user)):
                 "target_database": target_db,
                 "database_name": db_display,
                 "connection_name": db.get("name", ""),
-                "storage_name": st.get("name", "")
+                "storage_name": st.get("name", ""),
+                "folder_name": s.get("folder_name", "")
             })
     return result
 
@@ -62,11 +64,17 @@ def create_schedule(req: ScheduleCreate, user=Depends(get_current_user)):
     target_dbname = req.database_name
     if not target_dbname:
         target_dbname = db.get("database_name")
+
+    folder = (req.folder_name or "").strip().strip("/")
+    while "//" in folder:
+        folder = folder.replace("//", "/")
+
     schedule = {
         "id": str(uuid.uuid4()),
         "name": req.name,
         "database_id": req.database_id,
         "storage_id": req.storage_id,
+        "folder_name": folder,
         "frequency": req.frequency,
         "time": req.time,
         "enabled": req.enabled,
@@ -109,12 +117,18 @@ def trigger_schedule(schedule_id: str, background_tasks: BackgroundTasks, user=D
     profile = s.get("speed_profile", "default")
     target_dbname = s.get("database_name") or db.get("database_name")
 
+    folder_val = s.get("folder_name") if s.get("folder_name") is not None else (storage.get("folder_name") or "")
+    folder_clean = (folder_val or "").strip().strip("/")
+    while "//" in folder_clean:
+        folder_clean = folder_clean.replace("//", "/")
+
     backups = read_json("data/backups.json")
     backup = {
         "id": str(uuid.uuid4()),
         "database_id": s["database_id"],
         "source_dbname": target_dbname or "__all__",
         "storage_id": s["storage_id"],
+        "folder_name": folder_clean,
         "label": f"{s['name']}-{method}-{now.strftime('%Y%m%d-%H%M%S')}",
         "collection": s.get("collection", "full") or "full",
         "database_name": target_dbname,
@@ -164,12 +178,18 @@ def trigger_all_schedules(background_tasks: BackgroundTasks, user=Depends(get_cu
         profile = s.get("speed_profile", "default")
         target_dbname = s.get("database_name") or db.get("database_name")
 
+        folder_val = s.get("folder_name") if s.get("folder_name") is not None else (storage.get("folder_name") or "")
+        folder_clean = (folder_val or "").strip().strip("/")
+        while "//" in folder_clean:
+            folder_clean = folder_clean.replace("//", "/")
+
         backups = read_json("data/backups.json")
         backup = {
             "id": str(uuid.uuid4()),
             "database_id": s["database_id"],
             "source_dbname": target_dbname or "__all__",
             "storage_id": s["storage_id"],
+            "folder_name": folder_clean,
             "label": f"{s['name']}-{method}-{now.strftime('%Y%m%d-%H%M%S')}",
             "collection": s.get("collection", "full") or "full",
             "database_name": target_dbname,

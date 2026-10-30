@@ -98,6 +98,12 @@ async def scheduler_loop():
                     dbs = read_json("data/databases.json")
                     db = next((d for d in dbs if d["id"] == s["database_id"]), {})
                     target_dbname = s.get("database_name") or db.get("database_name")
+                    storages = read_json("data/storages.json")
+                    st = next((item for item in storages if item["id"] == s.get("storage_id")), {})
+                    folder_val = s.get("folder_name") if s.get("folder_name") is not None else (st.get("folder_name") or "")
+                    folder_clean = (folder_val or "").strip().strip("/")
+                    while "//" in folder_clean:
+                        folder_clean = folder_clean.replace("//", "/")
 
                     backups = read_json("data/backups.json")
                     backup = {
@@ -105,6 +111,7 @@ async def scheduler_loop():
                         "database_id": s["database_id"],
                         "source_dbname": target_dbname or "__all__",
                         "storage_id": s["storage_id"],
+                        "folder_name": folder_clean,
                         "label": f"{s['name']}-{method}-{now.strftime('%Y%m%d-%H%M%S')}",
                         "collection": s.get("collection", "full") or "full",
                         "database_name": target_dbname,

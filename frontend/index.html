@@ -2431,6 +2431,13 @@
           </div>
         </div>
       </div>
+      <div class="form-group" style="margin-top:12px;">
+        <label>Default Base Folder (Optional)</label>
+        <input type="text" id="st-folder" placeholder="e.g. database-backups or prod/backups" />
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          All backups saved to this storage will automatically be organized inside this folder.
+        </div>
+      </div>
       <div id="st-test-result"
         style="display:none;padding:12px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:8px">
       </div>
@@ -2545,6 +2552,13 @@
           <div style="font-size:12px;color:var(--muted);margin-top:6px">
             Enter S3 Region Endpoint URL (e.g. <code style="color:var(--accent)">https://de-s3.storage.bunnycdn.com</code>) or REST hostname.
           </div>
+        </div>
+      </div>
+      <div class="form-group" style="margin-top:12px;">
+        <label>Default Base Folder (Optional)</label>
+        <input type="text" id="edit-st-folder" placeholder="e.g. database-backups or prod/backups" />
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          All backups saved to this storage will automatically be organized inside this folder.
         </div>
       </div>
       <div id="edit-st-test-result"
@@ -2663,7 +2677,20 @@
       </div>
       <div class="form-group">
         <label>Storage Destination</label>
-        <select id="bk-storage"></select>
+        <select id="bk-storage" onchange="onBackupStorageChange()"></select>
+      </div>
+      <div class="form-group" style="margin-bottom:14px;">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; text-transform:none; letter-spacing:normal;">
+          <input type="checkbox" id="bk-use-folder" onchange="toggleBackupFolder()"
+            style="width:16px; height:16px; accent-color:var(--accent); cursor:pointer; margin:0;" />
+          <span>Save inside a folder in storage account?</span>
+        </label>
+        <div id="bk-folder-group" style="display:none; margin-top:8px;">
+          <input type="text" id="bk-folder" placeholder="e.g. database-backups or prod/backups" />
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">
+            Specify folder or subdirectory path in the bucket/container (e.g. <code>backups/postgres</code>).
+          </div>
+        </div>
       </div>
       <div class="form-group" style="display:flex; align-items:center; gap:10px; margin-bottom:18px;">
         <input type="checkbox" id="bk-send-notifications" checked
@@ -2717,7 +2744,20 @@
       </div>
       <div class="form-group">
         <label>Storage Destination</label>
-        <select id="sc-storage"></select>
+        <select id="sc-storage" onchange="onScheduleStorageChange()"></select>
+      </div>
+      <div class="form-group" style="margin-bottom:14px;">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; text-transform:none; letter-spacing:normal;">
+          <input type="checkbox" id="sc-use-folder" onchange="toggleScheduleFolder()"
+            style="width:16px; height:16px; accent-color:var(--accent); cursor:pointer; margin:0;" />
+          <span>Save inside a folder in storage account?</span>
+        </label>
+        <div id="sc-folder-group" style="display:none; margin-top:8px;">
+          <input type="text" id="sc-folder" placeholder="e.g. database-backups or prod/backups" />
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">
+            Specify folder or subdirectory path in the bucket/container (e.g. <code>backups/postgres</code>).
+          </div>
+        </div>
       </div>
       <div class="form-group">
         <label>Backup Method</label>
@@ -2799,7 +2839,11 @@
 
       <div class="form-group" id="rs-external-file-group" style="display:none">
         <label>Select Backup File</label>
-        <select id="rs-external-file"></select>
+        <select id="rs-external-file" onchange="onRestoreExternalFileSelect()"></select>
+        <div style="margin-top:8px;">
+          <label style="font-size:12px;color:var(--text2);margin-bottom:4px;display:block;">Or specify remote file path directly (for nested folders):</label>
+          <input type="text" id="rs-manual-path" placeholder="e.g. folder/subfolder/mydb-20261030_120000/backup.archive.gz" />
+        </div>
       </div>
 
       <div id="rs-info"
@@ -3799,7 +3843,7 @@
       const type = v('st-type');
       if (!v('st-name')) { toast('Please enter a storage name', 'error'); return; }
 
-      let payload = { name: v('st-name'), type };
+      let payload = { name: v('st-name'), type, folder_name: v('st-folder').trim() };
       if (type === 'azure') {
         payload.azure_account_name = v('st-azure-account');
         payload.azure_account_key = v('st-azure-key');
@@ -3855,6 +3899,8 @@
       document.getElementById('edit-st-id').value = s.id;
       document.getElementById('edit-st-name').value = s.name;
       document.getElementById('edit-st-type').value = s.type;
+      const folderEl = document.getElementById('edit-st-folder');
+      if (folderEl) folderEl.value = s.folder_name || '';
 
       document.getElementById('edit-azure-fields').style.display = s.type === 'azure' ? 'block' : 'none';
       document.getElementById('edit-gcs-fields').style.display = s.type === 'gcs' ? 'block' : 'none';
@@ -3890,7 +3936,8 @@
       const type = v('edit-st-type');
       const payload = {
         name: v('edit-st-name'),
-        type: type
+        type: type,
+        folder_name: v('edit-st-folder').trim()
       };
 
       if (type === 'azure') {
@@ -4085,11 +4132,61 @@
       });
       ['bk-storage', 'sc-storage'].forEach(id => {
         const el = document.getElementById(id);
-        if (el) el.innerHTML = sts.map(s => `<option value="${s.id}">${s.name} (${s.type})</option>`).join('');
+        if (el) el.innerHTML = sts.map(s => `<option value="${s.id}" data-folder="${s.folder_name || ''}">${s.name} (${s.type})${s.folder_name ? ' [📁 ' + s.folder_name + ']' : ''}</option>`).join('');
       });
       if (dbs.length) {
         onBackupDbChange();
         onScheduleDbChange();
+      }
+      onBackupStorageChange();
+      onScheduleStorageChange();
+    }
+
+    function toggleBackupFolder() {
+      const checked = document.getElementById('bk-use-folder')?.checked;
+      const group = document.getElementById('bk-folder-group');
+      if (group) group.style.display = checked ? 'block' : 'none';
+    }
+
+    function toggleScheduleFolder() {
+      const checked = document.getElementById('sc-use-folder')?.checked;
+      const group = document.getElementById('sc-folder-group');
+      if (group) group.style.display = checked ? 'block' : 'none';
+    }
+
+    function onBackupStorageChange() {
+      const el = document.getElementById('bk-storage');
+      if (!el || el.selectedIndex < 0) return;
+      const opt = el.options[el.selectedIndex];
+      const defaultFolder = opt ? (opt.dataset.folder || '') : '';
+      const chk = document.getElementById('bk-use-folder');
+      const folderInput = document.getElementById('bk-folder');
+      if (defaultFolder) {
+        if (chk) chk.checked = true;
+        if (folderInput && !folderInput.value) folderInput.value = defaultFolder;
+      }
+      toggleBackupFolder();
+    }
+
+    function onScheduleStorageChange() {
+      const el = document.getElementById('sc-storage');
+      if (!el || el.selectedIndex < 0) return;
+      const opt = el.options[el.selectedIndex];
+      const defaultFolder = opt ? (opt.dataset.folder || '') : '';
+      const chk = document.getElementById('sc-use-folder');
+      const folderInput = document.getElementById('sc-folder');
+      if (defaultFolder) {
+        if (chk) chk.checked = true;
+        if (folderInput && !folderInput.value) folderInput.value = defaultFolder;
+      }
+      toggleScheduleFolder();
+    }
+
+    function onRestoreExternalFileSelect() {
+      const sel = document.getElementById('rs-external-file');
+      const manual = document.getElementById('rs-manual-path');
+      if (sel && manual && sel.value) {
+        manual.value = sel.value;
       }
     }
 
@@ -4216,20 +4313,24 @@
       const indexingMode = v('bk-indexing-mode');
       const speedProfile = v('bk-speed-profile') || 'default';
       const sendNotifications = document.getElementById('bk-send-notifications') ? document.getElementById('bk-send-notifications').checked : true;
+      const useFolder = document.getElementById('bk-use-folder') && document.getElementById('bk-use-folder').checked;
+      const folderName = useFolder ? v('bk-folder').trim() : '';
 
       if (dbname && dbname !== '__all__') {
         try { await apiFetch(`/databases/${dbId}`, { method: 'PATCH', body: JSON.stringify({ database_name: dbname }) }); } catch (e) { }
       }
-      await startBackupNow(dbId, v('bk-storage'), label, collection, indexingMode, sendNotifications, speedProfile, dbname);
+      await startBackupNow(dbId, v('bk-storage'), label, collection, indexingMode, sendNotifications, speedProfile, dbname, folderName);
       closeModal('backup-modal');
     }
 
-    async function startBackupNow(dbId, storageId, label, collection = '', indexingMode = 'with_index', sendNotifications = true, speedProfile = 'default', dbname = '') {
+    async function startBackupNow(dbId, storageId, label, collection = '', indexingMode = 'with_index', sendNotifications = true, speedProfile = 'default', dbname = '', folderName = '') {
       try {
+        const payload = {
+          database_id: dbId, database_name: dbname, storage_id: storageId, label, collection, indexing_mode: indexingMode, send_notifications: sendNotifications, speed_profile: speedProfile
+        };
+        if (folderName) payload.folder_name = folderName;
         const b = await apiFetch('/backups/', {
-          method: 'POST', body: JSON.stringify({
-            database_id: dbId, database_name: dbname, storage_id: storageId, label, collection, indexing_mode: indexingMode, send_notifications: sendNotifications, speed_profile: speedProfile
-          })
+          method: 'POST', body: JSON.stringify(payload)
         });
         toast('Backup started!', 'info');
         showPage('backups');
@@ -4788,6 +4889,8 @@
       const dbType = v('sc-type');
       const dbname = v('sc-dbname') || '__all__';
       const collection = dbType === 'collection' ? v('sc-collection-select') : 'full';
+      const useFolder = document.getElementById('sc-use-folder') && document.getElementById('sc-use-folder').checked;
+      const folderName = useFolder ? v('sc-folder').trim() : '';
 
       try {
         await apiFetch('/schedules/', {
@@ -4799,7 +4902,8 @@
             speed_profile: v('sc-speed-profile') || 'default',
             timezone_offset: new Date().getTimezoneOffset(),
             database_name: dbname,
-            collection: collection || 'full'
+            collection: collection || 'full',
+            folder_name: folderName || null
           })
         });
         closeModal('schedule-modal');
@@ -4915,9 +5019,14 @@
       sel.innerHTML = '<option>Loading files...</option>';
       try {
         const res = await apiFetch(`/storage/${storageId}/files`);
-        sel.innerHTML = res.files.length
-          ? res.files.map(f => `<option value="${f.name}">${f.name} (${(f.size / 1024 / 1024).toFixed(2)} MB)</option>`).join('')
+        const filesList = Array.isArray(res) ? res : (res && res.files ? res.files : []);
+        sel.innerHTML = filesList.length
+          ? filesList.map(f => `<option value="${f.name}">${f.name} (${(f.size / 1024 / 1024).toFixed(2)} MB)</option>`).join('')
           : '<option value="">— no backup files found —</option>';
+        const manualEl = document.getElementById('rs-manual-path');
+        if (manualEl) {
+          manualEl.value = filesList.length > 0 ? filesList[0].name : '';
+        }
       } catch (e) {
         sel.innerHTML = `<option value="">⚠ ${e.message}</option>`;
       }
@@ -5056,8 +5165,9 @@
 
       if (!isExternal && !backupId) { toast('Select a backup to restore', 'error'); return; }
       const storageId = v('rs-external-storage');
-      const file = v('rs-external-file');
-      if (isExternal && (!storageId || !file)) { toast('Select a bucket and file', 'error'); return; }
+      const manualFile = v('rs-manual-path') ? v('rs-manual-path').trim() : '';
+      const file = manualFile || v('rs-external-file');
+      if (isExternal && (!storageId || !file)) { toast('Select a bucket and file or specify remote path', 'error'); return; }
 
       if (!targetDbId) { toast('Select a target database connection', 'error'); return; }
       if (!targetDbname) { toast(isNew ? 'Enter a new database name' : 'Select a target database name', 'error'); return; }
@@ -5110,12 +5220,28 @@
     // ---- MODALS ----
     async function openModal(id) {
       document.getElementById(id).classList.add('open');
-      if (id === 'backup-modal' || id === 'schedule-modal') {
+      if (id === 'backup-modal') {
+        const chk = document.getElementById('bk-use-folder');
+        const folder = document.getElementById('bk-folder');
+        if (chk) chk.checked = false;
+        if (folder) folder.value = '';
+        toggleBackupFolder();
         await populateSelects();
+      }
+      if (id === 'schedule-modal') {
+        const chk = document.getElementById('sc-use-folder');
+        const folder = document.getElementById('sc-folder');
+        if (chk) chk.checked = false;
+        if (folder) folder.value = '';
+        toggleScheduleFolder();
+        await populateSelects();
+        onFreqChange();
       }
       if (id === 'restore-modal') {
         await populateRestoreSelects();
         setRestoreMode('existing');
+        const manual = document.getElementById('rs-manual-path');
+        if (manual) manual.value = '';
       }
       if (id === 'db-modal') {
         document.getElementById('db-name').value = '';
@@ -5131,15 +5257,14 @@
         onDbTypeChange('db');
       }
       if (id === 'storage-modal') {
+        const folderEl = document.getElementById('st-folder');
+        if (folderEl) folderEl.value = '';
         const stRes = document.getElementById('st-test-result');
         if (stRes) stRes.style.display = 'none';
       }
       if (id === 'edit-storage-modal') {
         const editRes = document.getElementById('edit-st-test-result');
         if (editRes) editRes.style.display = 'none';
-      }
-      if (id === 'schedule-modal') {
-        onFreqChange();
       }
       lucide.createIcons();
     }

@@ -20,6 +20,7 @@ class BackupCreate(BaseModel):
     indexing_mode: Literal["with_index", "without_index", "only_index"] = "with_index"
     send_notifications: Optional[bool] = True
     speed_profile: Literal["default", "safe", "balanced", "extreme"] = "default"
+    folder_name: Optional[str] = None
 
 class RestoreRequest(BaseModel):
     backup_id: Optional[str] = None
@@ -51,6 +52,7 @@ def list_backups(user=Depends(get_current_user)):
                 "database_type": db.get("type",""),
                 "storage_name": st.get("name",""),
                 "storage_type": st.get("type",""),
+                "folder_name": b.get("folder_name", ""),
             })
     return sorted(result, key=lambda x: x["created_at"], reverse=True)
 
@@ -65,6 +67,11 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
     if not storage:
         raise HTTPException(404, "Storage not found")
 
+    folder_val = req.folder_name if req.folder_name is not None else storage.get("folder_name", "")
+    folder_clean = (folder_val or "").strip().strip("/")
+    while "//" in folder_clean:
+        folder_clean = folder_clean.replace("//", "/")
+
     backups = read_json("data/backups.json")
     target_dbname = req.database_name if req.database_name is not None else db.get("database_name", "")
     backup = {
@@ -73,6 +80,7 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
         "database_name": target_dbname,
         "source_dbname": target_dbname,
         "storage_id": req.storage_id,
+        "folder_name": folder_clean,
         "label": req.label or f"backup-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}",
         "collection": req.collection or "full",
         "backup_method": req.backup_method,

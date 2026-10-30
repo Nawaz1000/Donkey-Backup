@@ -12,6 +12,7 @@ import os
 import shutil
 import logging
 import tempfile
+import uuid
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, quote, urlparse
 from utils import read_json, write_json, send_notification, parse_mongo_uri
@@ -282,6 +283,7 @@ def list_storage_objects(storage: dict, prefix: str) -> list:
         return results
     elif stype == "bunny":
         import requests
+        from engine import resolve_bunny_hosts
         bunny_host = get_bunny_host(storage)
         bunny_key = get_bunny_key(storage)
         headers = {"AccessKey": bunny_key, "Accept": "application/json"}
@@ -303,7 +305,33 @@ def list_storage_objects(storage: dict, prefix: str) -> list:
 
         clean_prefix = prefix.strip("/")
         start_dir = clean_prefix if prefix.endswith("/") else (clean_prefix.rsplit("/", 1)[0] if "/" in clean_prefix else "")
-        list_bunny_dir(start_dir)
+        try:
+            list_bunny_dir(start_dir)
+        except Exception:
+            pass
+
+        # Fallback to Bunny S3-compatible API if REST returned nothing
+        if not results:
+            try:
+                import boto3
+                from botocore.config import Config
+                _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
+                zone = (storage.get("bunny_storage_zone") or "").strip()
+                access_key = (storage.get("bunny_access_key") or zone).strip()
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=s3_url,
+                    aws_access_key_id=access_key or zone,
+                    aws_secret_access_key=bunny_key,
+                    region_name="de",
+                    config=Config(s3={'addressing_style': 'path'}, signature_version="s3v4", retries={'max_attempts': 2, 'mode': 'standard'}, connect_timeout=10, read_timeout=15)
+                )
+                paginator = s3.get_paginator('list_objects_v2')
+                for page in paginator.paginate(Bucket=zone, Prefix=prefix):
+                    for item in page.get("Contents", []):
+                        results.append(item["Key"])
+            except Exception:
+                pass
         return results
     return []
 
@@ -343,9 +371,35 @@ def upload_metadata_file(storage: dict, remote_name: str, data_str: str):
         import requests
         bunny_host = get_bunny_host(storage)
         bunny_key = get_bunny_key(storage)
-        url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{remote_name.lstrip('/')}"
-        headers = {"AccessKey": bunny_key, "Content-Type": "application/json"}
-        requests.put(url, headers=headers, data=data_str.encode("utf-8"), timeout=30)
+        zone = (storage.get("bunny_storage_zone") or "").strip()
+        access_key = (storage.get("bunny_access_key") or zone).strip()
+        clean_remote = remote_name.lstrip("/")
+        encoded = data_str.encode("utf-8")
+        url = f"https://{bunny_host}/{zone}/{clean_remote}"
+        headers = {"AccessKey": bunny_key, "Content-Type": "application/json", "Content-Length": str(len(encoded))}
+        success = False
+        try:
+            resp = requests.put(url, headers=headers, data=encoded, timeout=30)
+            if resp.status_code in (200, 201):
+                success = True
+        except Exception:
+            pass
+        if not success:
+            try:
+                import boto3
+                from botocore.config import Config
+                _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=s3_url,
+                    aws_access_key_id=access_key or zone,
+                    aws_secret_access_key=bunny_key,
+                    region_name="de",
+                    config=Config(s3={'addressing_style': 'path'}, signature_version='s3v4', connect_timeout=10, read_timeout=15)
+                )
+                s3.put_object(Bucket=zone, Key=clean_remote, Body=encoded, ContentType="application/json")
+            except Exception:
+                pass
 
 def download_metadata_file(storage: dict, remote_name: str) -> str:
     try:
@@ -382,11 +436,33 @@ def download_metadata_file(storage: dict, remote_name: str) -> str:
             import requests
             bunny_host = get_bunny_host(storage)
             bunny_key = get_bunny_key(storage)
-            url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{remote_name.lstrip('/')}"
+            zone = (storage.get("bunny_storage_zone") or "").strip()
+            access_key = (storage.get("bunny_access_key") or zone).strip()
+            clean_remote = remote_name.lstrip("/")
+            url = f"https://{bunny_host}/{zone}/{clean_remote}"
             headers = {"AccessKey": bunny_key}
-            resp = requests.get(url, headers=headers, timeout=30)
-            if resp.status_code == 200:
-                return resp.text
+            try:
+                resp = requests.get(url, headers=headers, timeout=30)
+                if resp.status_code == 200:
+                    return resp.text
+            except Exception:
+                pass
+            try:
+                import boto3
+                from botocore.config import Config
+                _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=s3_url,
+                    aws_access_key_id=access_key or zone,
+                    aws_secret_access_key=bunny_key,
+                    region_name="de",
+                    config=Config(s3={'addressing_style': 'path'}, signature_version='s3v4', connect_timeout=10, read_timeout=15)
+                )
+                obj = s3.get_object(Bucket=zone, Key=clean_remote)
+                return obj["Body"].read().decode("utf-8")
+            except Exception:
+                pass
     except Exception:
         pass
     return None
@@ -857,24 +933,124 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
 
         elif storage["type"] == "bunny":
             import requests
-            bunny_host = get_bunny_host(storage)
+            import boto3
+            from botocore.config import Config
+            from boto3.s3.transfer import TransferConfig
+
             bunny_key = get_bunny_key(storage)
+            zone = (storage.get("bunny_storage_zone") or "").strip()
+            access_key = (storage.get("bunny_access_key") or zone).strip()
             clean_remote = remote_name.lstrip("/")
-            url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{clean_remote}"
-            headers = {
-                "AccessKey": bunny_key,
-                "Content-Type": "application/octet-stream",
-            }
-            resp = requests.put(url, headers=headers, data=queue_reader, timeout=(30, 3600))
-            if resp.status_code not in (200, 201):
-                raise RuntimeError(f"Bunny storage upload failed ({resp.status_code}): {resp.text}")
+
+            rest_host, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
+            write_log(log_path, f"INFO  Connecting to BunnyCDN storage zone '{zone}' (S3: {s3_url}, REST: {rest_host})")
+
+            # First, check if S3-compatible API is available on this Bunny storage zone
+            s3_available = False
+            s3_client = None
             try:
-                head = requests.head(url, headers={"AccessKey": bunny_key}, timeout=30)
-                if head.status_code == 200 and "Content-Length" in head.headers:
-                    stream_backup_to_storage.last_size_bytes = int(head.headers["Content-Length"])
-            except Exception:
-                pass
-            remote_path = f"bunny://{storage['bunny_storage_zone']}/{remote_name}"
+                s3_config = Config(
+                    s3={"addressing_style": "path"},
+                    signature_version="s3v4",
+                    retries={"max_attempts": 2, "mode": "standard"},
+                    connect_timeout=8,
+                    read_timeout=15
+                )
+                test_client = boto3.client(
+                    "s3",
+                    endpoint_url=s3_url,
+                    aws_access_key_id=access_key or zone,
+                    aws_secret_access_key=bunny_key,
+                    region_name="de",
+                    config=s3_config
+                )
+                test_client.head_bucket(Bucket=zone)
+                s3_available = True
+                s3_client = test_client
+                write_log(log_path, f"INFO  BunnyCDN S3-compatible API verified. Streaming upload via S3 multipart...")
+            except Exception as s3_check_err:
+                write_log(log_path, f"INFO  Bunny S3 API not usable ({s3_check_err}). Falling back to REST API...")
+
+            if s3_available and s3_client:
+                # Bunny S3 multipart streaming: Boto3 buffers chunks with exact Content-Length headers
+                chunk_size = max(5 * 1024 * 1024, settings.get("chunk_size", 8 * 1024 * 1024))
+                transfer_config = TransferConfig(
+                    multipart_threshold=chunk_size,
+                    multipart_chunksize=chunk_size,
+                    max_concurrency=settings.get("concurrency", 4),
+                    use_threads=False
+                )
+                s3_client.upload_fileobj(
+                    Fileobj=queue_reader,
+                    Bucket=zone,
+                    Key=clean_remote,
+                    Config=transfer_config
+                )
+                try:
+                    head = s3_client.head_object(Bucket=zone, Key=clean_remote)
+                    stream_backup_to_storage.last_size_bytes = head.get("ContentLength", 0)
+                except Exception as e:
+                    write_log(log_path, f"WARN  Could not read S3 head_object: {e}")
+            else:
+                # Bunny REST API requires an exact Content-Length header (chunked encoding is unsupported).
+                # Spool the stream to a temporary file so the exact Content-Length is sent.
+                job_token = (tracker.job_id if tracker else uuid.uuid4().hex[:8]).replace("/", "_")
+                spool_filename = f"bunny_spool_{job_token}.tmp"
+                spool_dir = os.path.join(BACKUP_TMP, job_token)
+                os.makedirs(spool_dir, exist_ok=True)
+                spool_path = os.path.join(spool_dir, spool_filename)
+                
+                try:
+                    write_log(log_path, f"INFO  Spooling stream to calculate Content-Length for Bunny REST API...")
+                    with open(spool_path, "wb") as f_spool:
+                        while not stop_event.is_set():
+                            buf = queue_reader.read(settings.get("chunk_size", 4 * 1024 * 1024))
+                            if not buf:
+                                break
+                            f_spool.write(buf)
+
+                    if stop_event.is_set():
+                        raise RuntimeError("Backup cancelled by user.")
+
+                    file_size = os.path.getsize(spool_path)
+                    write_log(log_path, f"INFO  Spool completed ({round(file_size/(1024*1024), 2)} MB). Uploading to https://{rest_host}/{zone}/{clean_remote}...")
+
+                    url = f"https://{rest_host}/{zone}/{clean_remote}"
+                    headers = {
+                        "AccessKey": bunny_key,
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": str(file_size),
+                    }
+                    with open(spool_path, "rb") as f_in:
+                        resp = requests.put(url, headers=headers, data=f_in, timeout=(30, 3600))
+                    if resp.status_code not in (200, 201):
+                        raise RuntimeError(f"Bunny storage upload failed ({resp.status_code}): {resp.text}")
+
+                    stream_backup_to_storage.last_size_bytes = file_size
+                finally:
+                    if os.path.exists(spool_path):
+                        try:
+                            os.remove(spool_path)
+                        except Exception:
+                            pass
+
+            # Final verification that file exists and has size > 0
+            uploaded_bytes = getattr(stream_backup_to_storage, "last_size_bytes", 0) or 0
+            if uploaded_bytes == 0:
+                try:
+                    head_url = f"https://{rest_host}/{zone}/{clean_remote}"
+                    head_resp = requests.head(head_url, headers={"AccessKey": bunny_key}, timeout=15)
+                    if head_resp.status_code == 200 and "Content-Length" in head_resp.headers:
+                        uploaded_bytes = int(head_resp.headers["Content-Length"])
+                        stream_backup_to_storage.last_size_bytes = uploaded_bytes
+                except Exception:
+                    pass
+
+            if uploaded_bytes == 0:
+                raise RuntimeError(f"BunnyCDN upload verification failed: uploaded file '{clean_remote}' has 0 bytes or was not created.")
+
+            remote_path = f"bunny://{zone}/{clean_remote}"
+            write_log(log_path, f"INFO  BunnyCDN upload verified successfully ({round(uploaded_bytes/(1024*1024), 2)} MB) -> {remote_path}")
 
         else:
             raise ValueError(f"Unknown storage type: {storage['type']}")
@@ -1050,23 +1226,65 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
 
             elif storage["type"] == "bunny":
                 import requests
+                from engine import resolve_bunny_hosts
                 bunny_host = get_bunny_host(storage)
                 bunny_key = get_bunny_key(storage)
                 clean_remote = remote_name.lstrip("/")
                 url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{clean_remote}"
                 headers = {"AccessKey": bunny_key}
-                with requests.get(url, headers=headers, stream=True, timeout=(30, 3600)) as resp:
-                    if resp.status_code != 200:
-                        raise RuntimeError(f"Bunny storage download failed ({resp.status_code}): {resp.text}")
-                    for chunk in resp.iter_content(chunk_size=settings["chunk_size"]):
+                rest_failed = False
+                rest_err = ""
+                try:
+                    with requests.get(url, headers=headers, stream=True, timeout=(30, 3600)) as resp:
+                        if resp.status_code == 200:
+                            for chunk in resp.iter_content(chunk_size=settings["chunk_size"]):
+                                if not chunk:
+                                    continue
+                                if stop_event.is_set():
+                                    raise RuntimeError("Restore cancelled by user.")
+                                stdin_stream.write(chunk)
+                                if dl_tracker:
+                                    dl_tracker.update_bytes(len(chunk))
+                            stdin_stream.close()
+                        else:
+                            rest_failed = True
+                            rest_err = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                except Exception as ex:
+                    rest_failed = True
+                    rest_err = str(ex)
+
+                if rest_failed:
+                    # Fallback to Bunny S3-compatible API
+                    write_log(log_path, f"WARN  Bunny REST download failed ({rest_err}). Falling back to S3 API...")
+                    import boto3
+                    from botocore.config import Config
+                    _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
+                    zone = (storage.get("bunny_storage_zone") or "").strip()
+                    access_key = (storage.get("bunny_access_key") or zone).strip()
+                    s3 = boto3.client(
+                        "s3",
+                        endpoint_url=s3_url,
+                        aws_access_key_id=access_key or zone,
+                        aws_secret_access_key=bunny_key,
+                        region_name="de",
+                        config=Config(
+                            s3={'addressing_style': 'path'},
+                            signature_version="s3v4",
+                            retries={'max_attempts': 3, 'mode': 'standard'},
+                            connect_timeout=30,
+                            read_timeout=3600
+                        )
+                    )
+                    s3_obj = s3.get_object(Bucket=zone, Key=clean_remote)
+                    body_stream = s3_obj["Body"]
+                    while not stop_event.is_set():
+                        chunk = body_stream.read(settings["chunk_size"])
                         if not chunk:
-                            continue
-                        if stop_event.is_set():
-                            raise RuntimeError("Restore cancelled by user.")
+                            break
                         stdin_stream.write(chunk)
                         if dl_tracker:
                             dl_tracker.update_bytes(len(chunk))
-                stdin_stream.close()
+                    stdin_stream.close()
 
             else:
                 raise ValueError(f"Unknown storage type: {storage['type']}")
@@ -1994,6 +2212,13 @@ def do_backup(backup_id: str):
             base_name = safe_db_name
             remote_name = f"{base_name}-{date_str}/backup.archive.{ext}"
 
+        # Prepend folder name if specified on backup or default on storage
+        folder = (backup.get("folder_name") or storage.get("folder_name") or "").strip().strip("/")
+        while "//" in folder:
+            folder = folder.replace("//", "/")
+        if folder:
+            remote_name = f"{folder}/{remote_name}"
+
         # Initialize progress tracker
         total_size = 0
         if db["type"] == "postgresql":
@@ -2031,6 +2256,8 @@ def do_backup(backup_id: str):
 
         # Fetch actual uploaded size from storage (set by stream_backup_to_storage)
         raw_bytes = getattr(stream_backup_to_storage, "last_size_bytes", 0) or 0
+        if raw_bytes == 0:
+            return fail(f"Backup verification failed: Uploaded backup on storage '{storage.get('name')}' is 0 bytes or was not saved.")
         size_mb = round(raw_bytes / (1024 * 1024), 2)
 
         duration = int((datetime.utcnow() - start).total_seconds())
@@ -2194,7 +2421,7 @@ def do_restore(restore_id: str):
         indexing_mode = restore.get("indexing_mode", "with_index")
 
         if target_db["type"] == "mongodb":
-            if remote_name.endswith("/") or remote_name.startswith("Mongdbbackup"):
+            if remote_name.endswith("/") or "Mongdbbackup" in remote_name:
                 write_log(log_path, "INFO  Cluster restore detected. Discovering databases...")
                 objects = [b for b in list_storage_objects(storage, remote_name) if ".archive." in b]
                 
@@ -2202,7 +2429,10 @@ def do_restore(restore_id: str):
                 for obj in objects:
                     db_name = obj.split("/")[-1].split(".archive.")[0]
                     write_log(log_path, f"INFO  [Cluster Restore] Restoring database: {db_name}")
-                    run_mongo_restore(target_db, "full", storage, obj, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=db_name, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=db_name)
+                    obj_compression = "zstd" if ".zst" in obj else ("gzip" if ".gz" in obj else compression)
+                    if tracker and tracker.job_id in ACTIVE_STOP_EVENTS:
+                        ACTIVE_STOP_EVENTS[tracker.job_id] = threading.Event()
+                    run_mongo_restore(target_db, "full", storage, obj, log_path, drop_existing=not restore.get("new_database", False), compression=obj_compression, source_dbname=db_name, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=db_name)
             else:
                 run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db.get("database_name"))
         elif target_db["type"] == "postgresql":

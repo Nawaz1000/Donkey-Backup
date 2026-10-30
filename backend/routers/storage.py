@@ -31,6 +31,7 @@ class StorageCreate(BaseModel):
     bunny_password: Optional[str] = None           # Password (Secret Key)
     bunny_region_url: Optional[str] = None         # Region URL (e.g. https://de-s3.storage.bunnycdn.com)
     bunny_region: Optional[str] = None             # Region code fallback
+    folder_name: Optional[str] = None              # Optional base/default folder
 
 def _mask_storage(s: dict) -> dict:
     return {k: ("********" if k in SECRET_FIELDS and v else v) for k, v in s.items()}
@@ -47,11 +48,15 @@ def list_storages(user=Depends(get_current_user)):
 @router.post("/")
 def add_storage(req: StorageCreate, user=Depends(get_current_user)):
     storages = read_json("data/storages.json")
+    folder = (req.folder_name or "").strip().strip("/")
+    while "//" in folder:
+        folder = folder.replace("//", "/")
     storage = {
         "id": str(uuid.uuid4()),
         "user_id": user["sub"],
         "name": req.name,
         "type": req.type,
+        "folder_name": folder,
         # Azure
         "azure_account_name": req.azure_account_name,
         "azure_account_key": req.azure_account_key,
@@ -92,6 +97,10 @@ def update_storage(storage_id: str, req: StorageCreate, user=Depends(get_current
         if s["id"] == storage_id and s["user_id"] == user["sub"]:
             s["name"] = req.name
             s["type"] = req.type
+            folder = (req.folder_name or "").strip().strip("/")
+            while "//" in folder:
+                folder = folder.replace("//", "/")
+            s["folder_name"] = folder
             # Azure
             s["azure_account_name"] = req.azure_account_name
             if req.azure_account_key and req.azure_account_key != "********":
@@ -190,13 +199,14 @@ def perform_test_storage(storage: dict) -> dict:
             try:
                 import boto3
                 from botocore.config import Config
+                access_key = (storage.get("bunny_access_key") or zone).strip()
                 s3 = boto3.client(
                     "s3",
                     endpoint_url=s3_url,
-                    aws_access_key_id=zone,
+                    aws_access_key_id=access_key or zone,
                     aws_secret_access_key=pwd,
                     region_name="de",
-                    config=Config(signature_version="s3v4", connect_timeout=10, read_timeout=10)
+                    config=Config(s3={'addressing_style': 'path'}, signature_version="s3v4", connect_timeout=10, read_timeout=10)
                 )
                 s3.head_bucket(Bucket=zone)
                 return {"success": True, "message": f"Successfully connected to BunnyCDN Storage Zone '{zone}' via S3 API ({s3_url})."}
@@ -236,6 +246,19 @@ def list_storage_files(storage_id: str, user=Depends(get_current_user)):
         raise HTTPException(404, "Storage not found")
         
     files = []
+    def is_backup_file(fn: str) -> bool:
+        if not fn or fn.endswith(".indexes.json"):
+            return False
+        return (
+            fn.endswith(".gz")
+            or fn.endswith(".zst")
+            or fn.endswith(".archive")
+            or "backup.archive" in fn
+            or fn.endswith(".tar.gz")
+            or fn.endswith(".dump")
+            or fn.endswith(".sql")
+        )
+
     try:
         if storage["type"] == "azure":
             from azure.storage.blob import BlobServiceClient
@@ -248,7 +271,7 @@ def list_storage_files(storage_id: str, user=Depends(get_current_user)):
             client = BlobServiceClient.from_connection_string(conn_str)
             container = client.get_container_client(storage["azure_container"])
             for blob in container.list_blobs():
-                if blob.name.endswith(".gz") or blob.name.endswith(".zst") or blob.name.endswith(".archive") or "backup.archive" in blob.name:
+                if is_backup_file(blob.name):
                     lm = blob.last_modified or getattr(blob, 'creation_time', None)
                     files.append({
                         "name": blob.name,
@@ -265,7 +288,7 @@ def list_storage_files(storage_id: str, user=Depends(get_current_user)):
             client = gcs.Client(credentials=creds)
             bucket = client.bucket(storage["gcs_bucket"])
             for blob in bucket.list_blobs():
-                if blob.name.endswith(".gz") or blob.name.endswith(".zst") or blob.name.endswith(".archive") or "backup.archive" in blob.name:
+                if is_backup_file(blob.name):
                     lm = blob.updated or getattr(blob, 'time_created', None)
                     files.append({
                         "name": blob.name,
@@ -280,7 +303,7 @@ def list_storage_files(storage_id: str, user=Depends(get_current_user)):
             for page in paginator.paginate(Bucket=storage["s3_bucket"]):
                 for item in page.get("Contents", []):
                     name = item["Key"]
-                    if name.endswith(".gz") or name.endswith(".zst") or name.endswith(".archive") or "backup.archive" in name:
+                    if is_backup_file(name):
                         files.append({
                             "name": name,
                             "size": item["Size"],
@@ -289,9 +312,10 @@ def list_storage_files(storage_id: str, user=Depends(get_current_user)):
 
         elif storage["type"] == "bunny":
             import requests
-            from engine import get_bunny_host, get_bunny_key
+            from engine import get_bunny_host, get_bunny_key, resolve_bunny_hosts
             bunny_host = get_bunny_host(storage)
-            headers = {"AccessKey": get_bunny_key(storage), "Accept": "application/json"}
+            bunny_key = get_bunny_key(storage)
+            headers = {"AccessKey": bunny_key, "Accept": "application/json"}
 
             def list_bunny_dir(subpath=""):
                 clean = subpath.strip("/")
@@ -304,16 +328,49 @@ def list_storage_files(storage_id: str, user=Depends(get_current_user)):
                         if obj.get("IsDirectory"):
                             list_bunny_dir(full_name)
                         else:
-                            if full_name.endswith(".gz") or full_name.endswith(".zst") or full_name.endswith(".archive") or "backup.archive" in full_name:
+                            if is_backup_file(full_name):
                                 files.append({
                                     "name": full_name,
                                     "size": obj.get("Length", 0),
                                     "last_modified": obj.get("LastChanged")
                                 })
 
-            list_bunny_dir("")
+            try:
+                list_bunny_dir("")
+            except Exception:
+                pass
+
+            # Fallback to Bunny S3-compatible API if REST listing found no files
+            if not files:
+                try:
+                    import boto3
+                    from botocore.config import Config
+                    _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
+                    zone = (storage.get("bunny_storage_zone") or "").strip()
+                    access_key = (storage.get("bunny_access_key") or zone).strip()
+                    s3 = boto3.client(
+                        "s3",
+                        endpoint_url=s3_url,
+                        aws_access_key_id=access_key or zone,
+                        aws_secret_access_key=bunny_key,
+                        region_name="de",
+                        config=Config(s3={'addressing_style': 'path'}, signature_version="s3v4", retries={'max_attempts': 2, 'mode': 'standard'}, connect_timeout=10, read_timeout=15)
+                    )
+                    paginator = s3.get_paginator('list_objects_v2')
+                    for page in paginator.paginate(Bucket=zone):
+                        for item in page.get("Contents", []):
+                            name = item["Key"]
+                            if is_backup_file(name):
+                                files.append({
+                                    "name": name,
+                                    "size": item["Size"],
+                                    "last_modified": item["LastModified"].isoformat() if item.get("LastModified") else None
+                                })
+                except Exception:
+                    pass
 
     except Exception as e:
         raise HTTPException(500, f"Failed to fetch files: {str(e)}")
         
-    return sorted(files, key=lambda x: x["last_modified"] or "", reverse=True)
+    sorted_files = sorted(files, key=lambda x: x["last_modified"] or "", reverse=True)
+    return {"files": sorted_files}
