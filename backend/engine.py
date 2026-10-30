@@ -186,8 +186,92 @@ def read_log(log_path: str) -> str:
 
 
 
+def get_bunny_host(region: str = None) -> str:
+    r = (region or "").strip().lower()
+    if not r or r in ("de", "falkenstein", "default", "main"):
+        return "storage.bunnycdn.com"
+    return f"{r}.storage.bunnycdn.com"
+
+
+def get_s3_client(storage: dict):
+    import boto3
+    from botocore.config import Config
+    
+    config = Config(
+        retries={'max_attempts': 3, 'mode': 'standard'},
+        connect_timeout=30,
+        read_timeout=3600
+    )
+    kwargs = {
+        "aws_access_key_id": storage.get("s3_access_key"),
+        "aws_secret_access_key": storage.get("s3_secret_key"),
+        "config": config
+    }
+    if storage.get("s3_region"):
+        kwargs["region_name"] = storage["s3_region"].strip()
+    if storage.get("s3_endpoint_url"):
+        kwargs["endpoint_url"] = storage["s3_endpoint_url"].strip()
+        
+    return boto3.client("s3", **kwargs)
+
+
+def list_storage_objects(storage: dict, prefix: str) -> list:
+    """List object keys matching prefix in the given storage."""
+    stype = storage["type"]
+    prefix = prefix or ""
+    if stype == "azure":
+        from azure.storage.blob import BlobServiceClient
+        conn_str = f"DefaultEndpointsProtocol=https;AccountName={storage['azure_account_name']};AccountKey={storage['azure_account_key']};EndpointSuffix=core.windows.net"
+        client = BlobServiceClient.from_connection_string(conn_str)
+        container = client.get_container_client(storage["azure_container"])
+        return [b.name for b in container.list_blobs(name_starts_with=prefix)]
+    elif stype == "gcs":
+        import json as _json
+        from google.cloud import storage as gcs
+        from google.oauth2 import service_account
+        creds_dict = _json.loads(storage["gcs_credentials_json"])
+        creds = service_account.Credentials.from_service_account_info(creds_dict)
+        client = gcs.Client(credentials=creds)
+        bucket = client.bucket(storage["gcs_bucket"])
+        return [b.name for b in bucket.list_blobs(prefix=prefix)]
+    elif stype == "s3":
+        s3 = get_s3_client(storage)
+        paginator = s3.get_paginator('list_objects_v2')
+        results = []
+        for page in paginator.paginate(Bucket=storage["s3_bucket"], Prefix=prefix):
+            for item in page.get("Contents", []):
+                results.append(item["Key"])
+        return results
+    elif stype == "bunny":
+        import requests
+        bunny_host = get_bunny_host(storage.get("bunny_region"))
+        headers = {"AccessKey": storage["bunny_access_key"], "Accept": "application/json"}
+        results = []
+
+        def list_bunny_dir(subpath=""):
+            clean = subpath.strip("/")
+            url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{clean}/" if clean else f"https://{bunny_host}/{storage['bunny_storage_zone']}/"
+            resp = requests.get(url, headers=headers, timeout=25)
+            if resp.status_code == 200:
+                for item in resp.json():
+                    obj_name = item.get("ObjectName", "")
+                    full_name = f"{clean}/{obj_name}".strip("/") if clean else obj_name
+                    if item.get("IsDirectory"):
+                        list_bunny_dir(full_name)
+                    else:
+                        if not prefix or full_name.startswith(prefix.strip("/")):
+                            results.append(full_name)
+
+        clean_prefix = prefix.strip("/")
+        start_dir = clean_prefix if prefix.endswith("/") else (clean_prefix.rsplit("/", 1)[0] if "/" in clean_prefix else "")
+        list_bunny_dir(start_dir)
+        return results
+    return []
+
+
 def upload_metadata_file(storage: dict, remote_name: str, data_str: str):
-    if storage["type"] == "azure":
+    stype = storage["type"]
+    if stype == "azure":
         from azure.storage.blob import BlobServiceClient
         conn_str = (
             f"DefaultEndpointsProtocol=https;"
@@ -198,7 +282,7 @@ def upload_metadata_file(storage: dict, remote_name: str, data_str: str):
         client = BlobServiceClient.from_connection_string(conn_str)
         container = client.get_container_client(storage["azure_container"])
         container.upload_blob(name=remote_name, data=data_str, overwrite=True)
-    elif storage["type"] == "gcs":
+    elif stype == "gcs":
         import json
         from google.cloud import storage as gcs
         from google.oauth2 import service_account
@@ -208,10 +292,25 @@ def upload_metadata_file(storage: dict, remote_name: str, data_str: str):
         bucket = client.bucket(storage["gcs_bucket"])
         blob = bucket.blob(remote_name)
         blob.upload_from_string(data_str)
+    elif stype == "s3":
+        s3 = get_s3_client(storage)
+        s3.put_object(
+            Bucket=storage["s3_bucket"],
+            Key=remote_name,
+            Body=data_str.encode("utf-8"),
+            ContentType="application/json"
+        )
+    elif stype == "bunny":
+        import requests
+        bunny_host = get_bunny_host(storage.get("bunny_region"))
+        url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{remote_name.lstrip('/')}"
+        headers = {"AccessKey": storage["bunny_access_key"], "Content-Type": "application/json"}
+        requests.put(url, headers=headers, data=data_str.encode("utf-8"), timeout=30)
 
 def download_metadata_file(storage: dict, remote_name: str) -> str:
     try:
-        if storage["type"] == "azure":
+        stype = storage["type"]
+        if stype == "azure":
             from azure.storage.blob import BlobServiceClient
             conn_str = (
                 f"DefaultEndpointsProtocol=https;"
@@ -224,7 +323,7 @@ def download_metadata_file(storage: dict, remote_name: str) -> str:
             blob_client = container.get_blob_client(remote_name)
             if blob_client.exists():
                 return blob_client.download_blob().readall().decode("utf-8")
-        elif storage["type"] == "gcs":
+        elif stype == "gcs":
             import json
             from google.cloud import storage as gcs
             from google.oauth2 import service_account
@@ -235,6 +334,18 @@ def download_metadata_file(storage: dict, remote_name: str) -> str:
             blob = bucket.blob(remote_name)
             if blob.exists():
                 return blob.download_as_string().decode("utf-8")
+        elif stype == "s3":
+            s3 = get_s3_client(storage)
+            obj = s3.get_object(Bucket=storage["s3_bucket"], Key=remote_name)
+            return obj["Body"].read().decode("utf-8")
+        elif stype == "bunny":
+            import requests
+            bunny_host = get_bunny_host(storage.get("bunny_region"))
+            url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{remote_name.lstrip('/')}"
+            headers = {"AccessKey": storage["bunny_access_key"]}
+            resp = requests.get(url, headers=headers, timeout=30)
+            if resp.status_code == 200:
+                return resp.text
     except Exception:
         pass
     return None
@@ -474,7 +585,7 @@ class QueueReader(io.RawIOBase):
 
     def read(self, size=-1):
         if size is None or size < 0:
-            raise ValueError("Reading the entire stream without a size limit is not supported to prevent OOM errors.")
+            size = 64 * 1024
         b = bytearray(size)
         n = self.readinto(b)
         if n == 0:
@@ -680,6 +791,49 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
             blob.reload()
             stream_backup_to_storage.last_size_bytes = blob.size
             remote_path = f"gcs://{storage['gcs_bucket']}/{remote_name}"
+
+        elif storage["type"] == "s3":
+            from boto3.s3.transfer import TransferConfig
+            client = get_s3_client(storage)
+            transfer_config = TransferConfig(
+                multipart_threshold=settings["chunk_size"],
+                multipart_chunksize=settings["chunk_size"],
+                max_concurrency=settings["concurrency"],
+                use_threads=False
+            )
+            client.upload_fileobj(
+                Fileobj=queue_reader,
+                Bucket=storage["s3_bucket"],
+                Key=remote_name,
+                Config=transfer_config
+            )
+            try:
+                head = client.head_object(Bucket=storage["s3_bucket"], Key=remote_name)
+                stream_backup_to_storage.last_size_bytes = head.get("ContentLength", 0)
+            except Exception:
+                pass
+            remote_path = f"s3://{storage['s3_bucket']}/{remote_name}"
+
+        elif storage["type"] == "bunny":
+            import requests
+            bunny_host = get_bunny_host(storage.get("bunny_region"))
+            clean_remote = remote_name.lstrip("/")
+            url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{clean_remote}"
+            headers = {
+                "AccessKey": storage["bunny_access_key"],
+                "Content-Type": "application/octet-stream",
+            }
+            resp = requests.put(url, headers=headers, data=queue_reader, timeout=(30, 3600))
+            if resp.status_code not in (200, 201):
+                raise RuntimeError(f"Bunny storage upload failed ({resp.status_code}): {resp.text}")
+            try:
+                head = requests.head(url, headers={"AccessKey": storage["bunny_access_key"]}, timeout=30)
+                if head.status_code == 200 and "Content-Length" in head.headers:
+                    stream_backup_to_storage.last_size_bytes = int(head.headers["Content-Length"])
+            except Exception:
+                pass
+            remote_path = f"bunny://{storage['bunny_storage_zone']}/{remote_name}"
+
         else:
             raise ValueError(f"Unknown storage type: {storage['type']}")
             
@@ -838,6 +992,39 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 progress_writer = ProgressWriter(stdin_stream, dl_tracker, stop_event=stop_event)
                 blob.download_to_file(progress_writer, timeout=3600)
                 stdin_stream.close()
+
+            elif storage["type"] == "s3":
+                s3_client = get_s3_client(storage)
+                s3_obj = s3_client.get_object(Bucket=storage["s3_bucket"], Key=remote_name)
+                body_stream = s3_obj["Body"]
+                while not stop_event.is_set():
+                    chunk = body_stream.read(settings["chunk_size"])
+                    if not chunk:
+                        break
+                    stdin_stream.write(chunk)
+                    if dl_tracker:
+                        dl_tracker.update_bytes(len(chunk))
+                stdin_stream.close()
+
+            elif storage["type"] == "bunny":
+                import requests
+                bunny_host = get_bunny_host(storage.get("bunny_region"))
+                clean_remote = remote_name.lstrip("/")
+                url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{clean_remote}"
+                headers = {"AccessKey": storage["bunny_access_key"]}
+                with requests.get(url, headers=headers, stream=True, timeout=(30, 3600)) as resp:
+                    if resp.status_code != 200:
+                        raise RuntimeError(f"Bunny storage download failed ({resp.status_code}): {resp.text}")
+                    for chunk in resp.iter_content(chunk_size=settings["chunk_size"]):
+                        if not chunk:
+                            continue
+                        if stop_event.is_set():
+                            raise RuntimeError("Restore cancelled by user.")
+                        stdin_stream.write(chunk)
+                        if dl_tracker:
+                            dl_tracker.update_bytes(len(chunk))
+                stdin_stream.close()
+
             else:
                 raise ValueError(f"Unknown storage type: {storage['type']}")
                 
@@ -945,6 +1132,10 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
                 res = f"azure://{storage['azure_container']}/{remote_name}"
             elif storage["type"] == "gcs":
                 res = f"gcs://{storage['gcs_bucket']}/{remote_name}"
+            elif storage["type"] == "s3":
+                res = f"s3://{storage['s3_bucket']}/{remote_name}"
+            elif storage["type"] == "bunny":
+                res = f"bunny://{storage['bunny_storage_zone']}/{remote_name}"
             else:
                 res = f"unknown://{remote_name}"
                 
@@ -1962,22 +2153,7 @@ def do_restore(restore_id: str):
         if target_db["type"] == "mongodb":
             if remote_name.endswith("/") or remote_name.startswith("Mongdbbackup"):
                 write_log(log_path, "INFO  Cluster restore detected. Discovering databases...")
-                objects = []
-                if storage["type"] == "azure":
-                    from azure.storage.blob import BlobServiceClient
-                    conn_str = f"DefaultEndpointsProtocol=https;AccountName={storage['azure_account_name']};AccountKey={storage['azure_account_key']};EndpointSuffix=core.windows.net"
-                    client = BlobServiceClient.from_connection_string(conn_str)
-                    container = client.get_container_client(storage["azure_container"])
-                    objects = [b.name for b in container.list_blobs(name_starts_with=remote_name) if ".archive." in b.name]
-                elif storage["type"] == "gcs":
-                    import json
-                    from google.cloud import storage as gcs
-                    from google.oauth2 import service_account
-                    creds_dict = json.loads(storage["gcs_credentials_json"])
-                    creds = service_account.Credentials.from_service_account_info(creds_dict)
-                    client = gcs.Client(credentials=creds)
-                    bucket = client.bucket(storage["gcs_bucket"])
-                    objects = [b.name for b in bucket.list_blobs(prefix=remote_name) if ".archive." in b.name]
+                objects = [b for b in list_storage_objects(storage, remote_name) if ".archive." in b]
                 
                 write_log(log_path, f"INFO  Found {len(objects)} databases to restore.")
                 for obj in objects:
@@ -1990,22 +2166,7 @@ def do_restore(restore_id: str):
             if remote_name.endswith("/"):
                 # Instance backup — folder contains individual database archives
                 write_log(log_path, "INFO  PostgreSQL instance restore detected. Discovering database archives...")
-                objects = []
-                if storage["type"] == "azure":
-                    from azure.storage.blob import BlobServiceClient
-                    conn_str = f"DefaultEndpointsProtocol=https;AccountName={storage['azure_account_name']};AccountKey={storage['azure_account_key']};EndpointSuffix=core.windows.net"
-                    client = BlobServiceClient.from_connection_string(conn_str)
-                    container = client.get_container_client(storage["azure_container"])
-                    objects = [b.name for b in container.list_blobs(name_starts_with=remote_name) if ".archive." in b.name]
-                elif storage["type"] == "gcs":
-                    import json as _json
-                    from google.cloud import storage as gcs
-                    from google.oauth2 import service_account
-                    creds_dict = _json.loads(storage["gcs_credentials_json"])
-                    creds = service_account.Credentials.from_service_account_info(creds_dict)
-                    client = gcs.Client(credentials=creds)
-                    bucket = client.bucket(storage["gcs_bucket"])
-                    objects = [b.name for b in bucket.list_blobs(prefix=remote_name) if ".archive." in b.name]
+                objects = [b for b in list_storage_objects(storage, remote_name) if ".archive." in b]
 
                 if not objects:
                     return fail(f"No database archives found in instance backup folder: {remote_name}")

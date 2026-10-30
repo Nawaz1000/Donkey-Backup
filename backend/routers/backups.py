@@ -151,6 +151,26 @@ def delete_backup(backup_id: str, delete_from_remote: bool = False, user=Depends
                     blobs = bucket.list_blobs(prefix=backup["remote_name"])
                     for blob in blobs:
                         blob.delete()
+                elif storage["type"] == "s3":
+                    from engine import get_s3_client
+                    s3 = get_s3_client(storage)
+                    paginator = s3.get_paginator('list_objects_v2')
+                    for page in paginator.paginate(Bucket=storage["s3_bucket"], Prefix=backup["remote_name"]):
+                        objects_to_delete = [{'Key': item['Key']} for item in page.get('Contents', [])]
+                        if objects_to_delete:
+                            s3.delete_objects(Bucket=storage["s3_bucket"], Delete={'Objects': objects_to_delete})
+                elif storage["type"] == "bunny":
+                    import requests
+                    from engine import get_bunny_host, list_storage_objects
+                    bunny_host = get_bunny_host(storage.get("bunny_region"))
+                    headers = {"AccessKey": storage["bunny_access_key"]}
+                    objects = list_storage_objects(storage, backup["remote_name"])
+                    clean_rn = backup["remote_name"].strip("/")
+                    if clean_rn not in objects and not backup["remote_name"].endswith("/"):
+                        objects.append(clean_rn)
+                    for obj in objects:
+                        del_url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{obj.lstrip('/')}"
+                        requests.delete(del_url, headers=headers, timeout=20)
         except Exception as e:
             print(f"Failed to delete remote backup: {e}")
             error_str = str(e).lower()

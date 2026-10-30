@@ -35,6 +35,8 @@
       --accent2-dim: rgba(59, 130, 246, 0.12);
       --azure: #3b82f6;
       --gcs: #f97316;
+      --s3: #eab308;
+      --bunny: #ff6723;
       --pg: #6366f1;
       --mongo: #22c55e;
       --text: #ffffff;
@@ -679,6 +681,16 @@
     .badge-gcs {
       background: rgba(249, 115, 22, 0.12);
       color: #fb923c
+    }
+
+    .badge-s3 {
+      background: rgba(234, 179, 8, 0.12);
+      color: #facc15
+    }
+
+    .badge-bunny {
+      background: rgba(255, 103, 35, 0.12);
+      color: #ff8533
     }
 
     .dot {
@@ -2327,6 +2339,8 @@
         <select id="st-type" onchange="toggleStorageFields()">
           <option value="azure">Azure Blob Storage</option>
           <option value="gcs">Google Cloud Storage</option>
+          <option value="s3">AWS S3 / S3-Compatible</option>
+          <option value="bunny">BunnyCDN Storage</option>
         </select>
       </div>
       <div id="azure-fields">
@@ -2353,6 +2367,59 @@
           <textarea id="st-gcs-creds" rows="4" placeholder='{"type":"service_account",...}'></textarea>
         </div>
       </div>
+      <div id="s3-fields" style="display:none">
+        <div class="form-group">
+          <label>Bucket Name</label>
+          <input type="text" id="st-s3-bucket" placeholder="my-backup-bucket" />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Access Key ID</label>
+            <input type="text" id="st-s3-access-key" placeholder="AKIAIOSFODNN7EXAMPLE" />
+          </div>
+          <div class="form-group">
+            <label>Secret Access Key</label>
+            <input type="password" id="st-s3-secret-key" placeholder="••••••••••••••••" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Region (Optional)</label>
+            <input type="text" id="st-s3-region" placeholder="us-east-1" />
+          </div>
+          <div class="form-group">
+            <label>Endpoint URL (Optional for R2/MinIO)</label>
+            <input type="text" id="st-s3-endpoint-url" placeholder="https://<account>.r2.cloudflarestorage.com" />
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:-6px;margin-bottom:12px">
+          Leave Endpoint URL empty for AWS S3. For Cloudflare R2, MinIO, Wasabi, or DigitalOcean, provide the endpoint URL.
+        </div>
+      </div>
+      <div id="bunny-fields" style="display:none">
+        <div class="form-group">
+          <label>Storage Zone Name</label>
+          <input type="text" id="st-bunny-zone" placeholder="my-storage-zone" />
+        </div>
+        <div class="form-group">
+          <label>Storage Zone Password / Access Key</label>
+          <input type="password" id="st-bunny-key" placeholder="BunnyCDN Storage Password" />
+        </div>
+        <div class="form-group">
+          <label>Storage Region</label>
+          <select id="st-bunny-region">
+            <option value="">Falkenstein (Main / Europe - Default)</option>
+            <option value="ny">New York (US East)</option>
+            <option value="la">Los Angeles (US West)</option>
+            <option value="sg">Singapore (Asia)</option>
+            <option value="syd">Sydney (Oceania)</option>
+            <option value="uk">London (United Kingdom)</option>
+            <option value="jh">Johannesburg (Africa)</option>
+            <option value="br">São Paulo (South America)</option>
+            <option value="se">Stockholm (Europe North)</option>
+          </select>
+        </div>
+      </div>
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="closeModal('storage-modal')">Cancel</button>
         <button class="btn btn-primary" onclick="addStorage()"><i data-lucide="plus" style="width:15px;height:15px"></i>
@@ -2368,13 +2435,15 @@
       <input type="hidden" id="edit-st-id" />
       <div class="form-group">
         <label>Name</label>
-        <input type="text" id="edit-st-name" placeholder="My Azure Bucket" />
+        <input type="text" id="edit-st-name" placeholder="My Storage" />
       </div>
       <div class="form-group">
         <label>Type</label>
         <select id="edit-st-type" disabled>
           <option value="azure">Azure Blob Storage</option>
           <option value="gcs">Google Cloud Storage</option>
+          <option value="s3">AWS S3 / S3-Compatible</option>
+          <option value="bunny">BunnyCDN Storage</option>
         </select>
       </div>
       <div id="edit-azure-fields">
@@ -2399,6 +2468,56 @@
         <div class="form-group">
           <label>Service Account JSON</label>
           <textarea id="edit-st-gcs-creds" rows="4" placeholder="Leave blank to keep current"></textarea>
+        </div>
+      </div>
+      <div id="edit-s3-fields" style="display:none">
+        <div class="form-group">
+          <label>Bucket Name</label>
+          <input type="text" id="edit-st-s3-bucket" />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Access Key ID</label>
+            <input type="text" id="edit-st-s3-access-key" />
+          </div>
+          <div class="form-group">
+            <label>Secret Access Key</label>
+            <input type="password" id="edit-st-s3-secret-key" placeholder="Leave blank to keep current" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Region</label>
+            <input type="text" id="edit-st-s3-region" />
+          </div>
+          <div class="form-group">
+            <label>Custom Endpoint URL</label>
+            <input type="text" id="edit-st-s3-endpoint-url" />
+          </div>
+        </div>
+      </div>
+      <div id="edit-bunny-fields" style="display:none">
+        <div class="form-group">
+          <label>Storage Zone Name</label>
+          <input type="text" id="edit-st-bunny-zone" />
+        </div>
+        <div class="form-group">
+          <label>Storage Zone Password / Access Key</label>
+          <input type="password" id="edit-st-bunny-key" placeholder="Leave blank to keep current" />
+        </div>
+        <div class="form-group">
+          <label>Storage Region</label>
+          <select id="edit-st-bunny-region">
+            <option value="">Falkenstein (Main / Europe - Default)</option>
+            <option value="ny">New York (US East)</option>
+            <option value="la">Los Angeles (US West)</option>
+            <option value="sg">Singapore (Asia)</option>
+            <option value="syd">Sydney (Oceania)</option>
+            <option value="uk">London (United Kingdom)</option>
+            <option value="jh">Johannesburg (Africa)</option>
+            <option value="br">São Paulo (South America)</option>
+            <option value="se">Stockholm (Europe North)</option>
+          </select>
         </div>
       </div>
       <div class="modal-actions" style="justify-content: space-between;">
@@ -2883,7 +3002,7 @@
           <div class="db-item-icon" style="background-color:var(--surface-solid);"><i data-lucide="cloud"></i></div>
           <div class="db-item-info">
             <h4>${s.name}</h4>
-            <span class="db-badge">${s.type === 'azure' ? 'Azure Blob' : 'Google Cloud Storage'}</span>
+            <span class="db-badge">${s.type === 'azure' ? 'Azure Blob' : s.type === 'gcs' ? 'Google Cloud' : s.type === 's3' ? 'AWS S3' : 'BunnyCDN'}</span>
           </div>
         </div>
         <div class="status-dot"></div>
@@ -3474,36 +3593,73 @@
       const t = document.getElementById('st-type').value;
       document.getElementById('azure-fields').style.display = t === 'azure' ? 'block' : 'none';
       document.getElementById('gcs-fields').style.display = t === 'gcs' ? 'block' : 'none';
+      document.getElementById('s3-fields').style.display = t === 's3' ? 'block' : 'none';
+      document.getElementById('bunny-fields').style.display = t === 'bunny' ? 'block' : 'none';
+    }
+
+    async function testStorage(id) {
+      try {
+        toast('Testing storage connection...', 'info');
+        const r = await apiFetch(`/storage/${id}/test`, { method: 'POST' });
+        toast(r.message, 'success');
+      } catch (e) { toast(e.message, 'error'); }
     }
 
     async function loadStorage() {
       try {
         const storages = await apiFetch('/storage/');
         const tbody = document.getElementById('storage-table');
-        tbody.innerHTML = storages.map(s => `
+        tbody.innerHTML = storages.map(s => {
+          let target = '—';
+          if (s.type === 'azure') target = s.azure_container || '—';
+          else if (s.type === 'gcs') target = s.gcs_bucket || '—';
+          else if (s.type === 's3') target = s.s3_bucket || '—';
+          else if (s.type === 'bunny') target = s.bunny_storage_zone || '—';
+
+          return `
       <tr>
         <td><strong>${s.name}</strong></td>
         <td>${storageBadge(s.type)}</td>
-        <td class="mono text-sm">${s.azure_container || s.gcs_bucket || '—'}</td>
+        <td class="mono text-sm">${target}</td>
         <td class="text-muted text-sm">${fmtDate(s.created_at)}</td>
         <td><div class="actions">
+          <button class="btn btn-secondary btn-sm" onclick="testStorage('${s.id}')" title="Test Connection"><i data-lucide="plug" style="width:14px;height:14px"></i> Test</button>
           <button class="btn btn-secondary btn-sm btn-icon" onclick="openEditStorage('${s.id}')" title="Edit"><i data-lucide="pencil" style="width:14px;height:14px"></i></button>
           <button class="btn btn-danger btn-sm" onclick="deleteStorage('${s.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i> Remove</button>
         </div></td>
-      </tr>`).join('') || emptyRow(5, 'No storage configured yet.');
+      </tr>`;
+        }).join('') || emptyRow(5, 'No storage configured yet.');
         lucide.createIcons();
       } catch (e) { toast(e.message, 'error'); }
     }
 
     async function addStorage() {
       const type = v('st-type');
+      if (!v('st-name')) { toast('Please enter a storage name', 'error'); return; }
+
+      let payload = { name: v('st-name'), type };
+      if (type === 'azure') {
+        payload.azure_account_name = v('st-azure-account');
+        payload.azure_account_key = v('st-azure-key');
+        payload.azure_container = v('st-azure-container');
+      } else if (type === 'gcs') {
+        payload.gcs_bucket = v('st-gcs-bucket');
+        payload.gcs_credentials_json = v('st-gcs-creds');
+      } else if (type === 's3') {
+        payload.s3_bucket = v('st-s3-bucket');
+        payload.s3_access_key = v('st-s3-access-key');
+        payload.s3_secret_key = v('st-s3-secret-key');
+        payload.s3_region = v('st-s3-region');
+        payload.s3_endpoint_url = v('st-s3-endpoint-url');
+      } else if (type === 'bunny') {
+        payload.bunny_storage_zone = v('st-bunny-zone');
+        payload.bunny_access_key = v('st-bunny-key');
+        payload.bunny_region = v('st-bunny-region');
+      }
+
       try {
         await apiFetch('/storage/', {
-          method: 'POST', body: JSON.stringify({
-            name: v('st-name'), type,
-            azure_account_name: v('st-azure-account'), azure_account_key: v('st-azure-key'), azure_container: v('st-azure-container'),
-            gcs_bucket: v('st-gcs-bucket'), gcs_credentials_json: v('st-gcs-creds')
-          })
+          method: 'POST', body: JSON.stringify(payload)
         });
         closeModal('storage-modal');
         toast('Storage added!', 'success');
@@ -3531,6 +3687,8 @@
 
       document.getElementById('edit-azure-fields').style.display = s.type === 'azure' ? 'block' : 'none';
       document.getElementById('edit-gcs-fields').style.display = s.type === 'gcs' ? 'block' : 'none';
+      document.getElementById('edit-s3-fields').style.display = s.type === 's3' ? 'block' : 'none';
+      document.getElementById('edit-bunny-fields').style.display = s.type === 'bunny' ? 'block' : 'none';
 
       if (s.type === 'azure') {
         document.getElementById('edit-st-azure-account').value = s.azure_account_name || '';
@@ -3539,6 +3697,16 @@
       } else if (s.type === 'gcs') {
         document.getElementById('edit-st-gcs-bucket').value = s.gcs_bucket || '';
         document.getElementById('edit-st-gcs-creds').value = '';
+      } else if (s.type === 's3') {
+        document.getElementById('edit-st-s3-bucket').value = s.s3_bucket || '';
+        document.getElementById('edit-st-s3-access-key').value = s.s3_access_key || '';
+        document.getElementById('edit-st-s3-secret-key').value = '';
+        document.getElementById('edit-st-s3-region').value = s.s3_region || '';
+        document.getElementById('edit-st-s3-endpoint-url').value = s.s3_endpoint_url || '';
+      } else if (s.type === 'bunny') {
+        document.getElementById('edit-st-bunny-zone').value = s.bunny_storage_zone || '';
+        document.getElementById('edit-st-bunny-key').value = '';
+        document.getElementById('edit-st-bunny-region').value = s.bunny_region || '';
       }
       openModal('edit-storage-modal');
     }
@@ -3560,6 +3728,18 @@
         payload.gcs_bucket = v('edit-st-gcs-bucket');
         const creds = v('edit-st-gcs-creds');
         if (creds) payload.gcs_credentials_json = creds;
+      } else if (type === 's3') {
+        payload.s3_bucket = v('edit-st-s3-bucket');
+        payload.s3_access_key = v('edit-st-s3-access-key');
+        payload.s3_region = v('edit-st-s3-region');
+        payload.s3_endpoint_url = v('edit-st-s3-endpoint-url');
+        const secret = v('edit-st-s3-secret-key');
+        if (secret) payload.s3_secret_key = secret;
+      } else if (type === 'bunny') {
+        payload.bunny_storage_zone = v('edit-st-bunny-zone');
+        payload.bunny_region = v('edit-st-bunny-region');
+        const bkey = v('edit-st-bunny-key');
+        if (bkey) payload.bunny_access_key = bkey;
       }
 
       try {
@@ -4529,9 +4709,9 @@
       document.getElementById('rs-target-db').innerHTML = dbs.map(d =>
         `<option value="${d.id}">${d.name} (${d.type})</option>`
       ).join('');
-      document.getElementById('rs-external-storage').innerHTML = storages.map(s =>
-        `<option value="${s.id}">${s.name} (${s.type})</option>`
-      ).join('<option value="">— select storage —</option>');
+      document.getElementById('rs-external-storage').innerHTML = '<option value="">— select storage —</option>' + storages.map(s =>
+        `<option value="${s.id}">${s.name} (${s.type.toUpperCase()})</option>`
+      ).join('');
 
       onRestoreSourceChange();
       onRestoreBackupChange();
@@ -4809,9 +4989,11 @@
       return '<span class="badge badge-mongo" style="margin-right:6px"><i data-lucide="leaf" style="width:12px;height:12px"></i> Mongo</span>';
     }
     function storageBadge(t) {
-      return t === 'azure'
-        ? '<span class="badge badge-azure" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> Azure</span>'
-        : '<span class="badge badge-gcs" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> GCS</span>';
+      if (t === 'azure') return '<span class="badge badge-azure" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> Azure</span>';
+      if (t === 'gcs') return '<span class="badge badge-gcs" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> GCS</span>';
+      if (t === 's3') return '<span class="badge badge-s3" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> S3</span>';
+      if (t === 'bunny') return '<span class="badge badge-bunny" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> BunnyCDN</span>';
+      return `<span class="badge badge-blue" style="margin-right:6px">${t}</span>`;
     }
     function statusBadge(s) {
       const m = { completed: 'badge-green', running: 'badge-orange', failed: 'badge-red' };
