@@ -383,12 +383,17 @@ def verify_and_resolve_bunny(storage: dict, log_path: str = None) -> dict:
             region_name="de",
             config=s3_cfg
         )
-        s3.head_bucket(Bucket=zone)
-        s3_usable = True
-    except Exception as s3_err:
-        s3_usable = False
-        if log_path:
-            write_log(log_path, f"INFO  Bunny S3 API not usable ({s3_err}). Will use REST API.")
+        try:
+            s3.head_bucket(Bucket=zone)
+            s3_usable = True
+        except Exception:
+            try:
+                s3.list_objects_v2(Bucket=zone, MaxKeys=1)
+                s3_usable = True
+            except Exception as s3_err:
+                s3_usable = False
+                if log_path:
+                    write_log(log_path, f"INFO  Bunny S3 API not usable ({s3_err}). Will use REST API.")
 
     return {
         "success": True,
@@ -504,6 +509,67 @@ def list_storage_objects(storage: dict, prefix: str) -> list:
                 pass
         return results
     return []
+
+
+def get_storage_object_size(storage: dict, remote_name: str) -> int:
+    """Returns the size of a remote object in bytes, or 0 if unknown/error."""
+    if not remote_name or not storage:
+        return 0
+    clean_remote = remote_name.lstrip("/")
+    stype = storage.get("type")
+    try:
+        if stype == "azure":
+            from azure.storage.blob import BlobServiceClient
+            conn_str = f"DefaultEndpointsProtocol=https;AccountName={storage['azure_account_name']};AccountKey={storage['azure_account_key']};EndpointSuffix=core.windows.net"
+            client = BlobServiceClient.from_connection_string(conn_str)
+            container = client.get_container_client(storage["azure_container"])
+            blob_props = container.get_blob_client(clean_remote).get_blob_properties()
+            return blob_props.size or 0
+        elif stype == "gcs":
+            import json as _json
+            from google.cloud import storage as gcs
+            from google.oauth2 import service_account
+            creds_dict = _json.loads(storage["gcs_credentials_json"])
+            creds = service_account.Credentials.from_service_account_info(creds_dict)
+            client = gcs.Client(credentials=creds)
+            bucket = client.bucket(storage["gcs_bucket"])
+            blob = bucket.get_blob(clean_remote)
+            return blob.size if blob else 0
+        elif stype == "s3":
+            s3 = get_s3_client(storage)
+            head = s3.head_object(Bucket=storage["s3_bucket"], Key=clean_remote)
+            return head.get("ContentLength", 0)
+        elif stype == "bunny":
+            import requests
+            bunny_host = get_bunny_host(storage)
+            bunny_key = get_bunny_key(storage)
+            zone = (storage.get("bunny_storage_zone") or "").strip()
+            url = f"https://{bunny_host}/{zone}/{clean_remote}"
+            try:
+                resp = requests.head(url, headers={"AccessKey": bunny_key}, timeout=15)
+                if resp.status_code == 200 and "Content-Length" in resp.headers:
+                    return int(resp.headers["Content-Length"])
+            except Exception:
+                pass
+            try:
+                import boto3
+                from botocore.config import Config
+                _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=s3_url,
+                    aws_access_key_id=zone,
+                    aws_secret_access_key=bunny_key,
+                    region_name="de",
+                    config=Config(s3={'addressing_style': 'path'}, signature_version='s3v4', connect_timeout=10, read_timeout=15)
+                )
+                head = s3.head_object(Bucket=zone, Key=clean_remote)
+                return head.get("ContentLength", 0)
+            except Exception:
+                pass
+    except Exception as e:
+        log.warning(f"Failed to get storage object size for {remote_name}: {e}")
+    return 0
 
 
 def upload_metadata_file(storage: dict, remote_name: str, data_str: str):
@@ -845,32 +911,42 @@ class ProgressTracker:
         self.bytes_processed = 0
         self.last_pct = -1
         self.last_update_time = 0
-        self.last_update_time = 0
+        self.start_time = time.time()
+        self.speed_mbps = 0.0
 
     def update_bytes(self, num_bytes: int):
         self.bytes_processed += num_bytes
+        now = time.time()
+        elapsed = max(0.1, now - self.start_time)
+        self.speed_mbps = round((self.bytes_processed / (1024 * 1024)) / elapsed, 2)
+
         if self.total_size > 0:
             pct = min(99, int((self.bytes_processed / self.total_size) * 100))
             self.update_pct(pct)
+        elif now - self.last_update_time >= 1.0:
+            # Periodic update every second even if total_size is not yet known
+            self.update_pct(self.last_pct if self.last_pct >= 0 else 0)
 
     def update_pct(self, pct: int):
         now = time.time()
-        if pct != self.last_pct or now - self.last_update_time >= 1:
+        if pct != self.last_pct or now - self.last_update_time >= 1.0:
             self.last_pct = pct
             self.last_update_time = now
             
             job_type = "RESTORE" if self.is_restore else "BACKUP"
             processed_mb = round(self.bytes_processed / (1024 * 1024), 2)
-            log_msg = f"[{job_type} PROGRESS] ID: {self.job_id} | Progress: {pct}% | Processed: {processed_mb} MB"
+            total_mb = round(self.total_size / (1024 * 1024), 2) if self.total_size > 0 else 0
+            speed_text = f" at {self.speed_mbps} MB/s" if self.speed_mbps > 0 else ""
+            log_msg = f"[{job_type} PROGRESS] ID: {self.job_id} | Progress: {pct}% | Processed: {processed_mb} MB{speed_text}"
             log.info(log_msg)
             
             if self.log_path:
-                write_log(self.log_path, f"INFO  Progress: {pct}% ({processed_mb} MB processed)")
+                write_log(self.log_path, f"INFO  Progress: {pct}% ({processed_mb} MB processed{speed_text})")
                 
             if self.is_restore:
-                update_restore(self.job_id, progress_percentage=pct)
+                update_restore(self.job_id, progress_percentage=pct, processed_mb=processed_mb, speed_mbps=self.speed_mbps, total_mb=total_mb)
             else:
-                update_backup(self.job_id, progress_percentage=pct)
+                update_backup(self.job_id, progress_percentage=pct, processed_mb=processed_mb, speed_mbps=self.speed_mbps, total_mb=total_mb)
 
 
 class ProgressWriter:
@@ -893,8 +969,9 @@ class ProgressWriter:
 
 def pipe_and_count(src, dest, tracker: ProgressTracker = None):
     try:
+        buf_size = 2 * 1024 * 1024  # 2MB chunks for maximum streaming throughput
         while True:
-            chunk = src.read(262144)  # 256KB chunks
+            chunk = src.read(buf_size)
             if not chunk:
                 break
             if tracker:
@@ -905,6 +982,10 @@ def pipe_and_count(src, dest, tracker: ProgressTracker = None):
     finally:
         try:
             dest.close()
+        except Exception:
+            pass
+        try:
+            src.close()
         except Exception:
             pass
         try:
@@ -1001,38 +1082,35 @@ class QueueReader(io.RawIOBase):
         if size == 0:
             return 0
 
-        # 1. Block and wait for at least some data if buffer is empty
-        if self.buffer_size == 0 and not self.eof:
-            while not self.eof:
-                try:
-                    chunk = self.q.get(timeout=1.0)
-                    with self.lock:
+        with self.lock:
+            # 1. Block and wait for at least some data if buffer is empty
+            if self.buffer_size == 0 and not self.eof:
+                while not self.eof:
+                    try:
+                        chunk = self.q.get(timeout=0.5)
                         if chunk is None:
                             self.eof = True
                         else:
                             self.buffer.append(memoryview(chunk))
                             self.buffer_size += len(chunk)
-                    break
-                except queue.Empty:
-                    if self.stop_event.is_set():
-                        with self.lock:
-                            self.eof = True
                         break
+                    except queue.Empty:
+                        if self.stop_event.is_set():
+                            self.eof = True
+                            break
 
-        # 2. Drain any available chunks without blocking to fill up to size
-        while self.buffer_size < size and not self.eof:
-            try:
-                chunk = self.q.get_nowait()
-                with self.lock:
+            # 2. Drain any available chunks without blocking to fill up to size
+            while self.buffer_size < size and not self.eof:
+                try:
+                    chunk = self.q.get_nowait()
                     if chunk is None:
                         self.eof = True
                     else:
                         self.buffer.append(memoryview(chunk))
                         self.buffer_size += len(chunk)
-            except queue.Empty:
-                break
+                except queue.Empty:
+                    break
 
-        with self.lock:
             if self.buffer_size == 0:
                 return 0  # EOF
 
@@ -1078,11 +1156,10 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
                 tracker.update_bytes(len(data))
             while not stop_event.is_set():
                 try:
-                    q.put(data, timeout=1.0)
+                    q.put(data, timeout=0.5)
                     break
                 except queue.Full:
                     continue
-            time.sleep(0.001)
     except Exception as e:
         print(f"Error in reader thread: {e}")
     finally:
@@ -1096,13 +1173,13 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
 def get_speed_settings(profile: str):
     cores = os.cpu_count() or 4
     if profile == "safe":
-        return {"threads": 1, "chunk_size": 4 * 1024 * 1024, "queue_max": 4, "concurrency": 1, "mongo_parallel": 1}
+        return {"threads": 1, "chunk_size": 4 * 1024 * 1024, "queue_max": 4, "concurrency": 2, "mongo_parallel": 1}
     elif profile == "balanced":
         return {"threads": max(1, cores // 2), "chunk_size": 16 * 1024 * 1024, "queue_max": 8, "concurrency": 4, "mongo_parallel": 2}
     elif profile == "extreme":
-        return {"threads": cores, "chunk_size": 128 * 1024 * 1024, "queue_max": 128, "concurrency": 64, "mongo_parallel": 16}
+        return {"threads": cores, "chunk_size": 64 * 1024 * 1024, "queue_max": 8, "concurrency": 16, "mongo_parallel": 8}
     else: # default
-        return {"threads": max(1, cores - 1), "chunk_size": 32 * 1024 * 1024, "queue_max": 32, "concurrency": 8, "mongo_parallel": 4}
+        return {"threads": max(1, cores - 1), "chunk_size": 32 * 1024 * 1024, "queue_max": 8, "concurrency": 8, "mongo_parallel": 4}
 
 def get_compressor_info(profile: str = "default", log_path: str = None) -> dict:
     settings = get_speed_settings(profile)
@@ -1279,11 +1356,13 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
         elif storage["type"] == "s3":
             from boto3.s3.transfer import TransferConfig
             client = get_s3_client(storage)
+            chunk_size = max(16 * 1024 * 1024, settings.get("chunk_size", 32 * 1024 * 1024))
+            concurrency = settings.get("concurrency", 8)
             transfer_config = TransferConfig(
-                multipart_threshold=settings["chunk_size"],
-                multipart_chunksize=settings["chunk_size"],
-                max_concurrency=settings["concurrency"],
-                use_threads=False
+                multipart_threshold=chunk_size,
+                multipart_chunksize=chunk_size,
+                max_concurrency=concurrency,
+                use_threads=True
             )
             client.upload_fileobj(
                 Fileobj=queue_reader,
@@ -1317,6 +1396,9 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
             s3_available = res.get("s3_usable", False)
             clean_remote = remote_name.lstrip("/")
 
+            concurrency = settings.get("concurrency", 8)
+            chunk_size = max(16 * 1024 * 1024, settings.get("chunk_size", 32 * 1024 * 1024))
+
             write_log(log_path, f"INFO  Connecting to BunnyCDN storage zone '{zone}' ({res['region_name']} - S3: {s3_url}, REST: {rest_host})")
 
             s3_client = None
@@ -1325,9 +1407,10 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                     s3_config = Config(
                         s3={"addressing_style": "path"},
                         signature_version="s3v4",
-                        retries={"max_attempts": 2, "mode": "standard"},
-                        connect_timeout=8,
-                        read_timeout=15
+                        retries={"max_attempts": 3, "mode": "standard"},
+                        connect_timeout=15,
+                        read_timeout=300,
+                        max_pool_connections=max(32, concurrency * 2)
                     )
                     s3_client = boto3.client(
                         "s3",
@@ -1337,19 +1420,18 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                         region_name="de",
                         config=s3_config
                     )
-                    write_log(log_path, f"INFO  BunnyCDN S3-compatible API verified. Streaming upload via S3 multipart...")
+                    write_log(log_path, f"INFO  BunnyCDN S3-compatible API verified. Streaming upload via parallel multipart ({concurrency} workers, {round(chunk_size/(1024*1024))}MB chunks)...")
                 except Exception as s3_init_err:
                     s3_available = False
                     write_log(log_path, f"INFO  Bunny S3 client setup failed ({s3_init_err}). Falling back to REST API...")
 
             if s3_available and s3_client:
-                # Bunny S3 multipart streaming: Boto3 buffers chunks with exact Content-Length headers
-                chunk_size = max(5 * 1024 * 1024, settings.get("chunk_size", 8 * 1024 * 1024))
+                # Bunny S3 multipart streaming: parallel multi-threaded chunks
                 transfer_config = TransferConfig(
                     multipart_threshold=chunk_size,
                     multipart_chunksize=chunk_size,
-                    max_concurrency=settings.get("concurrency", 4),
-                    use_threads=False
+                    max_concurrency=concurrency,
+                    use_threads=True
                 )
                 s3_client.upload_fileobj(
                     Fileobj=queue_reader,
@@ -1363,8 +1445,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 except Exception as e:
                     write_log(log_path, f"WARN  Could not read S3 head_object: {e}")
             else:
-                # Bunny REST API requires an exact Content-Length header (chunked encoding is unsupported).
-                # Spool the stream to a temporary file so the exact Content-Length is sent.
+                # Bunny REST API fallback: spool stream using fast C-level 4MB chunk buffer
                 job_token = (tracker.job_id if tracker else uuid.uuid4().hex[:8]).replace("/", "_")
                 spool_filename = f"bunny_spool_{job_token}.tmp"
                 spool_dir = os.path.join(BACKUP_TMP, job_token)
@@ -1374,11 +1455,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 try:
                     write_log(log_path, f"INFO  Spooling stream to calculate Content-Length for Bunny REST API ({rest_host})...")
                     with open(spool_path, "wb") as f_spool:
-                        while not stop_event.is_set():
-                            buf = queue_reader.read(settings.get("chunk_size", 4 * 1024 * 1024))
-                            if not buf:
-                                break
-                            f_spool.write(buf)
+                        shutil.copyfileobj(queue_reader, f_spool, length=4 * 1024 * 1024)
 
                     if stop_event.is_set():
                         raise RuntimeError("Backup cancelled by user.")
@@ -1392,8 +1469,12 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                         "Content-Type": "application/octet-stream",
                         "Content-Length": str(file_size),
                     }
+                    session = requests.Session()
+                    from requests.adapters import HTTPAdapter
+                    from urllib3.util import Retry
+                    session.mount("https://", HTTPAdapter(pool_connections=16, pool_maxsize=16, max_retries=Retry(total=3, backoff_factor=0.5)))
                     with open(spool_path, "rb") as f_in:
-                        resp = requests.put(url, headers=headers, data=f_in, timeout=(30, 3600))
+                        resp = session.put(url, headers=headers, data=f_in, timeout=(30, 3600))
                     if resp.status_code not in (200, 201):
                         raise RuntimeError(f"Bunny storage upload failed ({resp.status_code}): {resp.text}")
 
@@ -1586,75 +1667,152 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 s3_client = get_s3_client(storage)
                 s3_obj = s3_client.get_object(Bucket=storage["s3_bucket"], Key=remote_name)
                 body_stream = s3_obj["Body"]
-                while not stop_event.is_set():
-                    chunk = body_stream.read(settings["chunk_size"])
-                    if not chunk:
-                        break
-                    stdin_stream.write(chunk)
-                    if dl_tracker:
-                        dl_tracker.update_bytes(len(chunk))
+                chunk_size = max(4 * 1024 * 1024, settings.get("chunk_size", 16 * 1024 * 1024))
+                prefetch_q = queue.Queue(maxsize=max(4, settings.get("queue_max", 8)))
+                download_err = [None]
+
+                def s3_dl_worker():
+                    try:
+                        while not stop_event.is_set():
+                            chunk = body_stream.read(chunk_size)
+                            if not chunk:
+                                break
+                            if dl_tracker:
+                                dl_tracker.update_bytes(len(chunk))
+                            prefetch_q.put(chunk)
+                    except Exception as ex:
+                        download_err[0] = ex
+                    finally:
+                        prefetch_q.put(None)
+
+                dl_thread = threading.Thread(target=s3_dl_worker)
+                dl_thread.daemon = True
+                dl_thread.start()
+
+                try:
+                    while True:
+                        if stop_event.is_set():
+                            raise RuntimeError("Restore cancelled by user.")
+                        try:
+                            chunk = prefetch_q.get(timeout=1.0)
+                        except queue.Empty:
+                            if not dl_thread.is_alive():
+                                break
+                            continue
+                        if chunk is None:
+                            break
+                        stdin_stream.write(chunk)
+                finally:
+                    dl_thread.join(timeout=3.0)
+                    if download_err[0]:
+                        raise RuntimeError(f"S3 download stream failed: {download_err[0]}")
                 stdin_stream.close()
 
             elif storage["type"] == "bunny":
                 import requests
-                from engine import resolve_bunny_hosts
-                bunny_host = get_bunny_host(storage)
-                bunny_key = get_bunny_key(storage)
+                from urllib3.util import Retry
+                from requests.adapters import HTTPAdapter
+                
+                write_log(log_path, f"INFO  Resolving BunnyCDN storage endpoint for zone '{storage.get('bunny_storage_zone')}'...")
+                bunny_res = storage.get("_resolved_bunny")
+                if not bunny_res:
+                    bunny_res = verify_and_resolve_bunny(storage, log_path=log_path)
+                    if not bunny_res["success"]:
+                        raise RuntimeError(f"BunnyCDN verification failed: {bunny_res['error']}")
+                    storage["_resolved_bunny"] = bunny_res
+
+                zone = bunny_res["zone"]
+                bunny_key = bunny_res["bunny_key"]
+                rest_host = bunny_res["rest_host"]
+                s3_url = bunny_res["s3_url"]
+                s3_usable = bunny_res.get("s3_usable", False)
                 clean_remote = remote_name.lstrip("/")
-                url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{clean_remote}"
-                headers = {"AccessKey": bunny_key}
-                rest_failed = False
-                rest_err = ""
-                try:
-                    with requests.get(url, headers=headers, stream=True, timeout=(30, 3600)) as resp:
-                        if resp.status_code == 200:
-                            for chunk in resp.iter_content(chunk_size=settings["chunk_size"]):
+
+                chunk_size = max(4 * 1024 * 1024, settings.get("chunk_size", 16 * 1024 * 1024))
+                prefetch_q = queue.Queue(maxsize=max(4, settings.get("queue_max", 8)))
+                download_err = [None]
+
+                def bunny_dl_worker():
+                    try:
+                        # Attempt S3 streaming first if usable
+                        if s3_usable:
+                            try:
+                                import boto3
+                                from botocore.config import Config
+                                s3 = boto3.client(
+                                    "s3",
+                                    endpoint_url=s3_url,
+                                    aws_access_key_id=zone,
+                                    aws_secret_access_key=bunny_key,
+                                    region_name="de",
+                                    config=Config(
+                                        s3={'addressing_style': 'path'},
+                                        signature_version="s3v4",
+                                        retries={'max_attempts': 3, 'mode': 'standard'},
+                                        connect_timeout=15,
+                                        read_timeout=3600,
+                                        max_pool_connections=16
+                                    )
+                                )
+                                s3_obj = s3.get_object(Bucket=zone, Key=clean_remote)
+                                body_stream = s3_obj["Body"]
+                                write_log(log_path, f"INFO  Streaming restore download via BunnyCDN S3 API ({s3_url}) with decoupled prefetch buffer...")
+                                while not stop_event.is_set():
+                                    chunk = body_stream.read(chunk_size)
+                                    if not chunk:
+                                        break
+                                    if dl_tracker:
+                                        dl_tracker.update_bytes(len(chunk))
+                                    prefetch_q.put(chunk)
+                                return
+                            except Exception as s3_dl_ex:
+                                write_log(log_path, f"WARN  Bunny S3 restore download failed ({s3_dl_ex}). Falling back to REST stream...")
+
+                        # High-speed REST stream with persistent connection pooling
+                        session = requests.Session()
+                        adapter = HTTPAdapter(pool_connections=16, pool_maxsize=16, max_retries=Retry(total=3, backoff_factor=0.5))
+                        session.mount("https://", adapter)
+                        url = f"https://{rest_host}/{zone}/{clean_remote}"
+                        headers = {"AccessKey": bunny_key}
+                        write_log(log_path, f"INFO  Streaming restore download via BunnyCDN REST API ({rest_host}) with decoupled prefetch buffer...")
+                        with session.get(url, headers=headers, stream=True, timeout=(15, 3600)) as resp:
+                            if resp.status_code != 200:
+                                raise RuntimeError(f"Bunny storage download failed (HTTP {resp.status_code}): {resp.text[:300]}")
+                            for chunk in resp.iter_content(chunk_size=chunk_size):
                                 if not chunk:
                                     continue
                                 if stop_event.is_set():
-                                    raise RuntimeError("Restore cancelled by user.")
-                                stdin_stream.write(chunk)
+                                    break
                                 if dl_tracker:
                                     dl_tracker.update_bytes(len(chunk))
-                            stdin_stream.close()
-                        else:
-                            rest_failed = True
-                            rest_err = f"HTTP {resp.status_code}: {resp.text[:200]}"
-                except Exception as ex:
-                    rest_failed = True
-                    rest_err = str(ex)
+                                prefetch_q.put(chunk)
+                    except Exception as ex:
+                        download_err[0] = ex
+                    finally:
+                        prefetch_q.put(None)
 
-                if rest_failed:
-                    # Fallback to Bunny S3-compatible API
-                    write_log(log_path, f"WARN  Bunny REST download failed ({rest_err}). Falling back to S3 API...")
-                    import boto3
-                    from botocore.config import Config
-                    _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
-                    zone = (storage.get("bunny_storage_zone") or "").strip()
-                    s3 = boto3.client(
-                        "s3",
-                        endpoint_url=s3_url,
-                        aws_access_key_id=zone,
-                        aws_secret_access_key=bunny_key,
-                        region_name="de",
-                        config=Config(
-                            s3={'addressing_style': 'path'},
-                            signature_version="s3v4",
-                            retries={'max_attempts': 3, 'mode': 'standard'},
-                            connect_timeout=30,
-                            read_timeout=3600
-                        )
-                    )
-                    s3_obj = s3.get_object(Bucket=zone, Key=clean_remote)
-                    body_stream = s3_obj["Body"]
-                    while not stop_event.is_set():
-                        chunk = body_stream.read(settings["chunk_size"])
-                        if not chunk:
+                dl_thread = threading.Thread(target=bunny_dl_worker)
+                dl_thread.daemon = True
+                dl_thread.start()
+
+                try:
+                    while True:
+                        if stop_event.is_set():
+                            raise RuntimeError("Restore cancelled by user.")
+                        try:
+                            chunk = prefetch_q.get(timeout=1.0)
+                        except queue.Empty:
+                            if not dl_thread.is_alive():
+                                break
+                            continue
+                        if chunk is None:
                             break
                         stdin_stream.write(chunk)
-                        if dl_tracker:
-                            dl_tracker.update_bytes(len(chunk))
-                    stdin_stream.close()
+                finally:
+                    dl_thread.join(timeout=3.0)
+                    if download_err[0]:
+                        raise RuntimeError(f"Bunny download stream failed: {download_err[0]}")
+                stdin_stream.close()
 
             else:
                 raise ValueError(f"Unknown storage type: {storage['type']}")
@@ -2314,16 +2472,24 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
             
     env = pg_env(db)
     
-    # Base safe settings
+    # Resource-optimized PostgreSQL restore settings based on profile
     sync_commit = "on"
-    work_mem = "16MB"
-    maint_work_mem = "64MB"
+    work_mem = "32MB"
+    maint_work_mem = "128MB"
     
     if speed_profile == "extreme":
         sync_commit = "off"
         work_mem = "64MB"
-        maint_work_mem = "1GB"
-        cmd += ["--disable-triggers"] # Redundant but safe
+        maint_work_mem = "512MB"
+        cmd += ["--disable-triggers"]
+    elif speed_profile == "balanced":
+        sync_commit = "on"
+        work_mem = "32MB"
+        maint_work_mem = "128MB"
+    elif speed_profile == "safe":
+        sync_commit = "on"
+        work_mem = "16MB"
+        maint_work_mem = "64MB"
         
     pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit}"
     if check_pg_options_supported(db, pg_opts, dbname):
@@ -2609,6 +2775,9 @@ def do_backup(backup_id: str):
                 except Exception:
                     pass
 
+        if total_size > 0:
+            update_backup(backup_id, total_mb=round(total_size / (1024 * 1024), 2))
+
         tracker = ProgressTracker(backup_id, is_restore=False, total_size=total_size, log_path=log_path)
         indexing_mode = backup.get("indexing_mode", "with_index")
 
@@ -2800,6 +2969,15 @@ def do_restore(restore_id: str):
             write_log(log_path, f"INFO  Restoring to database: {explicit_dbname}")
             log.info(f"Restoring to database: {explicit_dbname}")
             target_db = {**target_db, "database_name": explicit_dbname}
+
+        # Resolve remote object size if total_size is 0 for exact progress calculation
+        if total_size <= 0 and not remote_name.endswith("/"):
+            total_size = get_storage_object_size(storage, remote_name)
+            if total_size > 0:
+                write_log(log_path, f"INFO  Remote backup archive size: {round(total_size / (1024*1024), 2)} MB")
+
+        if total_size > 0:
+            update_restore(restore_id, total_mb=round(total_size / (1024 * 1024), 2))
 
         # Initialize progress tracker
         tracker = ProgressTracker(restore_id, is_restore=True, total_size=total_size, log_path=log_path)

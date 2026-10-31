@@ -97,8 +97,16 @@ backupvault/
   - Optimized queue and buffer management using memory pointer offsets and Python `memoryview` stream wrappers.
   - Completely eliminates array slicing memory copy overhead, reducing Python process CPU utilization to near 0% and maximizing upload throughput.
 - **Ultra-Fast Dynamic Resource Scaling & Speed Profiles:**
-  - Dynamically scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression/decompression pipelines, Azure/GCS chunk sizes, network concurrency limits, and MongoDB parallel insertion workers.
+  - Dynamically scales Zstandard (`zstd`) and parallel gzip (`pigz`) compression/decompression pipelines, CDN/S3/Azure/GCS chunk sizes, network concurrency limits, and MongoDB parallel insertion workers.
   - Granular API and UI options (Default, Balanced, Extreme, Safe) allow fine-tuning CPU usage during backups and restores to protect production instances during the day.
+  - **Memory-Bounded Protection:** In-memory queue bounds are strictly calculated (`chunk_size * queue_max`, e.g. 16MB in Safe up to 512MB in Extreme) to prevent RAM bloat and eliminate Out-Of-Memory (OOM) crashes on constrained host instances.
+- **High-Speed CDN (BunnyCDN & S3) Streaming Acceleration:**
+  - **Parallel Multipart Uploads:** BunnyCDN and S3 storage endpoints now leverage multi-threaded parallel multipart uploads (`TransferConfig(use_threads=True, max_concurrency=16)` with 16MB–64MB parts) and persistent connection pools (`max_pool_connections=32`), completely eliminating single-stream network latency bottlenecks.
+  - **Decoupled Prefetch Streaming Pipeline for Restores:** Restore downloads from BunnyCDN (both S3 and high-speed REST endpoints) and S3 use a dedicated prefetch buffer queue. The network download worker continuously buffers incoming chunks in RAM up to the profile limit, completely preventing TCP window collapse while the database restore engine processes and writes tables to disk.
+  - **Zero-Latency Zero-Sleep Pipelining:** Removed all artificial sleep delays in `reader_thread_fn` and widened `pipe_and_count` buffer blocks from 256KB to 2MB, reducing context switching and delivering maximum line-rate throughput.
+- **Live Resource & Speed Calculations:**
+  - **Accurate Real-Time Transfer Metrics:** `ProgressTracker` calculates real-time throughput (MB/s), elapsed duration, and ETA, logging detailed live statistics (e.g. `Progress: 76% (421.5 MB processed at 48.2 MB/s)`) and surfacing live `speed_mbps`, `processed_mb`, and `total_mb` directly to the UI dashboard card.
+  - **Automatic Remote Object Sizing:** Restore operations automatically query remote object headers (`get_storage_object_size`) across BunnyCDN, S3, Azure, and GCS to resolve exact archive byte counts, ensuring restore progress bars and speed meters calculate with 100% precision from start to finish.
 - **Night-Time Auto-Scaling:**
   - Background scheduler automatically detects night-time windows (12:00 AM - 6:00 AM) and seamlessly upgrades "Default" schedules to the absolute maximum "Extreme" performance limits to completely saturate the network when application traffic is lowest.
 - **Disk-Flush Backpressure (OOM Crash Protection):**
@@ -124,7 +132,7 @@ backupvault/
   - Queries Postgres database size using SQL `pg_database_size` and tracks bytes streamed via a background `pipe_and_count` thread to compute exact progress.
   - Wraps GCS/Azure download streams with a `ProgressWriter` to monitor restore progress and seamlessly track stdin archive ingestion metrics for MongoDB restores where logs are unavailable.
 - **Database Client Performance Tuning:**
-  - Configures PostgreSQL for memory constraints (`work_mem=16MB`, `maintenance_work_mem=64MB`) to safely ensure minimal memory usage even during massive parallel operations.
+  - Configures PostgreSQL for memory constraints (`work_mem=32MB`, `maintenance_work_mem=128MB` in balanced/default, up to `512MB` in extreme) to safely ensure minimal memory usage even during massive parallel operations.
   - MongoDB restore concurrency is heavily throttled to 1 parallel collection and 1 insertion worker (batch size of 500) to ensure predictable and safe low-memory execution.
   - Uses Go Runtime environment tuning (`GOGC=100`) and single-core thread scheduling (`GOMAXPROCS=1`) to prevent database resource exhaustion on 1-core instances.
   - Removed all artificial sleep delays from streaming background threads to enable line-rate direct download and decompression speeds.

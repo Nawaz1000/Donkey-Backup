@@ -4601,13 +4601,21 @@
             if (opType === 'backup' && !backupSizeMB && job.size_mb) {
                 backupSizeMB = job.size_mb;
             }
+            if (!backupSizeMB && (job.total_mb || (logData && logData.total_mb))) {
+                backupSizeMB = job.total_mb || (logData && logData.total_mb);
+            }
+            const processedMB = (logData && logData.processed_mb) || (job && job.processed_mb);
 
             if (backupSizeMB) {
-              const currentMB = (actualPct / 100 * backupSizeMB).toFixed(1);
+              const currentMB = processedMB ? processedMB.toFixed(1) : (actualPct / 100 * backupSizeMB).toFixed(1);
               const totalGB = backupSizeMB > 1024 ? (backupSizeMB / 1024).toFixed(1) + ' GB' : backupSizeMB.toFixed(1) + ' MB';
               const currentGB = backupSizeMB > 1024 ? (currentMB / 1024).toFixed(1) + ' GB' : currentMB + ' MB';
               if (sizeEl) sizeEl.textContent = totalGB + ' total';
               if (progSizeEl) progSizeEl.textContent = `${currentGB} / ${totalGB}`;
+            } else if (processedMB) {
+              const currentGB = processedMB > 1024 ? (processedMB / 1024).toFixed(1) + ' GB' : processedMB.toFixed(1) + ' MB';
+              if (sizeEl) sizeEl.textContent = `${currentGB} processed`;
+              if (progSizeEl) progSizeEl.textContent = currentGB;
             } else {
               if (sizeEl) sizeEl.textContent = 'Size: —';
               if (progSizeEl) progSizeEl.textContent = '—';
@@ -4616,7 +4624,10 @@
             // 5. Speed
             const speedEl = document.getElementById(`${opType}-stat-speed`);
             if (speedEl) {
-              if (backupSizeMB && elapsedSec > 0 && actualPct > 0) {
+              const liveSpeed = (logData && logData.speed_mbps) || (job && job.speed_mbps);
+              if (liveSpeed && liveSpeed > 0) {
+                speedEl.textContent = liveSpeed > 1024 ? (liveSpeed / 1024).toFixed(1) + ' GB/s' : liveSpeed.toFixed(1) + ' MB/s';
+              } else if (backupSizeMB && elapsedSec > 0 && actualPct > 0) {
                 const speed = ((actualPct / 100 * backupSizeMB) / elapsedSec); // MB/s
                 speedEl.textContent = speed > 1024 ? (speed / 1024).toFixed(1) + ' GB/s' : speed.toFixed(1) + ' MB/s';
               } else {

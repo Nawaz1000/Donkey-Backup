@@ -117,7 +117,10 @@ def get_backup_logs(backup_id: str, user=Depends(get_current_user)):
         "logs": logs,
         "status": backup["status"],
         "error": backup.get("error"),
-        "progress_percentage": backup.get("progress_percentage", 0)
+        "progress_percentage": backup.get("progress_percentage", 0),
+        "processed_mb": backup.get("processed_mb", 0),
+        "speed_mbps": backup.get("speed_mbps", 0),
+        "total_mb": backup.get("total_mb", 0)
     }
 
 @router.delete("/{backup_id}")
@@ -227,7 +230,10 @@ def get_restore_logs(restore_id: str, user=Depends(get_current_user)):
         "logs": logs,
         "status": restore["status"],
         "error": restore.get("error"),
-        "progress_percentage": restore.get("progress_percentage", 0)
+        "progress_percentage": restore.get("progress_percentage", 0),
+        "processed_mb": restore.get("processed_mb", 0),
+        "speed_mbps": restore.get("speed_mbps", 0),
+        "total_mb": restore.get("total_mb", 0)
     }
 
 @router.post("/restore")
