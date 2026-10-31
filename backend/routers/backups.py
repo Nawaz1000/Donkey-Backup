@@ -21,6 +21,7 @@ class BackupCreate(BaseModel):
     send_notifications: Optional[bool] = True
     speed_profile: Literal["default", "safe", "balanced", "extreme"] = "default"
     folder_name: Optional[str] = None
+    archive_mode: Optional[Literal["single", "multiple"]] = "single" 
 
 class RestoreRequest(BaseModel):
     backup_id: Optional[str] = None
@@ -30,6 +31,7 @@ class RestoreRequest(BaseModel):
     new_database: bool = False
     new_database_name: Optional[str] = None
     target_database_name: Optional[str] = None
+    selected_database: Optional[str] = None
     collection: Optional[str] = ""
     indexing_mode: Literal["with_index", "without_index", "only_index"] = "with_index"
     speed_profile: Literal["default", "safe", "balanced", "extreme"] = "default"
@@ -88,6 +90,7 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
         "indexing_mode": req.indexing_mode,
         "send_notifications": req.send_notifications,
         "speed_profile": req.speed_profile,
+        "archive_mode": req.archive_mode or "single",
         "status": "running",
         "size_mb": None,
         "remote_path": None,
@@ -275,6 +278,7 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
         "new_database": req.new_database,
         "new_database_name": req.new_database_name if req.new_database else None,
         "target_database_name": req.target_database_name,
+        "selected_database": req.selected_database,
         "collection": req.collection or "full",
         "indexing_mode": req.indexing_mode,
         "speed_profile": req.speed_profile,

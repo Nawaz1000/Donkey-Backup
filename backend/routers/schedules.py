@@ -23,6 +23,7 @@ class ScheduleCreate(BaseModel):
     collection: Optional[str] = None
     folder_name: Optional[str] = None
     retention_count: Optional[int] = None
+    archive_mode: Optional[Literal["single", "multiple"]] = "single" 
 
 @router.get("/")
 def list_schedules(user=Depends(get_current_user)):
@@ -87,6 +88,7 @@ def create_schedule(req: ScheduleCreate, user=Depends(get_current_user)):
         "timezone_offset": req.timezone_offset,
         "database_name": target_dbname,
         "collection": req.collection,
+        "archive_mode": req.archive_mode or "single",
         "created_at": datetime.utcnow().isoformat() + "Z",
         "last_run": None,
         "next_run": None,
@@ -147,6 +149,7 @@ def trigger_schedule(schedule_id: str, background_tasks: BackgroundTasks, user=D
         "size_mb": None,
         "remote_path": None,
         "remote_name": None,
+        "archive_mode": s.get("archive_mode", "single"),
         "is_scheduled": True,
         "error": None,
         "created_at": now.isoformat() + "Z",

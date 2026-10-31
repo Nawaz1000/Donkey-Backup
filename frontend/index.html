@@ -1657,6 +1657,17 @@
                       <option value="">— select connection first —</option>
                     </select>
                   </div>
+                  <div class="form-group mb-4" id="inline-bk-archive-mode-group" style="display:none">
+                    <label>Cluster Archive Format</label>
+                    <select id="inline-bk-archive-mode"
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      <option value="single">Single Unified Archive (All DBs inside 1 file)</option>
+                      <option value="multiple">Database-Wise Archives (Separate file per DB)</option>
+                    </select>
+                    <div style="font-size:11px;color:var(--muted);margin-top:4px">
+                      Bundle all databases into one archive file or create separate archives per database.
+                    </div>
+                  </div>
                   <div class="form-group mb-4" id="inline-bk-scope-group">
                     <label>Backup Scope</label>
                     <select id="inline-bk-scope"
@@ -2649,6 +2660,16 @@
           <option value="">— select database connection first —</option>
         </select>
       </div>
+      <div class="form-group" id="bk-archive-mode-group" style="display:none">
+        <label>Cluster Archive Format</label>
+        <select id="bk-archive-mode">
+          <option value="single">Single Unified Archive (All DBs inside 1 file)</option>
+          <option value="multiple">Database-Wise Archives (Separate file per DB)</option>
+        </select>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          Bundle all databases into one archive file or create separate archives per database.
+        </div>
+      </div>
       <div class="form-group" id="bk-type-group">
         <label>Backup Scope</label>
         <select id="bk-type" onchange="onBackupTypeChange()">
@@ -2746,6 +2767,16 @@
         <select id="sc-dbname" onchange="onScheduleDbnameChange()">
           <option value="">— select database connection first —</option>
         </select>
+      </div>
+      <div class="form-group" id="sc-archive-mode-group" style="display:none">
+        <label>Cluster Archive Format</label>
+        <select id="sc-archive-mode">
+          <option value="single">Single Unified Archive (All DBs inside 1 file)</option>
+          <option value="multiple">Database-Wise Archives (Separate file per DB)</option>
+        </select>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          Bundle all databases into one archive file or create separate archives per database.
+        </div>
       </div>
       <div class="form-group" id="sc-type-group" style="display:none">
         <label>Backup Scope</label>
@@ -2872,6 +2903,22 @@
       <div id="rs-info"
         style="background-color:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;font-size:13px;color:var(--text2);margin-bottom:16px;display:none">
         <span id="rs-info-text"></span>
+      </div>
+
+      <!-- Selective Instance DB Restore -->
+      <div class="form-group" id="rs-instance-scope-group" style="display:none">
+        <label>Databases to Restore</label>
+        <select id="rs-instance-scope" onchange="onRestoreInstanceScopeChange()">
+          <option value="all">⚡ Restore All Databases in Backup</option>
+          <option value="single">🎯 Restore Only One Specific Database</option>
+        </select>
+      </div>
+      <div class="form-group" id="rs-single-db-group" style="display:none">
+        <label>Source Database to Restore from Backup</label>
+        <input type="text" id="rs-selected-db" placeholder="e.g. CBT_PROD" oninput="onSelectedDbInput()" />
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          Enter the specific database name inside the backup that you want to restore.
+        </div>
       </div>
 
       <div class="form-group">
@@ -3174,12 +3221,15 @@
       const scopeGroup = document.getElementById('inline-bk-scope-group');
       const collGroup = document.getElementById('inline-bk-collection-group');
       const collEl = document.getElementById('inline-bk-collection-select');
+      const archiveGroup = document.getElementById('inline-bk-archive-mode-group');
 
       if (dbname === '__all__') {
         if (scopeGroup) scopeGroup.style.display = 'none';
         if (collGroup) collGroup.style.display = 'none';
+        if (archiveGroup) archiveGroup.style.display = 'block';
         return;
       }
+      if (archiveGroup) archiveGroup.style.display = 'none';
       if (scopeGroup) scopeGroup.style.display = 'block';
 
       if (!dbId || !dbname) return;
@@ -3210,10 +3260,11 @@
         try { await apiFetch(`/databases/${dbId}`, { method: 'PATCH', body: JSON.stringify({ database_name: dbname }) }); } catch (e) { }
       }
 
+      const archiveMode = v('inline-bk-archive-mode') || 'single';
       try {
         const b = await apiFetch('/backups/', {
           method: 'POST', body: JSON.stringify({
-            database_id: dbId, database_name: dbname, storage_id: v('inline-bk-storage'), label, collection, backup_method: type, indexing_mode: indexingMode, send_notifications: true, speed_profile: speedProfile
+            database_id: dbId, database_name: dbname, storage_id: v('inline-bk-storage'), label, collection, backup_method: type, indexing_mode: indexingMode, send_notifications: true, speed_profile: speedProfile, archive_mode: archiveMode
           })
         });
         toast('Backup started!', 'info');
@@ -4257,9 +4308,15 @@
     function onRestoreExternalFileSelect() {
       const sel = document.getElementById('rs-external-file');
       const manual = document.getElementById('rs-manual-path');
+      const fileVal = (sel && sel.value) ? sel.value : (manual ? manual.value : '');
       if (sel && manual && sel.value) {
         manual.value = sel.value;
       }
+      
+      const isClusterOrFolder = fileVal && (fileVal.endsWith('/') || fileVal.includes('_all') || fileVal.includes('Mongdbbackup') || (!fileVal.includes('.') && fileVal.length > 2));
+      const instanceGroup = document.getElementById('rs-instance-scope-group');
+      if (instanceGroup) instanceGroup.style.display = isClusterOrFolder ? 'block' : 'none';
+      onRestoreInstanceScopeChange();
     }
 
     async function onBackupDbChange() { return handleDbChange('bk'); }
@@ -4339,13 +4396,16 @@
       const collGroup = document.getElementById(`${prefix}-collection-group`);
       const collEl = document.getElementById(`${prefix}-collection-select`);
 
+      const archiveGroup = document.getElementById(`${prefix}-archive-mode-group`);
       if ((dbType === 'solr' && dbname === 'all_collections') || dbname === '__all__') {
         if (typeGroup) typeGroup.style.display = 'none';
         if (collGroup) collGroup.style.display = 'none';
         if (collEl) collEl.innerHTML = '<option value="">— N/A for whole instance —</option>';
+        if (archiveGroup) archiveGroup.style.display = 'block';
         return;
       } else {
         if (typeGroup) typeGroup.style.display = 'block';
+        if (archiveGroup) archiveGroup.style.display = 'none';
       }
 
       if (!collEl) return;
@@ -4391,14 +4451,15 @@
       if (dbname && dbname !== '__all__') {
         try { await apiFetch(`/databases/${dbId}`, { method: 'PATCH', body: JSON.stringify({ database_name: dbname }) }); } catch (e) { }
       }
-      await startBackupNow(dbId, v('bk-storage'), label, collection, indexingMode, sendNotifications, speedProfile, dbname, folderName);
+      const archiveMode = v('bk-archive-mode') || 'single';
+      await startBackupNow(dbId, v('bk-storage'), label, collection, indexingMode, sendNotifications, speedProfile, dbname, folderName, archiveMode);
       closeModal('backup-modal');
     }
 
-    async function startBackupNow(dbId, storageId, label, collection = '', indexingMode = 'with_index', sendNotifications = true, speedProfile = 'default', dbname = '', folderName = '') {
+    async function startBackupNow(dbId, storageId, label, collection = '', indexingMode = 'with_index', sendNotifications = true, speedProfile = 'default', dbname = '', folderName = '', archiveMode = 'single') {
       try {
         const payload = {
-          database_id: dbId, database_name: dbname, storage_id: storageId, label, collection, indexing_mode: indexingMode, send_notifications: sendNotifications, speed_profile: speedProfile
+          database_id: dbId, database_name: dbname, storage_id: storageId, label, collection, indexing_mode: indexingMode, send_notifications: sendNotifications, speed_profile: speedProfile, archive_mode: archiveMode
         };
         if (folderName) payload.folder_name = folderName;
         const b = await apiFetch('/backups/', {
@@ -4998,7 +5059,8 @@
             database_name: dbname,
             collection: collection || 'full',
             folder_name: folderName || null,
-            retention_count: retentionVal
+            retention_count: retentionVal,
+            archive_mode: v('sc-archive-mode') || 'single'
           })
         });
         closeModal('schedule-modal');
@@ -5079,7 +5141,7 @@
       const [backups, dbs, storages] = await Promise.all([apiFetch('/backups/'), apiFetch('/databases/'), apiFetch('/storage/')]);
       const completed = backups.filter(b => b.status === 'completed' && b.remote_name);
       document.getElementById('rs-backup').innerHTML = completed.length
-        ? completed.map(b => `<option value="${b.id}" data-collection="${b.collection || 'full'}" data-size="${b.size_mb}" data-dbname="${b.database_name}">${b.label} — ${b.database_name} (${fmtDate(b.created_at)})</option>`).join('')
+        ? completed.map(b => `<option value="${b.id}" data-collection="${b.collection || 'full'}" data-size="${b.size_mb}" data-dbname="${b.database_name}" data-archive-mode="${b.archive_mode || 'single'}" data-dbs="${(b.cluster_databases || []).join(',')}">${b.label} — ${b.database_name || 'All Databases'} (${fmtDate(b.created_at)})</option>`).join('')
         : '<option value="">— no completed backups —</option>';
       document.getElementById('rs-target-db').innerHTML = dbs.map(d =>
         `<option value="${d.id}">${d.name} (${d.type})</option>`
@@ -5132,11 +5194,53 @@
       const opt = sel.options[sel.selectedIndex];
       const info = document.getElementById('rs-info');
       const infoText = document.getElementById('rs-info-text');
-      if (opt && opt.value) {
+      const isExternal = v('rs-source-type') === 'external';
+
+      if (opt && opt.value && !isExternal) {
         info.style.display = 'block';
         infoText.innerHTML = `<strong>${opt.text.split(' — ')[0]}</strong> &nbsp;|&nbsp; Collection: <strong>${opt.dataset.collection || 'full'}</strong> &nbsp;|&nbsp; Size: <strong>${opt.dataset.size || '?'} MB</strong> &nbsp;|&nbsp; Source DB: <strong>${opt.dataset.dbname || '?'}</strong>`;
+        
+        const isCluster = opt.dataset.dbname === '__all__' || opt.dataset.archiveMode === 'multiple' || opt.text.includes('All Databases');
+        const instanceGroup = document.getElementById('rs-instance-scope-group');
+        if (instanceGroup) instanceGroup.style.display = isCluster ? 'block' : 'none';
+
+        if (opt.dataset.dbs) {
+          const dbsList = opt.dataset.dbs.split(',').filter(Boolean);
+          let dl = document.getElementById('rs-dbs-datalist');
+          if (!dl) {
+            dl = document.createElement('datalist');
+            dl.id = 'rs-dbs-datalist';
+            document.body.appendChild(dl);
+          }
+          dl.innerHTML = dbsList.map(d => `<option value="${d}">`).join('');
+          const inp = document.getElementById('rs-selected-db');
+          if (inp) inp.setAttribute('list', 'rs-dbs-datalist');
+        }
       } else {
-        info.style.display = 'none';
+        if (!isExternal) info.style.display = 'none';
+      }
+      onRestoreInstanceScopeChange();
+    }
+
+    function onRestoreInstanceScopeChange() {
+      const isSingle = v('rs-instance-scope') === 'single';
+      const isInstanceVisible = document.getElementById('rs-instance-scope-group') && document.getElementById('rs-instance-scope-group').style.display !== 'none';
+      const singleGroup = document.getElementById('rs-single-db-group');
+      if (singleGroup) singleGroup.style.display = (isSingle && isInstanceVisible) ? 'block' : 'none';
+    }
+
+    function onSelectedDbInput() {
+      const val = (v('rs-selected-db') || '').trim();
+      const targetDbnameEl = document.getElementById('rs-target-dbname');
+      const isNew = document.getElementById('rs-new-fields').style.display !== 'none';
+      if (val && !isNew && targetDbnameEl) {
+        // If target dropdown has matching option, preselect it
+        for (let i = 0; i < targetDbnameEl.options.length; i++) {
+          if (targetDbnameEl.options[i].value.toLowerCase() === val.toLowerCase()) {
+            targetDbnameEl.selectedIndex = i;
+            break;
+          }
+        }
       }
     }
 
@@ -5285,6 +5389,14 @@
             indexing_mode: v('rs-indexing-mode'),
             speed_profile: v('rs-speed-profile') || 'extreme'
           };
+
+          const instanceScopeGroup = document.getElementById('rs-instance-scope-group');
+          const isInstanceBackup = instanceScopeGroup && instanceScopeGroup.style.display !== 'none';
+          const isSingleSelected = isInstanceBackup && v('rs-instance-scope') === 'single';
+          const selectedDb = isSingleSelected ? (v('rs-selected-db') || '').trim() : null;
+          if (selectedDb) {
+            payload.selected_database = selectedDb;
+          }
 
           if (isExternal) {
             payload.storage_id = storageId;
