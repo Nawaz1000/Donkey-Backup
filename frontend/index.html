@@ -2139,9 +2139,26 @@
                 <div style="padding:0 24px 24px 24px;">
                   <div class="form-group mb-6">
                     <label>Source Backup</label>
-                    <select id="inline-rs-backup"
+                    <select id="inline-rs-backup" onchange="onInlineRestoreBackupChange()"
                       style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                     </select>
+                  </div>
+                  <!-- Inline Selective Instance DB Restore -->
+                  <div class="form-group mb-6" id="inline-rs-instance-scope-group" style="display:none">
+                    <label>Databases to Restore</label>
+                    <select id="inline-rs-instance-scope" onchange="onInlineRestoreInstanceScopeChange()"
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      <option value="all">⚡ Restore All Databases in Backup</option>
+                      <option value="single">🎯 Restore Only One Specific Database</option>
+                    </select>
+                  </div>
+                  <div class="form-group mb-6" id="inline-rs-single-db-group" style="display:none">
+                    <label>Database to Restore from Backup</label>
+                    <input type="text" id="inline-rs-selected-db" placeholder="e.g. CBT_PROD"
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;" />
+                    <div style="font-size:11px;color:var(--muted);margin-top:4px">
+                      Enter the specific database name inside the backup that you want to restore.
+                    </div>
                   </div>
                   <div class="form-group mb-6">
                     <label>Target Connection</label>
@@ -3273,6 +3290,36 @@
       } catch (e) { toast(e.message, 'error'); }
     }
 
+    function onInlineRestoreBackupChange() {
+      const sel = document.getElementById('inline-rs-backup');
+      if (!sel || sel.selectedIndex < 0) return;
+      const opt = sel.options[sel.selectedIndex];
+      const isCluster = opt.dataset.isCluster === 'true' || opt.dataset.dbname === '__all__' || opt.dataset.archiveMode === 'multiple' || opt.text.includes('All Databases') || (opt.dataset.dbs && opt.dataset.dbs.length > 0);
+      const grp = document.getElementById('inline-rs-instance-scope-group');
+      if (grp) grp.style.display = isCluster ? 'block' : 'none';
+
+      if (opt.dataset.dbs) {
+        const dbsList = opt.dataset.dbs.split(',').filter(Boolean);
+        let dl = document.getElementById('inline-rs-dbs-datalist');
+        if (!dl) {
+          dl = document.createElement('datalist');
+          dl.id = 'inline-rs-dbs-datalist';
+          document.body.appendChild(dl);
+        }
+        dl.innerHTML = dbsList.map(d => `<option value="${d}">`).join('');
+        const inp = document.getElementById('inline-rs-selected-db');
+        if (inp) inp.setAttribute('list', 'inline-rs-dbs-datalist');
+      }
+      onInlineRestoreInstanceScopeChange();
+    }
+
+    function onInlineRestoreInstanceScopeChange() {
+      const isSingle = v('inline-rs-instance-scope') === 'single';
+      const isVisible = document.getElementById('inline-rs-instance-scope-group') && document.getElementById('inline-rs-instance-scope-group').style.display !== 'none';
+      const grp = document.getElementById('inline-rs-single-db-group');
+      if (grp) grp.style.display = (isSingle && isVisible) ? 'block' : 'none';
+    }
+
     async function runInlineRestore() {
       const backupId = v('inline-rs-backup');
       const targetDbId = v('inline-rs-target');
@@ -3284,24 +3331,31 @@
       if (!targetDbId) { toast('Select a target database connection', 'error'); return; }
       if (!targetDbname) { toast(isNew ? 'Enter a new database name' : 'Select a target database name', 'error'); return; }
 
+      const isSingleInstance = v('inline-rs-instance-scope') === 'single';
+      const selectedDb = isSingleInstance ? (v('inline-rs-selected-db') || '').trim() : null;
+
       const msg = isNew
         ? `Create new database "<b>${targetDbname}</b>" and restore into it?`
         : `Restore to "<b>${targetDbname}</b>"?<br><br><span style="color:var(--danger)">\u26A0 Existing data will be overwritten.</span>`;
 
       appConfirm('Confirm Restore', msg, async () => {
         try {
+          let payload = {
+            backup_id: backupId,
+            target_database_id: targetDbId,
+            new_database: isNew,
+            new_database_name: isNew ? targetDbname : null,
+            target_database_name: targetDbname,
+            collection: (v('inline-rs-scope') === 'collection') ? v('inline-rs-collection') : 'full',
+            indexing_mode: 'with_index',
+            speed_profile: 'extreme'
+          };
+          if (selectedDb) {
+            payload.selected_database = selectedDb;
+          }
           const r = await apiFetch('/backups/restore', {
             method: 'POST',
-            body: JSON.stringify({
-              backup_id: backupId,
-              target_database_id: targetDbId,
-              new_database: isNew,
-              new_database_name: isNew ? targetDbname : null,
-              target_database_name: targetDbname,
-              collection: (v('inline-rs-scope') === 'collection') ? v('inline-rs-collection') : 'full',
-              indexing_mode: 'with_index',
-              speed_profile: 'extreme'
-            })
+            body: JSON.stringify(payload)
           });
           const container = document.getElementById('inline-rs-container');
           if (container) container.style.display = 'none';
@@ -3366,7 +3420,10 @@
           apiFetch('/databases/')
         ]);
         const bEl = document.getElementById('inline-rs-backup');
-        if (bEl) bEl.innerHTML = backups.filter(b => b.status === 'completed').map(b => `<option value="${b.id}">${b.label} (${b.database_name})</option>`).join('');
+        if (bEl) {
+          bEl.innerHTML = backups.filter(b => b.status === 'completed').map(b => `<option value="${b.id}" data-collection="${b.collection || 'full'}" data-size="${b.size_mb}" data-dbname="${b.database_name}" data-archive-mode="${b.archive_mode || 'single'}" data-is-cluster="${b.is_cluster ? 'true' : 'false'}" data-dbs="${(b.cluster_databases || []).join(',')}">${b.label} (${b.database_name || 'All Databases'})</option>`).join('');
+          onInlineRestoreBackupChange();
+        }
 
         const tEl = document.getElementById('inline-rs-target');
         if (tEl) tEl.innerHTML = dbs.map(d => `<option value="${d.id}">${d.name} (${d.type})</option>`).join('');
@@ -5141,7 +5198,7 @@
       const [backups, dbs, storages] = await Promise.all([apiFetch('/backups/'), apiFetch('/databases/'), apiFetch('/storage/')]);
       const completed = backups.filter(b => b.status === 'completed' && b.remote_name);
       document.getElementById('rs-backup').innerHTML = completed.length
-        ? completed.map(b => `<option value="${b.id}" data-collection="${b.collection || 'full'}" data-size="${b.size_mb}" data-dbname="${b.database_name}" data-archive-mode="${b.archive_mode || 'single'}" data-dbs="${(b.cluster_databases || []).join(',')}">${b.label} — ${b.database_name || 'All Databases'} (${fmtDate(b.created_at)})</option>`).join('')
+        ? completed.map(b => `<option value="${b.id}" data-collection="${b.collection || 'full'}" data-size="${b.size_mb}" data-dbname="${b.database_name}" data-archive-mode="${b.archive_mode || 'single'}" data-is-cluster="${b.is_cluster ? 'true' : 'false'}" data-dbs="${(b.cluster_databases || []).join(',')}">${b.label} — ${b.database_name || 'All Databases'} (${fmtDate(b.created_at)})</option>`).join('')
         : '<option value="">— no completed backups —</option>';
       document.getElementById('rs-target-db').innerHTML = dbs.map(d =>
         `<option value="${d.id}">${d.name} (${d.type})</option>`
@@ -5200,7 +5257,7 @@
         info.style.display = 'block';
         infoText.innerHTML = `<strong>${opt.text.split(' — ')[0]}</strong> &nbsp;|&nbsp; Collection: <strong>${opt.dataset.collection || 'full'}</strong> &nbsp;|&nbsp; Size: <strong>${opt.dataset.size || '?'} MB</strong> &nbsp;|&nbsp; Source DB: <strong>${opt.dataset.dbname || '?'}</strong>`;
         
-        const isCluster = opt.dataset.dbname === '__all__' || opt.dataset.archiveMode === 'multiple' || opt.text.includes('All Databases');
+        const isCluster = opt.dataset.isCluster === 'true' || opt.dataset.dbname === '__all__' || opt.dataset.archiveMode === 'multiple' || opt.text.includes('All Databases') || (opt.dataset.dbs && opt.dataset.dbs.length > 0);
         const instanceGroup = document.getElementById('rs-instance-scope-group');
         if (instanceGroup) instanceGroup.style.display = isCluster ? 'block' : 'none';
 

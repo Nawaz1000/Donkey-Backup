@@ -831,36 +831,49 @@ def delete_remote_backup(storage: dict, remote_name: str, folder_name: str = Non
             objects.add(clean_rn)
             objects.add(clean_rn + ".indexes.json")
 
-        # Also discover objects via S3 paginator to ensure no files are missed
+        # Also discover objects via S3 paginator across all prefixes to ensure no files are missed
         if s3_client:
-            try:
-                paginator = s3_client.get_paginator('list_objects_v2')
-                for page in paginator.paginate(Bucket=zone, Prefix=list_prefix):
-                    for item in page.get("Contents", []):
-                        objects.add(item["Key"])
-            except Exception as s3_list_err:
-                log.warning(f"[BunnyCDN] S3 list objects warning: {s3_list_err}")
+            prefixes_to_scan = [list_prefix, clean_rn]
+            if backup_dir:
+                prefixes_to_scan.extend([backup_dir, backup_dir + "/"])
+            for pfx in set(prefixes_to_scan):
+                try:
+                    paginator = s3_client.get_paginator('list_objects_v2')
+                    for page in paginator.paginate(Bucket=zone, Prefix=pfx.lstrip("/")):
+                        for item in page.get("Contents", []):
+                            objects.add(item["Key"])
+                except Exception as s3_list_err:
+                    log.warning(f"[BunnyCDN] S3 list objects warning for prefix {pfx}: {s3_list_err}")
 
-        # 3. Delete all individual files via both S3 and REST
+        # 3. Delete all individual files via S3 batch and REST
+        if s3_client and objects:
+            try:
+                obj_list = [k.lstrip("/") for k in objects]
+                for i in range(0, len(obj_list), 500):
+                    batch = [{'Key': k} for k in obj_list[i:i+500]]
+                    s3_client.delete_objects(Bucket=zone, Delete={'Objects': batch})
+                log.info(f"[BunnyCDN S3] Batch deleted {len(obj_list)} objects.")
+            except Exception as s3_batch_err:
+                log.warning(f"[BunnyCDN S3] Batch delete fallback note: {s3_batch_err}")
+
         for obj in objects:
             clean_obj = obj.lstrip("/")
             if s3_client:
                 try:
                     s3_client.delete_object(Bucket=zone, Key=clean_obj)
                     log.info(f"[BunnyCDN S3] Deleted object {clean_obj}")
-                except Exception as s3_del_err:
-                    log.warning(f"[BunnyCDN S3] Failed to delete object {clean_obj}: {s3_del_err}")
+                except Exception:
+                    pass
 
             del_url = f"https://{bunny_host}/{zone}/{clean_obj}"
             try:
-                r = requests.delete(del_url, headers=headers, timeout=20)
+                r = requests.delete(del_url, headers=headers, timeout=15)
                 log.info(f"[BunnyCDN REST] Deleted file {clean_obj} (status {r.status_code})")
             except Exception as e:
                 log.warning(f"[BunnyCDN REST] Failed to delete file {clean_obj}: {e}")
 
         # 4. Recursively delete the entire backup directory from BunnyCDN Edge Storage!
-        # When sending a DELETE request to a path with a trailing slash, Bunny.net
-        # deletes the entire directory and all files inside it.
+        # When all files inside are deleted, Bunny.net removes the directory cleanly.
         if backup_dir:
             clean_dir = backup_dir.strip("/")
 
@@ -1314,7 +1327,7 @@ def get_compressor_info(profile: str = "default", log_path: str = None) -> dict:
     return None
 
 
-def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, compression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default") -> str:
+def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, compression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default", custom_feeder: callable = None) -> str:
     write_log(log_path, f"INFO  Starting streaming backup to {storage['type']}: {remote_name} (Profile: {speed_profile})")
 
     # Storage pre-flight validation to catch authentication/region issues before starting dump
@@ -1329,31 +1342,23 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     settings = get_speed_settings(speed_profile)
     
     processes = []
+    stop_event = ACTIVE_STOP_EVENTS.get(tracker.job_id) if tracker else threading.Event()
     if tracker:
         ACTIVE_PROCESSES.setdefault(tracker.job_id, [])
-        if tracker.job_id in ACTIVE_STOP_EVENTS and ACTIVE_STOP_EVENTS[tracker.job_id].is_set():
+        if tracker.job_id not in ACTIVE_STOP_EVENTS:
+            ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
+        if stop_event.is_set():
             raise RuntimeError("Backup cancelled by user.")
     pipe_thread = None
     stderr_thread = None
     
-    is_mongo = "mongodump" in cmd[0]
+    is_mongo = bool(cmd and len(cmd) > 0 and "mongodump" in cmd[0])
     p_dump_stderr = subprocess.PIPE if is_mongo else open(log_path, "a")
     
     creationflags = 0x00004000 if os.name == 'nt' else 0
     
     try:
         if compression_cmd:
-            p_dump = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=p_dump_stderr,
-                env=env,
-                creationflags=creationflags
-            )
-            processes.append(p_dump)
-            if tracker:
-                ACTIVE_PROCESSES[tracker.job_id].append(p_dump)
-            
             p_comp = subprocess.Popen(
                 compression_cmd,
                 stdin=subprocess.PIPE,
@@ -1364,30 +1369,60 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
             processes.append(p_comp)
             if tracker:
                 ACTIVE_PROCESSES[tracker.job_id].append(p_comp)
-            
-            # Start pipe thread
-            pipe_thread = threading.Thread(
-                target=pipe_and_count,
-                args=(p_dump.stdout, p_comp.stdin, tracker)
-            )
-            pipe_thread.daemon = True
-            pipe_thread.start()
+
+            if custom_feeder:
+                pipe_thread = threading.Thread(
+                    target=custom_feeder,
+                    args=(p_comp.stdin, stop_event, tracker)
+                )
+                pipe_thread.daemon = True
+                pipe_thread.start()
+            else:
+                p_dump = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=p_dump_stderr,
+                    env=env,
+                    creationflags=creationflags
+                )
+                processes.append(p_dump)
+                if tracker:
+                    ACTIVE_PROCESSES[tracker.job_id].append(p_dump)
+                
+                # Start pipe thread
+                pipe_thread = threading.Thread(
+                    target=pipe_and_count,
+                    args=(p_dump.stdout, p_comp.stdin, tracker)
+                )
+                pipe_thread.daemon = True
+                pipe_thread.start()
             
             stdout_stream = p_comp.stdout
         else:
-            p_dump = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=p_dump_stderr,
-                env=env,
-                creationflags=creationflags
-            )
-            processes.append(p_dump)
-            if tracker:
-                ACTIVE_PROCESSES[tracker.job_id].append(p_dump)
-            stdout_stream = p_dump.stdout
+            if custom_feeder:
+                r_fd, w_fd = os.pipe()
+                pipe_w = os.fdopen(w_fd, "wb")
+                stdout_stream = os.fdopen(r_fd, "rb")
+                pipe_thread = threading.Thread(
+                    target=custom_feeder,
+                    args=(pipe_w, stop_event, tracker)
+                )
+                pipe_thread.daemon = True
+                pipe_thread.start()
+            else:
+                p_dump = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=p_dump_stderr,
+                    env=env,
+                    creationflags=creationflags
+                )
+                processes.append(p_dump)
+                if tracker:
+                    ACTIVE_PROCESSES[tracker.job_id].append(p_dump)
+                stdout_stream = p_dump.stdout
             
-        if is_mongo:
+        if is_mongo and not custom_feeder:
             stderr_thread = threading.Thread(
                 target=log_and_parse_stderr,
                 args=(p_dump.stderr, log_path, tracker)
@@ -1404,9 +1439,6 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
         raise RuntimeError(f"Failed to start subprocesses: {e}")
 
     q = queue.Queue(maxsize=settings["queue_max"])
-    stop_event = ACTIVE_STOP_EVENTS.get(tracker.job_id) if tracker else threading.Event()
-    if tracker and tracker.job_id not in ACTIVE_STOP_EVENTS:
-        ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
     
     reader_tracker = tracker if not compression_cmd else None
     
@@ -1749,7 +1781,7 @@ def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: i
         executor.shutdown(wait=False, cancel_futures=True)
         prod_thread.join(timeout=2.0)
 
-def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, decompression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default"):
+def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, decompression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default", sql_db_filter: str = None):
     write_log(log_path, f"INFO  Starting streaming restore from {storage['type']}: {remote_name} (Profile: {speed_profile})")
     
     settings = get_speed_settings(speed_profile)
@@ -1763,6 +1795,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
         if stop_event.is_set():
             raise RuntimeError("Restore cancelled by user.")
     stderr_thread = None
+    filter_thread = None
     
     is_mongo = "mongorestore" in cmd[0]
     creationflags = 0x00004000 if os.name == 'nt' else 0
@@ -1783,7 +1816,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 
                 p_restore = subprocess.Popen(
                     cmd,
-                    stdin=p_dec.stdout,
+                    stdin=subprocess.PIPE if sql_db_filter else p_dec.stdout,
                     stdout=err_file,
                     stderr=subprocess.PIPE,  # Pipe stderr to parse progress
                     env=env,
@@ -1792,8 +1825,50 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 processes.append(p_restore)
                 if tracker:
                     ACTIVE_PROCESSES[tracker.job_id].append(p_restore)
-                p_dec.stdout.close()
-                stdin_stream = p_dec.stdin
+
+                if sql_db_filter:
+                    def filter_worker(dec_out, rest_in, target_db, stop_ev):
+                        target_clean = target_db.strip().strip('"').lower()
+                        start_tag = f"-- >>> auto_backup_db_start: {target_clean} <<<"
+                        end_tag = f"-- >>> auto_backup_db_end: {target_clean} <<<"
+                        in_target = False
+                        try:
+                            for line in dec_out:
+                                if stop_ev.is_set():
+                                    break
+                                line_str = line.decode("utf-8", errors="replace")
+                                lower_line = line_str.strip().lower()
+                                if start_tag in lower_line:
+                                    in_target = True
+                                    continue
+                                elif in_target:
+                                    if end_tag in lower_line or "-- >>> auto_backup_db_start:" in lower_line:
+                                        break
+                                    if line_str.strip().startswith("\\connect "):
+                                        continue
+                                    rest_in.write(line)
+                        finally:
+                            try:
+                                rest_in.close()
+                            except Exception:
+                                pass
+                            try:
+                                while dec_out.read(64 * 1024):
+                                    if stop_ev.is_set():
+                                        break
+                            except Exception:
+                                pass
+
+                    filter_thread = threading.Thread(
+                        target=filter_worker,
+                        args=(p_dec.stdout, p_restore.stdin, sql_db_filter, stop_event)
+                    )
+                    filter_thread.daemon = True
+                    filter_thread.start()
+                    stdin_stream = p_dec.stdin
+                else:
+                    p_dec.stdout.close()
+                    stdin_stream = p_dec.stdin
             else:
                 p_restore = subprocess.Popen(
                     cmd,
@@ -2111,6 +2186,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
             raise RuntimeError(f"Streaming download failed: {e}")
         finally:
             stop_event.set()
+            if filter_thread:
+                filter_thread.join(timeout=2.0)
             try:
                 stdin_stream.close()
             except Exception:
@@ -2691,27 +2768,96 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
             write_log(log_path, f"INFO  Successfully completed backup of {success_count}/{len(db_names)} databases.")
             return folder_remote_name
         else:
-            cmd = [
-                "pg_dumpall",
-                f"--host={db['host']}", f"--port={db['port']}",
-                f"--username={db['username']}", "--no-password",
-                "--clean", "--if-exists"
-            ]
+            write_log(log_path, f"INFO  [Cluster Backup] Streaming all {len(db_names)} databases into unified archive: {remote_name}")
+            creationflags = 0x00004000 if os.name == 'nt' else 0
 
-            env = pg_env(db)
-            pg_opts = None
-            if speed_profile == "extreme":
-                pg_opts = "-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
-            elif speed_profile == "balanced":
-                pg_opts = "-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB -c max_parallel_workers_per_gather=2 -c effective_io_concurrency=4"
-            else:
-                pg_opts = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
+            def cluster_pg_feeder(target_stdin, stop_event, trk):
+                try:
+                    for idx, single_db in enumerate(db_names):
+                        if stop_event.is_set():
+                            break
+                        write_log(log_path, f"INFO  [Cluster Backup {idx+1}/{len(db_names)}] Dumping database: {single_db}")
+                        
+                        hdr = (
+                            f"\n-- >>> AUTO_BACKUP_DB_START: {single_db} <<<\n"
+                            f"SELECT 'CREATE DATABASE \"{single_db}\"' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '{single_db}')\\gexec\n"
+                            f"\\connect \"{single_db}\"\n"
+                        ).encode("utf-8")
+                        target_stdin.write(hdr)
+                        target_stdin.flush()
+                        
+                        dump_cmd = [
+                            "pg_dump",
+                            f"--host={db['host']}", f"--port={db['port']}",
+                            f"--username={db['username']}", f"--dbname={single_db}",
+                            "--no-password", "--format=plain",
+                            "--clean", "--if-exists",
+                            "--no-acl", "--no-owner",
+                            "--verbose"
+                        ]
+                        if indexing_mode == "without_index":
+                            dump_cmd += ["--section=pre-data", "--section=data"]
+                        elif indexing_mode == "only_index":
+                            dump_cmd += ["--section=post-data"]
 
-            if pg_opts and check_pg_options_supported(db, pg_opts, "postgres"):
-                env["PGOPTIONS"] = pg_opts
+                        env_db = pg_env(db)
+                        pg_opts = None
+                        if speed_profile == "extreme":
+                            pg_opts = "-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
+                        elif speed_profile == "balanced":
+                            pg_opts = "-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB -c max_parallel_workers_per_gather=2 -c effective_io_concurrency=4"
+                        else:
+                            pg_opts = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
 
-            write_log(log_path, f"INFO  [Cluster Backup] Streaming all databases to unified archive: {remote_name}")
-            return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
+                        if pg_opts and check_pg_options_supported(db, pg_opts, single_db):
+                            env_db["PGOPTIONS"] = pg_opts
+
+                        p_db = subprocess.Popen(
+                            dump_cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=open(log_path, "a"),
+                            env=env_db,
+                            creationflags=creationflags
+                        )
+                        if trk:
+                            ACTIVE_PROCESSES.setdefault(trk.job_id, []).append(p_db)
+
+                        while True:
+                            if stop_event.is_set():
+                                try: p_db.kill()
+                                except Exception: pass
+                                break
+                            chunk = p_db.stdout.read(128 * 1024)
+                            if not chunk:
+                                break
+                            target_stdin.write(chunk)
+                            if trk:
+                                trk.update_bytes(len(chunk))
+
+                        p_db.wait()
+                        if p_db.returncode != 0:
+                            write_log(log_path, f"WARN  pg_dump for '{single_db}' exited with code {p_db.returncode}")
+
+                        footer = f"\n-- >>> AUTO_BACKUP_DB_END: {single_db} <<<\n".encode("utf-8")
+                        target_stdin.write(footer)
+                        target_stdin.flush()
+                finally:
+                    try:
+                        target_stdin.close()
+                    except Exception:
+                        pass
+
+            return stream_backup_to_storage(
+                cmd=None,
+                env=pg_env(db),
+                storage=storage,
+                remote_name=remote_name,
+                log_path=log_path,
+                compression_cmd=compression_cmd,
+                tracker=tracker,
+                speed_profile=speed_profile,
+                custom_feeder=cluster_pg_feeder
+            )
 
     incremental_tables = None
     if backup_method in ("incremental", "differential"):
@@ -2794,10 +2940,29 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
 
 # ─── POSTGRESQL RESTORE ──────────────────────────────────────────────────────
 
-def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", collection: str = None, is_all: bool = False):
+def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", collection: str = None, is_all: bool = False, selected_database: str = None):
     dbname = (db.get("database_name") or "").strip()
+    sql_db_filter = None
     
-    if is_all:
+    if selected_database:
+        target_name = dbname if dbname and dbname != "__all__" else selected_database
+        if new_database:
+            create_cmd = [
+                "psql", f"--host={db['host']}", f"--port={db['port']}",
+                f"--username={db['username']}", "--no-password", "--dbname=postgres",
+                "-c", f'CREATE DATABASE "{target_name}";'
+            ]
+            subprocess.run(create_cmd, capture_output=True, env=pg_env(db), timeout=30)
+            
+        cmd = [
+            "psql",
+            f"--host={db['host']}", f"--port={db['port']}",
+            f"--username={db['username']}", f"--dbname={target_name}",
+            "--no-password",
+            "-v", "ON_ERROR_STOP=0"
+        ]
+        sql_db_filter = selected_database
+    elif is_all:
         cmd = [
             "psql",
             f"--host={db['host']}", f"--port={db['port']}",
@@ -2822,16 +2987,16 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
             "--disable-triggers",  # Prevent trigger execution during restore — huge server CPU saver
             "--verbose"
         ]
-    if not new_database:
-        cmd += ["--clean", "--if-exists"]
-        
-    if collection and collection != "full":
-        cmd += ["-t", collection]
-        
-    if indexing_mode == "without_index":
-        cmd += ["--section=pre-data", "--section=data"]
-    elif indexing_mode == "only_index":
-        cmd += ["--section=post-data"]
+        if not new_database:
+            cmd += ["--clean", "--if-exists"]
+            
+        if collection and collection != "full":
+            cmd += ["-t", collection]
+            
+        if indexing_mode == "without_index":
+            cmd += ["--section=pre-data", "--section=data"]
+        elif indexing_mode == "only_index":
+            cmd += ["--section=post-data"]
         
     settings = get_speed_settings(speed_profile)
     decompression_cmd = None
@@ -2860,12 +3025,13 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
         maint_work_mem = "128MB"
         
     pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit} -c max_parallel_maintenance_workers=4 -c client_min_messages=warning"
-    if check_pg_options_supported(db, pg_opts, dbname):
+    target_check_db = (dbname if dbname and dbname != "__all__" else (selected_database or "postgres"))
+    if check_pg_options_supported(db, pg_opts, target_check_db):
         env["PGOPTIONS"] = pg_opts
     else:
         write_log(log_path, "INFO  Connection pooler / proxy detected. Skipping PGOPTIONS for restore compatibility.")
         
-    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile)
+    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile, sql_db_filter=sql_db_filter)
 
 # ─── SOLR BACKUP & RESTORE ───────────────────────────────────────────────────
 
@@ -3052,10 +3218,22 @@ def do_backup(backup_id: str):
     write_log(log_path, f"INFO  DB: {db and db['name']} | Collection: {collection} | Storage: {storage and storage['type']}")
     log.info(f"=== BACKUP START | id={backup_id} db={db and db['name']} collection={collection} ===")
 
+    active_remote_name = [None]
+    active_folder = [None]
+
     def fail(msg):
         log.error(f"=== BACKUP FAILED | id={backup_id} | {msg} ===")
         write_log(log_path, f"ERROR {msg}")
         cancel_job(backup_id)
+        # Clean up any partial remote file / folder that may have been created
+        rn = active_remote_name[0]
+        fld = active_folder[0]
+        if rn and storage:
+            try:
+                delete_remote_backup(storage, rn, folder_name=fld)
+                write_log(log_path, f"INFO  Cleaned up incomplete backup from remote storage: {rn}")
+            except Exception as ex_del:
+                write_log(log_path, f"WARN  Could not auto-clean remote artifact after failure: {ex_del}")
         logs = read_log(log_path)
         update_backup(backup_id,
             status="failed", error=msg, logs=logs,
@@ -3133,6 +3311,10 @@ def do_backup(backup_id: str):
             folder = folder.replace("//", "/")
         if folder:
             remote_name = f"{folder}/{remote_name}"
+
+        active_remote_name[0] = remote_name
+        active_folder[0] = folder
+        update_backup(backup_id, remote_name=remote_name, folder_name=folder, compression=compression)
 
         # Initialize progress tracker
         total_size = 0
@@ -3468,7 +3650,13 @@ def do_restore(restore_id: str):
                     write_log(log_path, f"INFO  Instance restore completed: {len(objects)} databases restored.")
             else:
                 is_all = ("_all-" in remote_name or target_db.get("database_name") == "__all__")
-                run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=is_all)
+                if selected_database:
+                    write_log(log_path, f"INFO  [Single DB Restore from Unified Archive] Restoring database '{selected_database}' from {remote_name}")
+                    target_db_name = target_db.get("database_name") or selected_database
+                    restore_db = {**target_db, "database_name": target_db_name}
+                    run_pg_restore(restore_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=False, selected_database=selected_database)
+                else:
+                    run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=is_all)
         elif target_db["type"] == "solr":
             run_solr_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
         else:

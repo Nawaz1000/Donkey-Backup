@@ -136,20 +136,35 @@ def delete_backup(backup_id: str, delete_from_remote: bool = True, user=Depends(
     if not backup:
         raise HTTPException(404, "Backup not found")
         
-    if delete_from_remote and backup.get("remote_name"):
-        try:
-            storages = read_json("data/storages.json")
-            storage = next((s for s in storages if s["id"] == backup["storage_id"]), None)
-            if storage:
-                from engine import delete_remote_backup
-                delete_remote_backup(storage, backup["remote_name"], folder_name=backup.get("folder_name"))
-        except Exception as e:
-            print(f"Failed to delete remote backup: {e}")
-            error_str = str(e).lower()
-            if "not found" in error_str or "blobnotfound" in error_str or "does not exist" in error_str:
-                print("Blob already missing remotely, proceeding to delete local record.")
-            else:
-                raise HTTPException(400, f"Failed to delete remote backup: {str(e)}")
+    if delete_from_remote:
+        remote_name = backup.get("remote_name")
+        if not remote_name and backup.get("remote_path"):
+            rp = backup["remote_path"]
+            if "://" in rp:
+                parts = rp.split("://", 1)[1]
+                remote_name = parts.split("/", 1)[1] if "/" in parts else None
+        if not remote_name and backup.get("logs"):
+            import re
+            m = re.search(r"Streaming (?:backup|restore) to [^:]+:\s*([^\s\(]+)", backup["logs"])
+            if not m:
+                m = re.search(r"->\s*[a-zA-Z0-9]+://[^/]+/([^\s\n\r]+)", backup["logs"])
+            if m:
+                remote_name = m.group(1).strip()
+
+        if remote_name:
+            try:
+                storages = read_json("data/storages.json")
+                storage = next((s for s in storages if s["id"] == backup["storage_id"]), None)
+                if storage:
+                    from engine import delete_remote_backup
+                    delete_remote_backup(storage, remote_name, folder_name=backup.get("folder_name"))
+            except Exception as e:
+                print(f"Failed to delete remote backup: {e}")
+                error_str = str(e).lower()
+                if "not found" in error_str or "blobnotfound" in error_str or "does not exist" in error_str:
+                    print("Blob already missing remotely, proceeding to delete local record.")
+                else:
+                    raise HTTPException(400, f"Failed to delete remote backup: {str(e)}")
 
     backups = [b for b in backups if b["id"] != backup_id]
     write_json("data/backups.json", backups)
