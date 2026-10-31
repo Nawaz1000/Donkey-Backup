@@ -1013,6 +1013,25 @@ import shutil
 import time
 import re
 from collections import deque
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+
+def optimize_pipe_fd(stream_or_fd):
+    """
+    On Linux, increase pipe capacity from standard 64KB to 1MB (1048576 bytes)
+    to minimize context switching between subprocesses in the streaming pipeline.
+    """
+    if not fcntl or not hasattr(fcntl, "F_SETPIPE_SZ"):
+        return
+    try:
+        fd = stream_or_fd.fileno() if hasattr(stream_or_fd, "fileno") else stream_or_fd
+        fcntl.fcntl(fd, fcntl.F_SETPIPE_SZ, 1048576)
+    except Exception:
+        pass
+
 
 class ProgressTracker:
     def __init__(self, job_id: str, is_restore: bool = False, total_size: int = 0, log_path: str = None):
@@ -1024,24 +1043,46 @@ class ProgressTracker:
         self.last_pct = -1
         self.last_update_time = 0
         self.start_time = time.time()
+        self.transfer_start_time = None
         self.speed_mbps = 0.0
+        self.rate_window = deque()  # stores (timestamp, cumulative_bytes)
 
     def update_bytes(self, num_bytes: int):
-        self.bytes_processed += num_bytes
         now = time.time()
-        elapsed = max(0.1, now - self.start_time)
-        self.speed_mbps = round((self.bytes_processed / (1024 * 1024)) / elapsed, 2)
+        if self.transfer_start_time is None:
+            self.transfer_start_time = now
+            self.rate_window.append((now, self.bytes_processed))
+
+        self.bytes_processed += num_bytes
+        self.rate_window.append((now, self.bytes_processed))
+
+        # Maintain sliding window of last 1.5 - 2.0 seconds for high-precision real-time rate
+        while len(self.rate_window) > 2 and (now - self.rate_window[0][0]) > 2.0:
+            self.rate_window.popleft()
+
+        window_dt = now - self.rate_window[0][0]
+        if window_dt >= 0.2:
+            window_bytes = self.bytes_processed - self.rate_window[0][1]
+            raw_instant_speed = (window_bytes / (1024 * 1024)) / window_dt
+            if self.speed_mbps <= 0.0:
+                self.speed_mbps = round(raw_instant_speed, 1)
+            else:
+                self.speed_mbps = round(0.75 * raw_instant_speed + 0.25 * self.speed_mbps, 1)
+        else:
+            elapsed = max(0.1, now - self.transfer_start_time)
+            self.speed_mbps = round((self.bytes_processed / (1024 * 1024)) / elapsed, 1)
 
         if self.total_size > 0:
             pct = min(99, int((self.bytes_processed / self.total_size) * 100))
             self.update_pct(pct)
-        elif now - self.last_update_time >= 1.0:
-            # Periodic update every second even if total_size is not yet known
+        elif (now - self.last_update_time) >= 1.0:
             self.update_pct(self.last_pct if self.last_pct >= 0 else 0)
 
     def update_pct(self, pct: int):
         now = time.time()
-        if pct != self.last_pct or now - self.last_update_time >= 1.0:
+        time_diff = now - self.last_update_time
+        # Throttle updates: run if completed (pct=100), or every 1.0s, or if pct changed and at least 0.4s elapsed
+        if pct == 100 or time_diff >= 1.0 or (pct != self.last_pct and time_diff >= 0.4):
             self.last_pct = pct
             self.last_update_time = now
             
@@ -1081,18 +1122,23 @@ class ProgressWriter:
 
 def pipe_and_count(src, dest, tracker: ProgressTracker = None):
     try:
-        buf_size = 8 * 1024 * 1024  # 8MB chunks for ultra-high-throughput pipe
+        optimize_pipe_fd(src)
+        optimize_pipe_fd(dest)
+        buf_size = 4 * 1024 * 1024  # 4MB chunks for ultra-high-throughput pipe
         byte_acc = 0
+        last_trk_time = time.time()
         while True:
             chunk = src.read(buf_size)
             if not chunk:
                 break
+            dest.write(chunk)
             if tracker:
                 byte_acc += len(chunk)
-                if byte_acc >= 8 * 1024 * 1024:
+                now = time.time()
+                if byte_acc >= 4 * 1024 * 1024 or (now - last_trk_time) >= 0.5:
                     tracker.update_bytes(byte_acc)
                     byte_acc = 0
-            dest.write(chunk)
+                    last_trk_time = now
         if tracker and byte_acc > 0:
             tracker.update_bytes(byte_acc)
     except Exception as e:
@@ -1100,10 +1146,6 @@ def pipe_and_count(src, dest, tracker: ProgressTracker = None):
     finally:
         try:
             dest.close()
-        except Exception:
-            pass
-        try:
-            src.close()
         except Exception:
             pass
         try:
@@ -1250,14 +1292,14 @@ class QueueReader(io.RawIOBase):
         return bytes(b[:n])
 
 
-def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_size: int = 8 * 1024 * 1024, tracker: ProgressTracker = None):
+def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_size: int = 16 * 1024 * 1024, tracker: ProgressTracker = None):
     try:
+        optimize_pipe_fd(stream)
         read_buf = bytearray()
         target_chunk = max(4 * 1024 * 1024, min(chunk_size, 16 * 1024 * 1024))
+        read_block_size = 1024 * 1024  # 1MB reads from pipe
         while not stop_event.is_set():
-            # In Linux, stream.read() on a pipe returns at most 64KB per call.
-            # Accumulate until target_chunk (8MB) to eliminate GIL thrashing and prevent compressor pipe stall.
-            data = stream.read(target_chunk - len(read_buf))
+            data = stream.read(min(read_block_size, target_chunk - len(read_buf)))
             if not data:
                 if read_buf:
                     q.put(bytes(read_buf))
@@ -1288,19 +1330,19 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
 def get_speed_settings(profile: str):
     cores = os.cpu_count() or 4
     if profile == "safe":
-        return {"threads": 2, "chunk_size": 8 * 1024 * 1024, "queue_max": 8, "concurrency": 4, "mongo_parallel": 4}
+        return {"threads": 2, "chunk_size": 8 * 1024 * 1024, "queue_max": 16, "concurrency": 8, "mongo_parallel": 4}
     elif profile == "balanced":
-        return {"threads": max(2, cores // 2), "chunk_size": 32 * 1024 * 1024, "queue_max": 16, "concurrency": 16, "mongo_parallel": 8}
+        return {"threads": max(4, cores), "chunk_size": 16 * 1024 * 1024, "queue_max": 32, "concurrency": 24, "mongo_parallel": 8}
     elif profile == "extreme":
-        return {"threads": max(4, cores), "chunk_size": 64 * 1024 * 1024, "queue_max": 32, "concurrency": 32, "mongo_parallel": 16}
+        return {"threads": max(4, cores), "chunk_size": 16 * 1024 * 1024, "queue_max": 48, "concurrency": 32, "mongo_parallel": 16}
     else: # default (tuned for flash speed)
-        return {"threads": max(4, cores), "chunk_size": 48 * 1024 * 1024, "queue_max": 32, "concurrency": 24, "mongo_parallel": 16}
+        return {"threads": max(4, cores), "chunk_size": 16 * 1024 * 1024, "queue_max": 48, "concurrency": 32, "mongo_parallel": 16}
 
 def get_compressor_info(profile: str = "default", log_path: str = None) -> dict:
     settings = get_speed_settings(profile)
     threads = settings["threads"]
     if shutil.which("zstd"):
-        fast_lvl = "--fast=4" if profile in ("extreme", "default") else ("--fast=3" if profile == "balanced" else "--fast=1")
+        fast_lvl = "--fast=5" if profile in ("extreme", "default") else ("--fast=3" if profile == "balanced" else "--fast=1")
         if log_path:
             write_log(log_path, f"INFO  Using Zstandard (zstd {fast_lvl}) with {threads} threads for {profile} profile.")
         return {
@@ -1490,8 +1532,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
 
         elif storage["type"] == "s3":
             from boto3.s3.transfer import TransferConfig
-            concurrency = settings.get("concurrency", 16)
-            chunk_size = max(16 * 1024 * 1024, settings.get("chunk_size", 48 * 1024 * 1024))
+            concurrency = settings.get("concurrency", 32)
+            chunk_size = max(8 * 1024 * 1024, settings.get("chunk_size", 16 * 1024 * 1024))
             client = get_s3_client(storage, max_pool=max(64, concurrency * 2))
             transfer_config = TransferConfig(
                 multipart_threshold=chunk_size,
@@ -1531,8 +1573,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
             s3_available = res.get("s3_usable", False)
             clean_remote = remote_name.lstrip("/")
 
-            concurrency = settings.get("concurrency", 16)
-            chunk_size = max(16 * 1024 * 1024, settings.get("chunk_size", 48 * 1024 * 1024))
+            concurrency = settings.get("concurrency", 32)
+            chunk_size = max(8 * 1024 * 1024, settings.get("chunk_size", 16 * 1024 * 1024))
 
             write_log(log_path, f"INFO  Connecting to BunnyCDN storage zone '{zone}' ({res['region_name']} - S3: {s3_url}, REST: {rest_host})")
 
@@ -1814,6 +1856,9 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 if tracker:
                     ACTIVE_PROCESSES[tracker.job_id].append(p_dec)
                 
+                optimize_pipe_fd(p_dec.stdin)
+                optimize_pipe_fd(p_dec.stdout)
+
                 p_restore = subprocess.Popen(
                     cmd,
                     stdin=subprocess.PIPE if sql_db_filter else p_dec.stdout,
@@ -1827,6 +1872,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     ACTIVE_PROCESSES[tracker.job_id].append(p_restore)
 
                 if sql_db_filter:
+                    optimize_pipe_fd(p_restore.stdin)
                     def filter_worker(dec_out, rest_in, target_db, stop_ev):
                         target_clean = target_db.strip().strip('"').lower()
                         start_tag = f"-- >>> auto_backup_db_start: {target_clean} <<<"
@@ -1853,7 +1899,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                             except Exception:
                                 pass
                             try:
-                                while dec_out.read(64 * 1024):
+                                while dec_out.read(4 * 1024 * 1024):
                                     if stop_ev.is_set():
                                         break
                             except Exception:
@@ -1935,9 +1981,9 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 stdin_stream.close()
 
             elif storage["type"] == "s3":
-                concurrency = settings.get("concurrency", 16)
-                part_size = max(16 * 1024 * 1024, settings.get("chunk_size", 32 * 1024 * 1024))
-                max_in_flight = max(8, settings.get("queue_max", 12))
+                concurrency = settings.get("concurrency", 32)
+                part_size = max(8 * 1024 * 1024, settings.get("chunk_size", 16 * 1024 * 1024))
+                max_in_flight = max(16, settings.get("queue_max", 32))
                 s3_client = get_s3_client(storage, max_pool=max(64, concurrency * 2))
 
                 total_size = 0
@@ -2034,9 +2080,9 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 s3_usable = bunny_res.get("s3_usable", False)
                 clean_remote = remote_name.lstrip("/")
 
-                part_size = max(16 * 1024 * 1024, settings.get("chunk_size", 32 * 1024 * 1024))
-                concurrency = settings.get("concurrency", 16)
-                max_in_flight = max(8, settings.get("queue_max", 12))
+                part_size = max(8 * 1024 * 1024, settings.get("chunk_size", 16 * 1024 * 1024))
+                concurrency = settings.get("concurrency", 32)
+                max_in_flight = max(16, settings.get("queue_max", 32))
 
                 # Setup persistent clients
                 s3_client = None
@@ -2803,11 +2849,11 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
                         env_db = pg_env(db)
                         pg_opts = None
                         if speed_profile == "extreme":
-                            pg_opts = "-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
+                            pg_opts = "-c statement_timeout=0 -c work_mem=256MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
                         elif speed_profile == "balanced":
-                            pg_opts = "-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB -c max_parallel_workers_per_gather=2 -c effective_io_concurrency=4"
+                            pg_opts = "-c statement_timeout=0 -c work_mem=64MB -c maintenance_work_mem=256MB -c max_parallel_workers_per_gather=2 -c effective_io_concurrency=8"
                         else:
-                            pg_opts = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
+                            pg_opts = "-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
 
                         if pg_opts and check_pg_options_supported(db, pg_opts, single_db):
                             env_db["PGOPTIONS"] = pg_opts
@@ -2822,17 +2868,32 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
                         if trk:
                             ACTIVE_PROCESSES.setdefault(trk.job_id, []).append(p_db)
 
+                        optimize_pipe_fd(p_db.stdout)
+                        optimize_pipe_fd(target_stdin)
+
+                        buf_size = 4 * 1024 * 1024
+                        byte_acc = 0
+                        last_trk_time = time.time()
+
                         while True:
                             if stop_event.is_set():
                                 try: p_db.kill()
                                 except Exception: pass
                                 break
-                            chunk = p_db.stdout.read(128 * 1024)
+                            chunk = p_db.stdout.read(buf_size)
                             if not chunk:
                                 break
                             target_stdin.write(chunk)
                             if trk:
-                                trk.update_bytes(len(chunk))
+                                byte_acc += len(chunk)
+                                now = time.time()
+                                if byte_acc >= 4 * 1024 * 1024 or (now - last_trk_time) >= 0.5:
+                                    trk.update_bytes(byte_acc)
+                                    byte_acc = 0
+                                    last_trk_time = now
+
+                        if trk and byte_acc > 0:
+                            trk.update_bytes(byte_acc)
 
                         p_db.wait()
                         if p_db.returncode != 0:

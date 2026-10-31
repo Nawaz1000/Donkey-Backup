@@ -121,6 +121,7 @@ async def scheduler_loop():
                         "indexing_mode": s.get("indexing_mode", "with_index"),
                         "send_notifications": True,
                         "speed_profile": profile,
+                        "archive_mode": s.get("archive_mode", "single"),
                         "status": "running",
                         "size_mb": None,
                         "remote_path": None,

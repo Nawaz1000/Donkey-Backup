@@ -4754,8 +4754,9 @@
               const liveSpeed = (logData && logData.speed_mbps) || (job && job.speed_mbps);
               if (liveSpeed && liveSpeed > 0) {
                 speedEl.textContent = liveSpeed > 1024 ? (liveSpeed / 1024).toFixed(1) + ' GB/s' : liveSpeed.toFixed(1) + ' MB/s';
-              } else if (backupSizeMB && elapsedSec > 0 && actualPct > 0) {
-                const speed = ((actualPct / 100 * backupSizeMB) / elapsedSec); // MB/s
+              } else if (elapsedSec > 0 && (processedMB > 0 || (backupSizeMB && actualPct > 0))) {
+                const mb = processedMB > 0 ? processedMB : ((actualPct / 100) * backupSizeMB);
+                const speed = mb / elapsedSec; // MB/s
                 speedEl.textContent = speed > 1024 ? (speed / 1024).toFixed(1) + ' GB/s' : speed.toFixed(1) + ' MB/s';
               } else {
                 speedEl.textContent = '—';
