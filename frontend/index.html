@@ -3140,7 +3140,7 @@
         <td style="padding:16px 24px;"><span style="display:inline-flex; align-items:center; gap:4px; ${badgeStyle}"><i data-lucide="${statusIcon}" style="width:12px;height:12px"></i> ${b.status.charAt(0).toUpperCase() + b.status.slice(1)}</span></td>
         <td style="padding:16px 24px; text-align:right;">
           <div style="display:inline-flex; gap:8px; justify-content:flex-end; align-items:center;">
-            <button class="btn btn-secondary btn-sm btn-icon" onclick="deleteBackup('${b.id}', false)" title="Delete Local Record Only" style="width:28px; height:28px; padding:0;"><i data-lucide="trash" style="width:12px;height:12px"></i></button>
+            <button class="btn btn-secondary btn-sm btn-icon" onclick="deleteBackup('${b.id}', true)" title="Delete from Cloud & Local" style="width:28px; height:28px; padding:0;"><i data-lucide="trash" style="width:12px;height:12px"></i></button>
             <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}', true)" title="Delete from Cloud Bucket & Local" style="width:28px; height:28px; padding:0;"><i data-lucide="cloud-off" style="width:12px;height:12px"></i></button>
           </div>
         </td>
@@ -4134,7 +4134,7 @@
           ${item.is_restore ? `
             <button class="btn btn-icon" title="Delete Restore Record" style="background:transparent; border:none; color:var(--danger); cursor:pointer; width:28px; height:28px;" onclick="deleteRestoreRecord('${item.id}')"><i data-lucide="trash" style="width:15px;height:15px;"></i></button>
           ` : `
-            <button class="btn btn-icon" title="Delete Record Only" style="background:transparent; border:none; color:var(--text2); cursor:pointer; width:28px; height:28px;" onclick="deleteBackup('${item.id}', false)"><i data-lucide="trash" style="width:15px;height:15px;"></i></button>
+            <button class="btn btn-icon" title="Delete Record Only" style="background:transparent; border:none; color:var(--text2); cursor:pointer; width:28px; height:28px;" onclick="deleteBackup('${item.id}', true)"><i data-lucide="trash" style="width:15px;height:15px;"></i></button>
             <button class="btn btn-icon" title="Delete from Cloud Bucket & Local" style="background:transparent; border:none; color:var(--danger); cursor:pointer; width:28px; height:28px;" onclick="deleteBackup('${item.id}', true)"><i data-lucide="cloud-off" style="width:15px;height:15px;"></i></button>
           `}
         </div>
@@ -4757,9 +4757,9 @@
       });
     }
 
-    async function deleteBackup(id, deleteFromRemote = false) {
+    async function deleteBackup(id, deleteFromRemote = true) {
       const msg = deleteFromRemote
-        ? 'Delete this backup history AND remove the file from remote cloud storage?'
+        ? 'Permanently delete this backup and remove all files and folders from cloud storage?'
         : 'Delete this backup history record? (Remote file will be kept)';
       appConfirm('Delete Backup', msg, async () => {
         try {

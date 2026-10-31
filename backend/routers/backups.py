@@ -124,7 +124,7 @@ def get_backup_logs(backup_id: str, user=Depends(get_current_user)):
     }
 
 @router.delete("/{backup_id}")
-def delete_backup(backup_id: str, delete_from_remote: bool = False, user=Depends(get_current_user)):
+def delete_backup(backup_id: str, delete_from_remote: bool = True, user=Depends(get_current_user)):
     backups = read_json("data/backups.json")
     dbs = read_json("data/databases.json")
     user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}

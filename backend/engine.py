@@ -259,9 +259,17 @@ def get_bunny_host(region_or_storage: any = None) -> str:
     if isinstance(region_or_storage, dict):
         if "_resolved_bunny" in region_or_storage and region_or_storage["_resolved_bunny"].get("rest_host"):
             return region_or_storage["_resolved_bunny"]["rest_host"]
-        reg = region_or_storage.get("bunny_region_url") or region_or_storage.get("bunny_region") or ""
+        reg = (region_or_storage.get("bunny_region_url") or region_or_storage.get("bunny_region") or "").strip()
+        if not reg and region_or_storage.get("bunny_storage_zone"):
+            try:
+                res = verify_and_resolve_bunny(region_or_storage)
+                if res and res.get("success"):
+                    region_or_storage["_resolved_bunny"] = res
+                    return res["rest_host"]
+            except Exception:
+                pass
     else:
-        reg = region_or_storage or ""
+        reg = (region_or_storage or "").strip()
     rest_host, _ = resolve_bunny_hosts(reg)
     return rest_host
 
@@ -480,15 +488,31 @@ def list_storage_objects(storage: dict, prefix: str) -> list:
         return results
     elif stype == "bunny":
         import requests
-        from engine import resolve_bunny_hosts
-        bunny_host = get_bunny_host(storage)
-        bunny_key = get_bunny_key(storage)
+        bunny_res = storage.get("_resolved_bunny")
+        if not bunny_res or not bunny_res.get("success"):
+            bunny_res = verify_and_resolve_bunny(storage)
+            if bunny_res and bunny_res.get("success"):
+                storage["_resolved_bunny"] = bunny_res
+
+        if bunny_res and bunny_res.get("success"):
+            bunny_host = bunny_res["rest_host"]
+            bunny_key = bunny_res["bunny_key"]
+            zone = bunny_res["zone"]
+            s3_url = bunny_res["s3_url"]
+            region_code = bunny_res.get("region_code") or "de"
+        else:
+            bunny_host = get_bunny_host(storage)
+            bunny_key = get_bunny_key(storage)
+            zone = (storage.get("bunny_storage_zone") or "").strip()
+            _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or "")
+            region_code = "de"
+
         headers = {"AccessKey": bunny_key, "Accept": "application/json"}
         results = []
 
         def list_bunny_dir(subpath=""):
             clean = subpath.strip("/")
-            url = f"https://{bunny_host}/{storage['bunny_storage_zone']}/{clean}/" if clean else f"https://{bunny_host}/{storage['bunny_storage_zone']}/"
+            url = f"https://{bunny_host}/{zone}/{clean}/" if clean else f"https://{bunny_host}/{zone}/"
             resp = requests.get(url, headers=headers, timeout=25)
             if resp.status_code == 200:
                 for item in resp.json():
@@ -512,14 +536,12 @@ def list_storage_objects(storage: dict, prefix: str) -> list:
             try:
                 import boto3
                 from botocore.config import Config
-                _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
-                zone = (storage.get("bunny_storage_zone") or "").strip()
                 s3 = boto3.client(
                     "s3",
                     endpoint_url=s3_url,
                     aws_access_key_id=zone,
                     aws_secret_access_key=bunny_key,
-                    region_name="de",
+                    region_name=region_code,
                     config=Config(s3={'addressing_style': 'path'}, signature_version="s3v4", retries={'max_attempts': 2, 'mode': 'standard'}, connect_timeout=10, read_timeout=15)
                 )
                 paginator = s3.get_paginator('list_objects_v2')
@@ -754,54 +776,110 @@ def delete_remote_backup(storage: dict, remote_name: str, folder_name: str = Non
 
     if stype == "bunny":
         import requests
-        bunny_host = get_bunny_host(storage)
-        bunny_key = get_bunny_key(storage)
-        zone = (storage.get("bunny_storage_zone") or "").strip()
+        import boto3
+        from botocore.config import Config
+
+        # 1. Ensure Bunny zone and regional endpoints are accurately auto-detected
+        bunny_res = storage.get("_resolved_bunny")
+        if not bunny_res or not bunny_res.get("success"):
+            bunny_res = verify_and_resolve_bunny(storage)
+            if bunny_res and bunny_res.get("success"):
+                storage["_resolved_bunny"] = bunny_res
+
+        if bunny_res and bunny_res.get("success"):
+            bunny_host = bunny_res["rest_host"]
+            bunny_key = bunny_res["bunny_key"]
+            zone = bunny_res["zone"]
+            s3_url = bunny_res["s3_url"]
+            region_code = bunny_res.get("region_code") or "de"
+        else:
+            bunny_host = get_bunny_host(storage)
+            bunny_key = get_bunny_key(storage)
+            zone = (storage.get("bunny_storage_zone") or "").strip()
+            _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or "")
+            region_code = "de"
+
         headers = {"AccessKey": bunny_key}
 
-        # 1. Discover all files/objects associated with this backup
+        # Initialize S3 client for Bunny
+        s3_client = None
+        try:
+            s3_client = boto3.client(
+                "s3",
+                endpoint_url=s3_url,
+                aws_access_key_id=zone,
+                aws_secret_access_key=bunny_key,
+                region_name=region_code,
+                config=Config(
+                    s3={'addressing_style': 'path'},
+                    signature_version="s3v4",
+                    retries={'max_attempts': 3, 'mode': 'standard'},
+                    connect_timeout=10,
+                    read_timeout=15,
+                    max_pool_connections=32
+                )
+            )
+        except Exception as ex:
+            log.warning(f"[BunnyCDN] S3 client setup note for delete: {ex}")
+
+        # 2. Discover all objects associated with this backup
         list_prefix = (backup_dir + "/") if backup_dir else remote_name
-        objects = list_storage_objects(storage, list_prefix)
-        if clean_rn not in objects and not remote_name.endswith("/"):
-            objects.append(clean_rn)
+        objects = set(list_storage_objects(storage, list_prefix))
 
-        # Delete all individual files
-        for obj in objects:
-            del_url = f"https://{bunny_host}/{zone}/{obj.lstrip('/')}"
+        # Always include the direct remote_name and .indexes.json file if not directory
+        if not remote_name.endswith("/"):
+            objects.add(clean_rn)
+            objects.add(clean_rn + ".indexes.json")
+
+        # Also discover objects via S3 paginator to ensure no files are missed
+        if s3_client:
             try:
-                r = requests.delete(del_url, headers=headers, timeout=25)
-                log.info(f"[BunnyCDN] Deleted file {obj} (status {r.status_code})")
-            except Exception as e:
-                log.warning(f"[BunnyCDN] Failed to delete file {obj}: {e}")
+                paginator = s3_client.get_paginator('list_objects_v2')
+                for page in paginator.paginate(Bucket=zone, Prefix=list_prefix):
+                    for item in page.get("Contents", []):
+                        objects.add(item["Key"])
+            except Exception as s3_list_err:
+                log.warning(f"[BunnyCDN] S3 list objects warning: {s3_list_err}")
 
-        # 2. Delete the backup directory itself from BunnyCDN Edge Storage!
-        # BunnyCDN Edge Storage REST API deletes an entire directory when a DELETE
-        # request is sent with a trailing slash.
+        # 3. Delete all individual files via both S3 and REST
+        for obj in objects:
+            clean_obj = obj.lstrip("/")
+            if s3_client:
+                try:
+                    s3_client.delete_object(Bucket=zone, Key=clean_obj)
+                    log.info(f"[BunnyCDN S3] Deleted object {clean_obj}")
+                except Exception as s3_del_err:
+                    log.warning(f"[BunnyCDN S3] Failed to delete object {clean_obj}: {s3_del_err}")
+
+            del_url = f"https://{bunny_host}/{zone}/{clean_obj}"
+            try:
+                r = requests.delete(del_url, headers=headers, timeout=20)
+                log.info(f"[BunnyCDN REST] Deleted file {clean_obj} (status {r.status_code})")
+            except Exception as e:
+                log.warning(f"[BunnyCDN REST] Failed to delete file {clean_obj}: {e}")
+
+        # 4. Recursively delete the entire backup directory from BunnyCDN Edge Storage!
+        # When sending a DELETE request to a path with a trailing slash, Bunny.net
+        # deletes the entire directory and all files inside it.
         if backup_dir:
             clean_dir = backup_dir.strip("/")
+
+            # Delete via REST API directory endpoint
             del_folder_url = f"https://{bunny_host}/{zone}/{clean_dir}/"
             try:
                 r = requests.delete(del_folder_url, headers=headers, timeout=25)
-                log.info(f"[BunnyCDN] Deleted directory {clean_dir}/ (status {r.status_code})")
+                log.info(f"[BunnyCDN REST] Deleted directory {clean_dir}/ (status {r.status_code})")
             except Exception as e:
-                log.warning(f"[BunnyCDN] Failed to delete directory {clean_dir}/: {e}")
+                log.warning(f"[BunnyCDN REST] Failed to delete directory {clean_dir}/: {e}")
 
-            # Also attempt to delete virtual folder marker via S3 if present
-            try:
-                import boto3
-                from botocore.config import Config
-                _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
-                s3 = boto3.client(
-                    "s3",
-                    endpoint_url=s3_url,
-                    aws_access_key_id=zone,
-                    aws_secret_access_key=bunny_key,
-                    region_name="de",
-                    config=Config(s3={'addressing_style': 'path'}, signature_version="s3v4", retries={'max_attempts': 2, 'mode': 'standard'}, connect_timeout=10, read_timeout=15)
-                )
-                s3.delete_object(Bucket=zone, Key=f"{clean_dir}/")
-            except Exception:
-                pass
+            # Also delete virtual folder markers via S3
+            if s3_client:
+                for marker in [f"{clean_dir}/", clean_dir]:
+                    try:
+                        s3_client.delete_object(Bucket=zone, Key=marker)
+                        log.info(f"[BunnyCDN S3] Deleted folder marker {marker}")
+                    except Exception:
+                        pass
 
     elif stype == "s3":
         s3 = get_s3_client(storage)
