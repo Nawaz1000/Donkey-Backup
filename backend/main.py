@@ -90,10 +90,10 @@ async def scheduler_loop():
                     s["next_run"] = calculate_next_run(s, now)
                     modified = True
                     
-                    profile = s.get("speed_profile", "default")
-                    if profile == "default" and 0 <= now.hour < 6:
+                    profile = s.get("speed_profile") or "extreme"
+                    if profile in ("default", ""):
                         profile = "extreme"
-                        print("Night-time window detected. Overriding speed_profile to 'extreme'.")
+                    print(f"Scheduled backup running with high-performance profile: '{profile}'.")
                     
                     dbs = read_json("data/databases.json")
                     db = next((d for d in dbs if d["id"] == s["database_id"]), {})

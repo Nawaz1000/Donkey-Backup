@@ -17,7 +17,7 @@ class ScheduleCreate(BaseModel):
     enabled: bool = True
     backup_method: Literal["full", "incremental", "differential"] = "full"
     incremental_field: Optional[str] = None
-    speed_profile: Literal["default", "safe", "balanced", "extreme"] = "default"
+    speed_profile: Literal["default", "safe", "balanced", "extreme"] = "extreme"
     timezone_offset: int = 0
     database_name: Optional[str] = None
     collection: Optional[str] = None

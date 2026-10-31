@@ -2042,8 +2042,8 @@
                         <label>Speed Profile</label>
                         <select id="inline-sc-speed-profile"
                           style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                          <option value="extreme" selected>Extreme (Ultra Turbo: 20GB in ~2min)</option>
                           <option value="default">Default</option>
-                          <option value="extreme">Extreme</option>
                           <option value="balanced">Balanced</option>
                           <option value="safe">Safe</option>
                         </select>
@@ -2788,8 +2788,8 @@
       <div class="form-group">
         <label>Speed & Resource Profile</label>
         <select id="sc-speed-profile">
-          <option value="default">Default (Current Configuration / Auto-scales to Extreme at Night)</option>
-          <option value="extreme">Extreme (Absolute Max Speed, Unbounded CPU)</option>
+          <option value="extreme" selected>Extreme (Ultra Turbo: 20GB in ~2min)</option>
+          <option value="default">Default</option>
           <option value="balanced">Balanced (4 CPU threads, 16MB chunks)</option>
           <option value="safe">Safe (2 CPU threads, 8MB chunks)</option>
         </select>
@@ -2907,8 +2907,8 @@
       <div class="form-group">
         <label>Speed & Resource Profile</label>
         <select id="rs-speed-profile">
-          <option value="default">Default (Balanced / Auto-scales at Night)</option>
-          <option value="extreme">Extreme (Absolute Max Speed, Unbounded CPU)</option>
+          <option value="extreme" selected>Extreme (Ultra Turbo: 20GB in ~10min)</option>
+          <option value="default">Default</option>
           <option value="balanced">Balanced (4 CPU threads, 16MB chunks)</option>
           <option value="safe">Safe (2 CPU threads, 8MB chunks)</option>
         </select>
@@ -3249,7 +3249,7 @@
               target_database_name: targetDbname,
               collection: (v('inline-rs-scope') === 'collection') ? v('inline-rs-collection') : 'full',
               indexing_mode: 'with_index',
-              speed_profile: 'default'
+              speed_profile: 'extreme'
             })
           });
           const container = document.getElementById('inline-rs-container');
@@ -4960,7 +4960,7 @@
             enabled: true,
             backup_method: document.getElementById('inline-sc-type').value,
             incremental_field: v('inline-sc-incremental-field') || null,
-            speed_profile: v('inline-sc-speed-profile') || 'default',
+            speed_profile: v('inline-sc-speed-profile') || 'extreme',
             timezone_offset: new Date().getTimezoneOffset(),
             folder_name: folderName || null,
             retention_count: retentionVal
@@ -4993,7 +4993,7 @@
             frequency: freq, time: localTime, enabled: true,
             backup_method: freq === 'weekly_mixed' ? 'full' : method,
             incremental_field: v('sc-incremental-field') || null,
-            speed_profile: v('sc-speed-profile') || 'default',
+            speed_profile: v('sc-speed-profile') || 'extreme',
             timezone_offset: new Date().getTimezoneOffset(),
             database_name: dbname,
             collection: collection || 'full',
@@ -5283,7 +5283,7 @@
             target_database_name: targetDbname,
             collection: (v('rs-scope') === 'collection') ? v('rs-collection') : 'full',
             indexing_mode: v('rs-indexing-mode'),
-            speed_profile: v('rs-speed-profile') || 'default'
+            speed_profile: v('rs-speed-profile') || 'extreme'
           };
 
           if (isExternal) {

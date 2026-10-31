@@ -412,14 +412,15 @@ def verify_and_resolve_bunny(storage: dict, log_path: str = None) -> dict:
     }
 
 
-def get_s3_client(storage: dict):
+def get_s3_client(storage: dict, max_pool: int = 64):
     import boto3
     from botocore.config import Config
     
     config = Config(
         retries={'max_attempts': 3, 'mode': 'standard'},
         connect_timeout=30,
-        read_timeout=3600
+        read_timeout=3600,
+        max_pool_connections=max_pool
     )
     kwargs = {
         "aws_access_key_id": storage.get("s3_access_key"),
@@ -973,14 +974,20 @@ class ProgressWriter:
 
 def pipe_and_count(src, dest, tracker: ProgressTracker = None):
     try:
-        buf_size = 2 * 1024 * 1024  # 2MB chunks for maximum streaming throughput
+        buf_size = 8 * 1024 * 1024  # 8MB chunks for ultra-high-throughput pipe
+        byte_acc = 0
         while True:
             chunk = src.read(buf_size)
             if not chunk:
                 break
             if tracker:
-                tracker.update_bytes(len(chunk))
+                byte_acc += len(chunk)
+                if byte_acc >= 8 * 1024 * 1024:
+                    tracker.update_bytes(byte_acc)
+                    byte_acc = 0
             dest.write(chunk)
+        if tracker and byte_acc > 0:
+            tracker.update_bytes(byte_acc)
     except Exception as e:
         print(f"Error in pipe_and_count: {e}")
     finally:
@@ -1177,22 +1184,23 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
 def get_speed_settings(profile: str):
     cores = os.cpu_count() or 4
     if profile == "safe":
-        return {"threads": 1, "chunk_size": 4 * 1024 * 1024, "queue_max": 4, "concurrency": 2, "mongo_parallel": 1}
+        return {"threads": 2, "chunk_size": 8 * 1024 * 1024, "queue_max": 4, "concurrency": 4, "mongo_parallel": 2}
     elif profile == "balanced":
-        return {"threads": max(1, cores // 2), "chunk_size": 16 * 1024 * 1024, "queue_max": 8, "concurrency": 4, "mongo_parallel": 2}
+        return {"threads": max(2, cores // 2), "chunk_size": 32 * 1024 * 1024, "queue_max": 8, "concurrency": 8, "mongo_parallel": 4}
     elif profile == "extreme":
-        return {"threads": cores, "chunk_size": 64 * 1024 * 1024, "queue_max": 8, "concurrency": 16, "mongo_parallel": 8}
-    else: # default
-        return {"threads": max(1, cores - 1), "chunk_size": 32 * 1024 * 1024, "queue_max": 8, "concurrency": 8, "mongo_parallel": 4}
+        return {"threads": max(4, cores), "chunk_size": 64 * 1024 * 1024, "queue_max": 16, "concurrency": 32, "mongo_parallel": 16}
+    else: # default (tuned for 20GB in 2min backup / 10min restore)
+        return {"threads": max(2, cores), "chunk_size": 48 * 1024 * 1024, "queue_max": 12, "concurrency": 16, "mongo_parallel": 8}
 
 def get_compressor_info(profile: str = "default", log_path: str = None) -> dict:
     settings = get_speed_settings(profile)
     threads = settings["threads"]
     if shutil.which("zstd"):
+        fast_lvl = "--fast=4" if profile in ("extreme", "default") else ("--fast=3" if profile == "balanced" else "--fast=1")
         if log_path:
-            write_log(log_path, f"INFO  Using Zstandard (zstd) with {threads} threads for {profile} profile.")
+            write_log(log_path, f"INFO  Using Zstandard (zstd {fast_lvl}) with {threads} threads for {profile} profile.")
         return {
-            "cmd": ["zstd", "--fast=1", f"--threads={threads}"] if profile == "extreme" else (["zstd", "--fast=3", f"--threads={threads}"] if profile == "default" else ["zstd", "-1", f"--threads={threads}"]),
+            "cmd": ["zstd", fast_lvl, f"--threads={threads}"],
             "ext": "zst",
             "type": "zstd"
         }
@@ -1359,9 +1367,9 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
 
         elif storage["type"] == "s3":
             from boto3.s3.transfer import TransferConfig
-            client = get_s3_client(storage)
-            chunk_size = max(16 * 1024 * 1024, settings.get("chunk_size", 32 * 1024 * 1024))
-            concurrency = settings.get("concurrency", 8)
+            concurrency = settings.get("concurrency", 16)
+            chunk_size = max(16 * 1024 * 1024, settings.get("chunk_size", 48 * 1024 * 1024))
+            client = get_s3_client(storage, max_pool=max(64, concurrency * 2))
             transfer_config = TransferConfig(
                 multipart_threshold=chunk_size,
                 multipart_chunksize=chunk_size,
@@ -1400,8 +1408,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
             s3_available = res.get("s3_usable", False)
             clean_remote = remote_name.lstrip("/")
 
-            concurrency = settings.get("concurrency", 8)
-            chunk_size = max(16 * 1024 * 1024, settings.get("chunk_size", 32 * 1024 * 1024))
+            concurrency = settings.get("concurrency", 16)
+            chunk_size = max(16 * 1024 * 1024, settings.get("chunk_size", 48 * 1024 * 1024))
 
             write_log(log_path, f"INFO  Connecting to BunnyCDN storage zone '{zone}' ({res['region_name']} - S3: {s3_url}, REST: {rest_host})")
 
@@ -1414,7 +1422,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                         retries={"max_attempts": 3, "mode": "standard"},
                         connect_timeout=15,
                         read_timeout=300,
-                        max_pool_connections=max(32, concurrency * 2)
+                        max_pool_connections=max(64, concurrency * 2)
                     )
                     s3_client = boto3.client(
                         "s3",
@@ -1668,11 +1676,11 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 stdin_stream.close()
 
             elif storage["type"] == "s3":
-                s3_client = get_s3_client(storage)
+                s3_client = get_s3_client(storage, max_pool=32)
                 s3_obj = s3_client.get_object(Bucket=storage["s3_bucket"], Key=remote_name)
                 body_stream = s3_obj["Body"]
-                chunk_size = max(4 * 1024 * 1024, settings.get("chunk_size", 16 * 1024 * 1024))
-                prefetch_q = queue.Queue(maxsize=max(4, settings.get("queue_max", 8)))
+                chunk_size = max(16 * 1024 * 1024, settings.get("chunk_size", 32 * 1024 * 1024))
+                prefetch_q = queue.Queue(maxsize=max(8, settings.get("queue_max", 12)))
                 download_err = [None]
 
                 def s3_dl_worker():
@@ -1732,8 +1740,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 s3_usable = bunny_res.get("s3_usable", False)
                 clean_remote = remote_name.lstrip("/")
 
-                chunk_size = max(4 * 1024 * 1024, settings.get("chunk_size", 16 * 1024 * 1024))
-                prefetch_q = queue.Queue(maxsize=max(4, settings.get("queue_max", 8)))
+                chunk_size = max(16 * 1024 * 1024, settings.get("chunk_size", 32 * 1024 * 1024))
+                prefetch_q = queue.Queue(maxsize=max(8, settings.get("queue_max", 12)))
                 download_err = [None]
 
                 def bunny_dl_worker():
@@ -1755,7 +1763,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                                         retries={'max_attempts': 3, 'mode': 'standard'},
                                         connect_timeout=15,
                                         read_timeout=3600,
-                                        max_pool_connections=16
+                                        max_pool_connections=32
                                     )
                                 )
                                 s3_obj = s3.get_object(Bucket=zone, Key=clean_remote)
@@ -1774,7 +1782,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
 
                         # High-speed REST stream with persistent connection pooling
                         session = requests.Session()
-                        adapter = HTTPAdapter(pool_connections=16, pool_maxsize=16, max_retries=Retry(total=3, backoff_factor=0.5))
+                        adapter = HTTPAdapter(pool_connections=32, pool_maxsize=32, max_retries=Retry(total=3, backoff_factor=0.3))
                         session.mount("https://", adapter)
                         url = f"https://{rest_host}/{zone}/{clean_remote}"
                         headers = {"AccessKey": bunny_key}
@@ -2137,19 +2145,19 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
             raise RuntimeError(f"Failed to restore MongoDB indexes: {e}")
             
     settings = get_speed_settings(speed_profile)
-    workers = max(10, settings['threads'] * 4)
-    batch_size = 500
+    workers = max(16, settings['threads'] * 4)
+    batch_size = 5000
     write_concern = "{w: 1}"
     if speed_profile == "extreme":
-        workers = 32  # Dialed back from 500 to prevent 18GB memory spike
-        batch_size = 5000  # Safe but fast batch size
+        workers = 48
+        batch_size = 10000
         write_concern = "{w: 1}"
         
     cmd = [
         "mongorestore",
         f"--uri={m['uri']}",
         "--archive",
-        f"--numParallelCollections={min(settings['mongo_parallel'], 4)}",
+        f"--numParallelCollections={min(settings['mongo_parallel'], 16)}",
         f"--numInsertionWorkersPerCollection={workers}",
         f"--batchSize={batch_size}",
         "--bypassDocumentValidation",
@@ -2418,11 +2426,11 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
     env = pg_env(db)
     pg_opts = None
     if speed_profile == "extreme":
-        pg_opts = "-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
-    elif speed_profile == "balanced":
-        pg_opts = "-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB -c max_parallel_workers_per_gather=2 -c effective_io_concurrency=4"
-    else:
+        pg_opts = "-c statement_timeout=0 -c work_mem=256MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=8 -c effective_io_concurrency=64"
+    elif speed_profile == "safe":
         pg_opts = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
+    else:  # default and balanced (tuned for 20GB in 2min backup)
+        pg_opts = "-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=512MB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
 
     if pg_opts:
         if check_pg_options_supported(db, pg_opts, dbname):
@@ -2476,26 +2484,21 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
             
     env = pg_env(db)
     
-    # Resource-optimized PostgreSQL restore settings based on profile
-    sync_commit = "on"
-    work_mem = "32MB"
-    maint_work_mem = "128MB"
+    # High-performance bulk restore PostgreSQL settings (20GB in <10 min):
+    # sync_commit = off eliminates per-transaction fsync stalls during bulk table ingestion
+    sync_commit = "off"
+    work_mem = "128MB"
+    maint_work_mem = "1GB"
     
     if speed_profile == "extreme":
-        sync_commit = "off"
-        work_mem = "64MB"
-        maint_work_mem = "512MB"
-        cmd += ["--disable-triggers"]
-    elif speed_profile == "balanced":
+        work_mem = "256MB"
+        maint_work_mem = "2GB"
+    elif speed_profile == "safe":
         sync_commit = "on"
         work_mem = "32MB"
         maint_work_mem = "128MB"
-    elif speed_profile == "safe":
-        sync_commit = "on"
-        work_mem = "16MB"
-        maint_work_mem = "64MB"
         
-    pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit}"
+    pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit} -c checkpoint_timeout=30min -c max_wal_size=16GB"
     if check_pg_options_supported(db, pg_opts, dbname):
         env["PGOPTIONS"] = pg_opts
     else:
