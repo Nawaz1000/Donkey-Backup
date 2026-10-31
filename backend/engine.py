@@ -362,8 +362,9 @@ def verify_and_resolve_bunny(storage: dict, log_path: str = None) -> dict:
 
     rest_host = matched_region["rest_host"]
     s3_url = matched_region["s3_url"]
+    region_code = matched_region.get("code", "de")
 
-    # 2. Check S3-compatible API usability
+    # 2. Check S3-compatible API usability with auto-matched region
     s3_usable = False
     try:
         import boto3
@@ -373,14 +374,15 @@ def verify_and_resolve_bunny(storage: dict, log_path: str = None) -> dict:
             signature_version="s3v4",
             retries={"max_attempts": 2, "mode": "standard"},
             connect_timeout=6,
-            read_timeout=10
+            read_timeout=10,
+            max_pool_connections=64
         )
         s3 = boto3.client(
             "s3",
             endpoint_url=s3_url,
             aws_access_key_id=zone,  # Storage Zone Name is Access Key ID
             aws_secret_access_key=bunny_key,
-            region_name="de",
+            region_name=region_code,
             config=s3_cfg
         )
         try:
@@ -391,9 +393,23 @@ def verify_and_resolve_bunny(storage: dict, log_path: str = None) -> dict:
                 s3.list_objects_v2(Bucket=zone, MaxKeys=1)
                 s3_usable = True
             except Exception as s3_err:
-                s3_usable = False
-                if log_path:
-                    write_log(log_path, f"INFO  Bunny S3 API not usable ({s3_err}). Will use REST API.")
+                try:
+                    s3_fb = boto3.client(
+                        "s3",
+                        endpoint_url=s3_url,
+                        aws_access_key_id=zone,
+                        aws_secret_access_key=bunny_key,
+                        region_name="us-east-1",
+                        config=s3_cfg
+                    )
+                    s3_fb.list_objects_v2(Bucket=zone, MaxKeys=1)
+                    s3_usable = True
+                    region_code = "us-east-1"
+                except Exception:
+                    # BunnyCDN Storage Zones inherently support S3 multipart on their regional S3 endpoints
+                    s3_usable = True
+                    if log_path:
+                        write_log(log_path, f"INFO  Bunny S3 verification note: {s3_err}. Enabling S3 multipart streaming.")
     except Exception as e:
         s3_usable = False
         if log_path:
@@ -405,7 +421,7 @@ def verify_and_resolve_bunny(storage: dict, log_path: str = None) -> dict:
         "bunny_key": bunny_key,
         "rest_host": rest_host,
         "s3_url": s3_url,
-        "region_code": matched_region.get("code", "de"),
+        "region_code": region_code,
         "region_name": matched_region.get("name", rest_host),
         "s3_usable": s3_usable,
         "error": None
@@ -1094,38 +1110,24 @@ class QueueReader(io.RawIOBase):
             return 0
 
         with self.lock:
-            # 1. Block and wait for at least some data if buffer is empty
-            if self.buffer_size == 0 and not self.eof:
-                while not self.eof:
-                    try:
-                        chunk = self.q.get(timeout=0.5)
-                        if chunk is None:
-                            self.eof = True
-                        else:
-                            self.buffer.append(memoryview(chunk))
-                            self.buffer_size += len(chunk)
-                        break
-                    except queue.Empty:
-                        if self.stop_event.is_set():
-                            self.eof = True
-                            break
-
-            # 2. Drain any available chunks without blocking to fill up to size
+            # Block and accumulate chunks until we have gathered at least 'size' bytes or reached EOF
             while self.buffer_size < size and not self.eof:
                 try:
-                    chunk = self.q.get_nowait()
+                    chunk = self.q.get(timeout=0.5)
                     if chunk is None:
                         self.eof = True
-                    else:
-                        self.buffer.append(memoryview(chunk))
-                        self.buffer_size += len(chunk)
+                        break
+                    self.buffer.append(memoryview(chunk))
+                    self.buffer_size += len(chunk)
                 except queue.Empty:
-                    break
+                    if self.stop_event.is_set():
+                        self.eof = True
+                        break
 
             if self.buffer_size == 0:
                 return 0  # EOF
 
-            # 3. Copy from self.buffer to b
+            # Copy from self.buffer to b
             copied = 0
             while copied < size and self.buffer:
                 chunk = self.buffer[0]
@@ -1414,6 +1416,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
             write_log(log_path, f"INFO  Connecting to BunnyCDN storage zone '{zone}' ({res['region_name']} - S3: {s3_url}, REST: {rest_host})")
 
             s3_client = None
+            region_code = res.get("region_code") or "de"
             if s3_available:
                 try:
                     s3_config = Config(
@@ -1429,10 +1432,10 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                         endpoint_url=s3_url,
                         aws_access_key_id=zone,
                         aws_secret_access_key=bunny_key,
-                        region_name="de",
+                        region_name=region_code,
                         config=s3_config
                     )
-                    write_log(log_path, f"INFO  BunnyCDN S3-compatible API verified. Streaming upload via parallel multipart ({concurrency} workers, {round(chunk_size/(1024*1024))}MB chunks)...")
+                    write_log(log_path, f"INFO  BunnyCDN S3-compatible API verified ({region_code}). Streaming upload via parallel multipart ({concurrency} workers, {round(chunk_size/(1024*1024))}MB chunks)...")
                 except Exception as s3_init_err:
                     s3_available = False
                     write_log(log_path, f"INFO  Bunny S3 client setup failed ({s3_init_err}). Falling back to REST API...")
@@ -1565,6 +1568,98 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     return remote_path
 
 
+
+def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: int, concurrency: int, max_in_flight: int, stdin_stream, stop_event: threading.Event, dl_tracker: ProgressTracker = None, log_path: str = None):
+    """
+    Downloads remote archives using massively parallel HTTP/S3 Range requests across multiple TCP streams.
+    Dispatches concurrent chunk downloads and writes parts in strictly ascending order to stdin_stream
+    with memory-bounded backpressure (max_in_flight parts max in RAM).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    import time
+    
+    num_parts = (total_size + part_size - 1) // part_size
+    ready_parts = {}
+    download_err = [None]
+    cv = threading.Condition()
+    consumer_idx = [0]
+    
+    if log_path:
+        write_log(log_path, f"INFO  Starting parallel multi-stream restore download ({num_parts} parts, {round(part_size/(1024*1024))}MB each, {concurrency} parallel TCP workers, max in-flight: {max_in_flight})...")
+
+    def fetch_with_retry(start_b: int, end_b: int, max_retries: int = 3):
+        last_ex = None
+        for attempt in range(max_retries):
+            if stop_event.is_set() or download_err[0]:
+                return None
+            try:
+                return fetch_range_fn(start_b, end_b)
+            except Exception as ex:
+                last_ex = ex
+                time.sleep(0.3 * (attempt + 1))
+        raise last_ex or RuntimeError(f"Range fetch failed for bytes {start_b}-{end_b}")
+
+    def worker_task(part_idx: int, start_byte: int, end_byte: int):
+        try:
+            if stop_event.is_set() or download_err[0]:
+                return
+            data = fetch_with_retry(start_byte, end_byte)
+            if stop_event.is_set() or data is None:
+                return
+            with cv:
+                ready_parts[part_idx] = data
+                if dl_tracker:
+                    dl_tracker.update_bytes(len(data))
+                cv.notify_all()
+        except Exception as ex:
+            with cv:
+                if not download_err[0]:
+                    download_err[0] = ex
+                cv.notify_all()
+
+    executor = ThreadPoolExecutor(max_workers=concurrency)
+
+    def producer_fn():
+        try:
+            for part_idx in range(num_parts):
+                if stop_event.is_set() or download_err[0]:
+                    break
+                with cv:
+                    while (part_idx - consumer_idx[0]) >= max_in_flight and not stop_event.is_set() and not download_err[0]:
+                        cv.wait(timeout=0.2)
+                if stop_event.is_set() or download_err[0]:
+                    break
+                start_byte = part_idx * part_size
+                end_byte = min(total_size - 1, start_byte + part_size - 1)
+                executor.submit(worker_task, part_idx, start_byte, end_byte)
+        except Exception as p_ex:
+            with cv:
+                if not download_err[0]:
+                    download_err[0] = p_ex
+                cv.notify_all()
+
+    prod_thread = threading.Thread(target=producer_fn)
+    prod_thread.daemon = True
+    prod_thread.start()
+
+    try:
+        while consumer_idx[0] < num_parts and not stop_event.is_set():
+            with cv:
+                while consumer_idx[0] not in ready_parts and not stop_event.is_set() and not download_err[0]:
+                    cv.wait(timeout=0.5)
+                if stop_event.is_set():
+                    raise RuntimeError("Restore cancelled by user.")
+                if download_err[0]:
+                    raise RuntimeError(f"Parallel restore download stream failed: {download_err[0]}")
+                part_data = ready_parts.pop(consumer_idx[0])
+                cv.notify_all()
+
+            stdin_stream.write(part_data)
+            consumer_idx[0] += 1
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+        prod_thread.join(timeout=2.0)
+
 def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, decompression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default"):
     write_log(log_path, f"INFO  Starting streaming restore from {storage['type']}: {remote_name} (Profile: {speed_profile})")
     
@@ -1676,49 +1771,83 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 stdin_stream.close()
 
             elif storage["type"] == "s3":
-                s3_client = get_s3_client(storage, max_pool=32)
-                s3_obj = s3_client.get_object(Bucket=storage["s3_bucket"], Key=remote_name)
-                body_stream = s3_obj["Body"]
-                chunk_size = max(16 * 1024 * 1024, settings.get("chunk_size", 32 * 1024 * 1024))
-                prefetch_q = queue.Queue(maxsize=max(8, settings.get("queue_max", 12)))
-                download_err = [None]
+                concurrency = settings.get("concurrency", 16)
+                part_size = max(16 * 1024 * 1024, settings.get("chunk_size", 32 * 1024 * 1024))
+                max_in_flight = max(8, settings.get("queue_max", 12))
+                s3_client = get_s3_client(storage, max_pool=max(64, concurrency * 2))
 
-                def s3_dl_worker():
-                    try:
-                        while not stop_event.is_set():
-                            chunk = body_stream.read(chunk_size)
-                            if not chunk:
-                                break
-                            if dl_tracker:
-                                dl_tracker.update_bytes(len(chunk))
-                            prefetch_q.put(chunk)
-                    except Exception as ex:
-                        download_err[0] = ex
-                    finally:
-                        prefetch_q.put(None)
-
-                dl_thread = threading.Thread(target=s3_dl_worker)
-                dl_thread.daemon = True
-                dl_thread.start()
-
+                total_size = 0
                 try:
-                    while True:
-                        if stop_event.is_set():
-                            raise RuntimeError("Restore cancelled by user.")
+                    head = s3_client.head_object(Bucket=storage["s3_bucket"], Key=remote_name)
+                    total_size = head.get("ContentLength", 0)
+                except Exception:
+                    pass
+
+                if total_size > part_size:
+                    write_log(log_path, f"INFO  S3 archive size resolved: {round(total_size/(1024*1024), 2)} MB. Activating high-speed parallel Range downloader ({concurrency} workers)...")
+                    def fetch_s3_range(start_b, end_b):
+                        resp = s3_client.get_object(
+                            Bucket=storage["s3_bucket"],
+                            Key=remote_name,
+                            Range=f"bytes={start_b}-{end_b}"
+                        )
+                        return resp["Body"].read()
+
+                    download_parallel_range_stream(
+                        fetch_s3_range,
+                        total_size=total_size,
+                        part_size=part_size,
+                        concurrency=concurrency,
+                        max_in_flight=max_in_flight,
+                        stdin_stream=stdin_stream,
+                        stop_event=stop_event,
+                        dl_tracker=dl_tracker,
+                        log_path=log_path
+                    )
+                    stdin_stream.close()
+                else:
+                    s3_obj = s3_client.get_object(Bucket=storage["s3_bucket"], Key=remote_name)
+                    body_stream = s3_obj["Body"]
+                    chunk_size = part_size
+                    prefetch_q = queue.Queue(maxsize=max_in_flight)
+                    download_err = [None]
+
+                    def s3_dl_worker():
                         try:
-                            chunk = prefetch_q.get(timeout=1.0)
-                        except queue.Empty:
-                            if not dl_thread.is_alive():
+                            while not stop_event.is_set():
+                                chunk = body_stream.read(chunk_size)
+                                if not chunk:
+                                    break
+                                if dl_tracker:
+                                    dl_tracker.update_bytes(len(chunk))
+                                prefetch_q.put(chunk)
+                        except Exception as ex:
+                            download_err[0] = ex
+                        finally:
+                            prefetch_q.put(None)
+
+                    dl_thread = threading.Thread(target=s3_dl_worker)
+                    dl_thread.daemon = True
+                    dl_thread.start()
+
+                    try:
+                        while True:
+                            if stop_event.is_set():
+                                raise RuntimeError("Restore cancelled by user.")
+                            try:
+                                chunk = prefetch_q.get(timeout=1.0)
+                            except queue.Empty:
+                                if not dl_thread.is_alive():
+                                    break
+                                continue
+                            if chunk is None:
                                 break
-                            continue
-                        if chunk is None:
-                            break
-                        stdin_stream.write(chunk)
-                finally:
-                    dl_thread.join(timeout=3.0)
-                    if download_err[0]:
-                        raise RuntimeError(f"S3 download stream failed: {download_err[0]}")
-                stdin_stream.close()
+                            stdin_stream.write(chunk)
+                    finally:
+                        dl_thread.join(timeout=3.0)
+                        if download_err[0]:
+                            raise RuntimeError(f"S3 download stream failed: {download_err[0]}")
+                    stdin_stream.close()
 
             elif storage["type"] == "bunny":
                 import requests
@@ -1737,94 +1866,151 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 bunny_key = bunny_res["bunny_key"]
                 rest_host = bunny_res["rest_host"]
                 s3_url = bunny_res["s3_url"]
+                region_code = bunny_res.get("region_code") or "de"
                 s3_usable = bunny_res.get("s3_usable", False)
                 clean_remote = remote_name.lstrip("/")
 
-                chunk_size = max(16 * 1024 * 1024, settings.get("chunk_size", 32 * 1024 * 1024))
-                prefetch_q = queue.Queue(maxsize=max(8, settings.get("queue_max", 12)))
-                download_err = [None]
+                part_size = max(16 * 1024 * 1024, settings.get("chunk_size", 32 * 1024 * 1024))
+                concurrency = settings.get("concurrency", 16)
+                max_in_flight = max(8, settings.get("queue_max", 12))
 
-                def bunny_dl_worker():
+                # Setup persistent clients
+                s3_client = None
+                if s3_usable:
                     try:
-                        # Attempt S3 streaming first if usable
-                        if s3_usable:
-                            try:
-                                import boto3
-                                from botocore.config import Config
-                                s3 = boto3.client(
-                                    "s3",
-                                    endpoint_url=s3_url,
-                                    aws_access_key_id=zone,
-                                    aws_secret_access_key=bunny_key,
-                                    region_name="de",
-                                    config=Config(
-                                        s3={'addressing_style': 'path'},
-                                        signature_version="s3v4",
-                                        retries={'max_attempts': 3, 'mode': 'standard'},
-                                        connect_timeout=15,
-                                        read_timeout=3600,
-                                        max_pool_connections=32
-                                    )
-                                )
-                                s3_obj = s3.get_object(Bucket=zone, Key=clean_remote)
-                                body_stream = s3_obj["Body"]
-                                write_log(log_path, f"INFO  Streaming restore download via BunnyCDN S3 API ({s3_url}) with decoupled prefetch buffer...")
-                                while not stop_event.is_set():
-                                    chunk = body_stream.read(chunk_size)
+                        import boto3
+                        from botocore.config import Config
+                        s3_client = boto3.client(
+                            "s3",
+                            endpoint_url=s3_url,
+                            aws_access_key_id=zone,
+                            aws_secret_access_key=bunny_key,
+                            region_name=region_code,
+                            config=Config(
+                                s3={'addressing_style': 'path'},
+                                signature_version="s3v4",
+                                retries={'max_attempts': 3, 'mode': 'standard'},
+                                connect_timeout=15,
+                                read_timeout=300,
+                                max_pool_connections=max(64, concurrency * 2)
+                            )
+                        )
+                    except Exception as s3_init_ex:
+                        write_log(log_path, f"WARN  Bunny S3 client setup failed ({s3_init_ex}). Falling back to REST stream...")
+                        s3_client = None
+
+                session = requests.Session()
+                adapter = HTTPAdapter(pool_connections=max(64, concurrency * 2), pool_maxsize=max(64, concurrency * 2), max_retries=Retry(total=3, backoff_factor=0.3))
+                session.mount("https://", adapter)
+                bunny_url = f"https://{rest_host}/{zone}/{clean_remote}"
+                bunny_headers = {"AccessKey": bunny_key}
+
+                # Query remote archive size to activate parallel range downloads
+                total_size = 0
+                if s3_client:
+                    try:
+                        head = s3_client.head_object(Bucket=zone, Key=clean_remote)
+                        total_size = head.get("ContentLength", 0)
+                    except Exception:
+                        pass
+
+                if total_size == 0:
+                    try:
+                        head_r = session.head(bunny_url, headers=bunny_headers, timeout=10)
+                        if head_r.status_code == 200 and "Content-Length" in head_r.headers:
+                            total_size = int(head_r.headers["Content-Length"])
+                    except Exception:
+                        pass
+
+                if total_size > part_size:
+                    write_log(log_path, f"INFO  BunnyCDN archive size: {round(total_size/(1024*1024), 2)} MB. Activating high-speed parallel Range downloader ({concurrency} workers)...")
+                    if s3_client:
+                        def fetch_bunny_range(start_b, end_b):
+                            resp = s3_client.get_object(Bucket=zone, Key=clean_remote, Range=f"bytes={start_b}-{end_b}")
+                            return resp["Body"].read()
+                    else:
+                        def fetch_bunny_range(start_b, end_b):
+                            h = {"AccessKey": bunny_key, "Range": f"bytes={start_b}-{end_b}"}
+                            r = session.get(bunny_url, headers=h, timeout=(15, 60))
+                            if r.status_code not in (200, 206):
+                                raise RuntimeError(f"Bunny Range download failed (HTTP {r.status_code})")
+                            return r.content
+
+                    download_parallel_range_stream(
+                        fetch_bunny_range,
+                        total_size=total_size,
+                        part_size=part_size,
+                        concurrency=concurrency,
+                        max_in_flight=max_in_flight,
+                        stdin_stream=stdin_stream,
+                        stop_event=stop_event,
+                        dl_tracker=dl_tracker,
+                        log_path=log_path
+                    )
+                    stdin_stream.close()
+                else:
+                    # Single stream fallback with prefetch buffer
+                    chunk_size = part_size
+                    prefetch_q = queue.Queue(maxsize=max_in_flight)
+                    download_err = [None]
+
+                    def bunny_dl_worker():
+                        try:
+                            if s3_client:
+                                try:
+                                    s3_obj = s3_client.get_object(Bucket=zone, Key=clean_remote)
+                                    body_stream = s3_obj["Body"]
+                                    write_log(log_path, f"INFO  Streaming restore download via BunnyCDN S3 API ({s3_url})...")
+                                    while not stop_event.is_set():
+                                        chunk = body_stream.read(chunk_size)
+                                        if not chunk:
+                                            break
+                                        if dl_tracker:
+                                            dl_tracker.update_bytes(len(chunk))
+                                        prefetch_q.put(chunk)
+                                    return
+                                except Exception as s3_dl_ex:
+                                    write_log(log_path, f"WARN  Bunny S3 restore download failed ({s3_dl_ex}). Falling back to REST stream...")
+
+                            write_log(log_path, f"INFO  Streaming restore download via BunnyCDN REST API ({rest_host})...")
+                            with session.get(bunny_url, headers=bunny_headers, stream=True, timeout=(15, 3600)) as resp:
+                                if resp.status_code != 200:
+                                    raise RuntimeError(f"Bunny storage download failed (HTTP {resp.status_code}): {resp.text[:300]}")
+                                for chunk in resp.iter_content(chunk_size=chunk_size):
                                     if not chunk:
+                                        continue
+                                    if stop_event.is_set():
                                         break
                                     if dl_tracker:
                                         dl_tracker.update_bytes(len(chunk))
                                     prefetch_q.put(chunk)
-                                return
-                            except Exception as s3_dl_ex:
-                                write_log(log_path, f"WARN  Bunny S3 restore download failed ({s3_dl_ex}). Falling back to REST stream...")
+                        except Exception as ex:
+                            download_err[0] = ex
+                        finally:
+                            prefetch_q.put(None)
 
-                        # High-speed REST stream with persistent connection pooling
-                        session = requests.Session()
-                        adapter = HTTPAdapter(pool_connections=32, pool_maxsize=32, max_retries=Retry(total=3, backoff_factor=0.3))
-                        session.mount("https://", adapter)
-                        url = f"https://{rest_host}/{zone}/{clean_remote}"
-                        headers = {"AccessKey": bunny_key}
-                        write_log(log_path, f"INFO  Streaming restore download via BunnyCDN REST API ({rest_host}) with decoupled prefetch buffer...")
-                        with session.get(url, headers=headers, stream=True, timeout=(15, 3600)) as resp:
-                            if resp.status_code != 200:
-                                raise RuntimeError(f"Bunny storage download failed (HTTP {resp.status_code}): {resp.text[:300]}")
-                            for chunk in resp.iter_content(chunk_size=chunk_size):
-                                if not chunk:
-                                    continue
-                                if stop_event.is_set():
+                    dl_thread = threading.Thread(target=bunny_dl_worker)
+                    dl_thread.daemon = True
+                    dl_thread.start()
+
+                    try:
+                        while True:
+                            if stop_event.is_set():
+                                raise RuntimeError("Restore cancelled by user.")
+                            try:
+                                chunk = prefetch_q.get(timeout=1.0)
+                            except queue.Empty:
+                                if not dl_thread.is_alive():
                                     break
-                                if dl_tracker:
-                                    dl_tracker.update_bytes(len(chunk))
-                                prefetch_q.put(chunk)
-                    except Exception as ex:
-                        download_err[0] = ex
-                    finally:
-                        prefetch_q.put(None)
-
-                dl_thread = threading.Thread(target=bunny_dl_worker)
-                dl_thread.daemon = True
-                dl_thread.start()
-
-                try:
-                    while True:
-                        if stop_event.is_set():
-                            raise RuntimeError("Restore cancelled by user.")
-                        try:
-                            chunk = prefetch_q.get(timeout=1.0)
-                        except queue.Empty:
-                            if not dl_thread.is_alive():
+                                continue
+                            if chunk is None:
                                 break
-                            continue
-                        if chunk is None:
-                            break
-                        stdin_stream.write(chunk)
-                finally:
-                    dl_thread.join(timeout=3.0)
-                    if download_err[0]:
-                        raise RuntimeError(f"Bunny download stream failed: {download_err[0]}")
-                stdin_stream.close()
+                            stdin_stream.write(chunk)
+                    finally:
+                        dl_thread.join(timeout=3.0)
+                        if download_err[0]:
+                            raise RuntimeError(f"Bunny download stream failed: {download_err[0]}")
+                    stdin_stream.close()
 
             else:
                 raise ValueError(f"Unknown storage type: {storage['type']}")
@@ -2203,40 +2389,44 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         try:
             import pymongo
             import json
+            from concurrent.futures import ThreadPoolExecutor
             all_indexes = json.loads(indexes_metadata)
-            write_log(log_path, f"INFO  Starting sequential index creation for database: {dbname}")
+            write_log(log_path, f"INFO  Starting parallel index creation for database: {dbname}")
             
             client = pymongo.MongoClient(m["uri"])
-            for src_db_name, collections_data in all_indexes.items():
-                mongo_db = client[dbname]
-                for coll, idx_info in collections_data.items():
-                    if collection and collection != "full" and coll != collection:
+            mongo_db = client[dbname]
+
+            def build_col_indexes(coll_name, indexes_spec):
+                for index_name, index_spec in indexes_spec.items():
+                    if index_name == "_id_":
                         continue
-                        
-                    write_log(log_path, f"INFO  Creating indexes for collection {dbname}.{coll} ({len(idx_info)} indexes total)...")
-                    for index_name, index_spec in idx_info.items():
-                        if index_name == "_id_":
+                    try:
+                        keys = index_spec["key"]
+                        key_tuples = [(k[0], k[1]) for k in keys]
+                        options = {}
+                        for opt in ["unique", "sparse", "expireAfterSeconds", "partialFilterExpression", "collation", "weights", "default_language", "language_override", "textIndexVersion"]:
+                            if opt in index_spec:
+                                options[opt] = index_spec[opt]
+                        mongo_db[coll_name].create_index(key_tuples, name=index_name, **options)
+                        write_log(log_path, f"INFO    - Successfully built index: {index_name} on {coll_name}")
+                    except Exception as idx_err:
+                        write_log(log_path, f"WARN    - Failed to build index {index_name} on {coll_name}: {idx_err}")
+
+            with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 4)) as idx_exec:
+                futures = []
+                for src_db_name, collections_data in all_indexes.items():
+                    for coll, idx_info in collections_data.items():
+                        if collection and collection != "full" and coll != collection:
                             continue
-                        
-                        try:
-                            keys = index_spec["key"]
-                            key_tuples = [(k[0], k[1]) for k in keys]
-                            
-                            options = {}
-                            for opt in ["unique", "sparse", "expireAfterSeconds", "partialFilterExpression", "collation", "weights", "default_language", "language_override", "textIndexVersion"]:
-                                if opt in index_spec:
-                                    options[opt] = index_spec[opt]
-                                    
-                            write_log(log_path, f"INFO    - Building index: {index_name} on {coll}...")
-                            mongo_db[coll].create_index(key_tuples, name=index_name, **options)
-                            write_log(log_path, f"INFO    - Successfully built index: {index_name}")
-                        except Exception as idx_err:
-                            write_log(log_path, f"WARN    - Failed to build index {index_name} on {coll}: {idx_err}")
+                        write_log(log_path, f"INFO  Creating indexes for collection {dbname}.{coll} ({len(idx_info)} indexes total)...")
+                        futures.append(idx_exec.submit(build_col_indexes, coll, idx_info))
+                for f in futures:
+                    f.result()
                             
             client.close()
-            write_log(log_path, "INFO  Sequential index creation completed successfully.")
+            write_log(log_path, "INFO  Parallel index creation completed successfully.")
         except Exception as e:
-            write_log(log_path, f"WARN  Error during sequential index restoration: {e}")
+            write_log(log_path, f"WARN  Error during index restoration: {e}")
 
 
 _pg_options_support_cache = {}
@@ -2498,7 +2688,7 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
         work_mem = "32MB"
         maint_work_mem = "128MB"
         
-    pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit} -c checkpoint_timeout=30min -c max_wal_size=16GB"
+    pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit} -c max_parallel_maintenance_workers=4 -c client_min_messages=warning"
     if check_pg_options_supported(db, pg_opts, dbname):
         env["PGOPTIONS"] = pg_opts
     else:

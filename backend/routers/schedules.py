@@ -117,7 +117,9 @@ def trigger_schedule(schedule_id: str, background_tasks: BackgroundTasks, user=D
 
     now = datetime.utcnow()
     method = s.get("backup_method", "full")
-    profile = s.get("speed_profile", "default")
+    profile = s.get("speed_profile") or "extreme"
+    if profile in ("default", ""):
+        profile = "extreme"
     target_dbname = s.get("database_name") or db.get("database_name")
 
     folder_val = s.get("folder_name") if s.get("folder_name") is not None else (storage.get("folder_name") or "")
@@ -179,7 +181,9 @@ def trigger_all_schedules(background_tasks: BackgroundTasks, user=Depends(get_cu
             continue
 
         method = s.get("backup_method", "full")
-        profile = s.get("speed_profile", "default")
+        profile = s.get("speed_profile") or "extreme"
+        if profile in ("default", ""):
+            profile = "extreme"
         target_dbname = s.get("database_name") or db.get("database_name")
 
         folder_val = s.get("folder_name") if s.get("folder_name") is not None else (storage.get("folder_name") or "")
