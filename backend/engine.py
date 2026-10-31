@@ -1114,7 +1114,7 @@ def log_and_parse_stderr(stderr_stream, log_path: str, tracker: ProgressTracker 
                     log.info(clean_line)
                 
                 pct_match = re.search(r'\((\d+(?:\.\d+)?)\%\)', line)
-                if pct_match and tracker:
+                if pct_match and tracker and tracker.total_size <= 0:
                     pct = int(float(pct_match.group(1)))
                     tracker.update_pct(pct)
     except Exception as e:
@@ -1237,20 +1237,31 @@ class QueueReader(io.RawIOBase):
         return bytes(b[:n])
 
 
-def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_size: int = 1024 * 1024, tracker: ProgressTracker = None):
+def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_size: int = 8 * 1024 * 1024, tracker: ProgressTracker = None):
     try:
+        read_buf = bytearray()
+        target_chunk = max(4 * 1024 * 1024, min(chunk_size, 16 * 1024 * 1024))
         while not stop_event.is_set():
-            data = stream.read(chunk_size)
+            # In Linux, stream.read() on a pipe returns at most 64KB per call.
+            # Accumulate until target_chunk (8MB) to eliminate GIL thrashing and prevent compressor pipe stall.
+            data = stream.read(target_chunk - len(read_buf))
             if not data:
+                if read_buf:
+                    q.put(bytes(read_buf))
+                    read_buf.clear()
                 break
+            read_buf.extend(data)
             if tracker:
                 tracker.update_bytes(len(data))
-            while not stop_event.is_set():
-                try:
-                    q.put(data, timeout=0.5)
-                    break
-                except queue.Full:
-                    continue
+            if len(read_buf) >= target_chunk:
+                chunk_bytes = bytes(read_buf)
+                read_buf.clear()
+                while not stop_event.is_set():
+                    try:
+                        q.put(chunk_bytes, timeout=0.5)
+                        break
+                    except queue.Full:
+                        continue
     except Exception as e:
         print(f"Error in reader thread: {e}")
     finally:
@@ -1264,13 +1275,13 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
 def get_speed_settings(profile: str):
     cores = os.cpu_count() or 4
     if profile == "safe":
-        return {"threads": 2, "chunk_size": 8 * 1024 * 1024, "queue_max": 4, "concurrency": 4, "mongo_parallel": 2}
+        return {"threads": 2, "chunk_size": 8 * 1024 * 1024, "queue_max": 8, "concurrency": 4, "mongo_parallel": 4}
     elif profile == "balanced":
-        return {"threads": max(2, cores // 2), "chunk_size": 32 * 1024 * 1024, "queue_max": 8, "concurrency": 8, "mongo_parallel": 4}
+        return {"threads": max(2, cores // 2), "chunk_size": 32 * 1024 * 1024, "queue_max": 16, "concurrency": 16, "mongo_parallel": 8}
     elif profile == "extreme":
-        return {"threads": max(4, cores), "chunk_size": 64 * 1024 * 1024, "queue_max": 16, "concurrency": 32, "mongo_parallel": 16}
-    else: # default (tuned for 20GB in 2min backup / 10min restore)
-        return {"threads": max(2, cores), "chunk_size": 48 * 1024 * 1024, "queue_max": 12, "concurrency": 16, "mongo_parallel": 8}
+        return {"threads": max(4, cores), "chunk_size": 64 * 1024 * 1024, "queue_max": 32, "concurrency": 32, "mongo_parallel": 16}
+    else: # default (tuned for flash speed)
+        return {"threads": max(4, cores), "chunk_size": 48 * 1024 * 1024, "queue_max": 32, "concurrency": 24, "mongo_parallel": 16}
 
 def get_compressor_info(profile: str = "default", log_path: str = None) -> dict:
     settings = get_speed_settings(profile)
@@ -1357,7 +1368,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
             # Start pipe thread
             pipe_thread = threading.Thread(
                 target=pipe_and_count,
-                args=(p_dump.stdout, p_comp.stdin, tracker if not is_mongo else None)
+                args=(p_dump.stdout, p_comp.stdin, tracker)
             )
             pipe_thread.daemon = True
             pipe_thread.start()
@@ -1397,7 +1408,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     if tracker and tracker.job_id not in ACTIVE_STOP_EVENTS:
         ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
     
-    reader_tracker = tracker if (not compression_cmd and not is_mongo) else None
+    reader_tracker = tracker if not compression_cmd else None
     
     reader_thread = threading.Thread(
         target=reader_thread_fn,
@@ -2213,16 +2224,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
 
     settings = get_speed_settings(speed_profile)
     if is_cluster:
-        import pymongo
-        write_log(log_path, "INFO  Cluster-wide scheduled backup requested. Fetching databases...")
-        try:
-            client = pymongo.MongoClient(m["uri"])
-            db_names = [d for d in client.list_database_names() if d not in ("local", "config", "admin")]
-            client.close()
-        except Exception as e:
-            raise RuntimeError(f"Failed to fetch databases for cluster backup: {e}")
-            
-        write_log(log_path, f"INFO  Found {len(db_names)} databases to backup: {', '.join(db_names)}")
+        write_log(log_path, "INFO  Cluster-wide backup requested. Streaming all databases into unified archive...")
         
         comp_info = get_compressor_info(speed_profile, log_path)
         ext = comp_info["ext"] if comp_info else "gz"
@@ -2230,35 +2232,24 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         
         uri_no_db = m["uri"].replace(f"/{m['dbname']}?", "/?").replace(f"/{m['dbname']}", "/") if m['dbname'] else m["uri"]
         
-        last_remote_path = ""
-        for idx, db_name in enumerate(db_names):
-            # Reset the stop_event before each database so the previous iteration's
-            # finally-block stop_event.set() doesn't cancel this one immediately.
-            if tracker and tracker.job_id in ACTIVE_STOP_EVENTS:
-                ACTIVE_STOP_EVENTS[tracker.job_id] = threading.Event()
-
-            write_log(log_path, f"INFO  [Cluster Backup] Backing up database {idx+1}/{len(db_names)}: {db_name}")
-            file_remote_name = f"{remote_name}{db_name}.archive.{ext}"
+        # Backup index definitions for all cluster databases in one companion metadata file
+        backup_mongo_indexes(uri_no_db, None, "full", storage, remote_name + ".indexes.json", log_path)
+        
+        cmd = [
+            "mongodump",
+            f"--uri={uri_no_db}",
+            "--archive",
+            f"--numParallelCollections={settings['mongo_parallel']}",
+            "--readPreference=secondaryPreferred",
+        ]
+        if not compression_cmd:
+            cmd.append("--gzip")
             
-            backup_mongo_indexes(uri_no_db, db_name, "full", storage, file_remote_name + ".indexes.json", log_path)
-            
-            cmd = [
-                "mongodump",
-                f"--uri={uri_no_db}",
-                f"--db={db_name}",
-                "--archive",
-                f"--numParallelCollections={settings['mongo_parallel']}",
-                "--readPreference=secondaryPreferred",
-            ]
-            if not compression_cmd:
-                cmd.append("--gzip")
-                
-            env = os.environ.copy()
-            env["GOGC"] = "100"
-            env["GOMAXPROCS"] = str(settings["threads"])
-            last_remote_path = stream_backup_to_storage(cmd, env, storage, file_remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
-            
-        return remote_name # return the folder path
+        env = os.environ.copy()
+        env["GOGC"] = "100"
+        env["GOMAXPROCS"] = str(settings["threads"])
+        write_log(log_path, f"INFO  [Cluster Backup] Streaming all databases to unified archive: {remote_name}")
+        return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
 
     cmd = [
         "mongodump",
@@ -2308,10 +2299,10 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
 
 # ─── MONGODB RESTORE ─────────────────────────────────────────────────────────
 
-def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", target_dbname: str = None):
+def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", target_dbname: str = None, is_cluster_restore: bool = False):
     m = parse_mongo_uri(db)
     dbname = target_dbname or db.get("database_name") or m["dbname"]
-    if not dbname: raise ValueError("Database name is required for restore.")
+    if not dbname and not is_cluster_restore: raise ValueError("Database name is required for restore.")
 
     use_no_index_restore = False
     indexes_metadata = None
@@ -2417,9 +2408,10 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         batch_size = 10000
         write_concern = "{w: 1}"
         
+    uri_to_use = (m["uri"].replace(f"/{m['dbname']}?", "/?").replace(f"/{m['dbname']}", "/") if m['dbname'] else m["uri"]) if is_cluster_restore else m["uri"]
     cmd = [
         "mongorestore",
-        f"--uri={m['uri']}",
+        f"--uri={uri_to_use}",
         "--archive",
         f"--numParallelCollections={min(settings['mongo_parallel'], 16)}",
         f"--numInsertionWorkersPerCollection={workers}",
@@ -2432,11 +2424,12 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     if indexing_mode == "without_index" or use_no_index_restore:
         cmd.append("--noIndexRestore")
 
-    # Always use wildcard namespace remapping to force restore to dbname
-    cmd += [
-        "--nsFrom=$database$.$collection$",
-        f"--nsTo={dbname}.$collection$",
-    ]
+    # Only remap namespaces if restoring a single specific target database
+    if not is_cluster_restore and dbname and dbname != "__all__":
+        cmd += [
+            "--nsFrom=$database$.$collection$",
+            f"--nsTo={dbname}.$collection$",
+        ]
     if collection and collection != "full":
         cmd += [f"--nsInclude=*.{collection}"]
 
@@ -2490,14 +2483,31 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
                     except Exception as idx_err:
                         write_log(log_path, f"WARN    - Failed to build index {index_name} on {coll_name}: {idx_err}")
 
-            with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 4)) as idx_exec:
+            with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as idx_exec:
                 futures = []
                 for src_db_name, collections_data in all_indexes.items():
+                    actual_target_db = client[dbname] if (not is_cluster_restore and dbname and dbname != "__all__") else client[src_db_name]
+                    def build_col_indexes_for_db(target_db_inst, coll_n, idx_s):
+                        for index_name, index_spec in idx_s.items():
+                            if index_name == "_id_":
+                                continue
+                            try:
+                                keys = index_spec["key"]
+                                key_tuples = [(k[0], k[1]) for k in keys]
+                                options = {}
+                                for opt in ["unique", "sparse", "expireAfterSeconds", "partialFilterExpression", "collation", "weights", "default_language", "language_override", "textIndexVersion"]:
+                                    if opt in index_spec:
+                                        options[opt] = index_spec[opt]
+                                target_db_inst[coll_n].create_index(key_tuples, name=index_name, **options)
+                                write_log(log_path, f"INFO    - Successfully built index: {index_name} on {target_db_inst.name}.{coll_n}")
+                            except Exception as idx_err:
+                                write_log(log_path, f"WARN    - Failed to build index {index_name} on {target_db_inst.name}.{coll_n}: {idx_err}")
+
                     for coll, idx_info in collections_data.items():
                         if collection and collection != "full" and coll != collection:
                             continue
-                        write_log(log_path, f"INFO  Creating indexes for collection {dbname}.{coll} ({len(idx_info)} indexes total)...")
-                        futures.append(idx_exec.submit(build_col_indexes, coll, idx_info))
+                        write_log(log_path, f"INFO  Creating indexes for collection {actual_target_db.name}.{coll} ({len(idx_info)} indexes total)...")
+                        futures.append(idx_exec.submit(build_col_indexes_for_db, actual_target_db, coll, idx_info))
                 for f in futures:
                     f.result()
                             
@@ -2555,80 +2565,33 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
     backup_method = backup_info.get("backup_method", "full")
     
     if is_cluster or dbname == "__all__":
-        write_log(log_path, "INFO  All Databases requested. Enumerating accessible databases...")
-        cmd_list = [
-            "psql", f"--host={db['host']}", f"--port={db['port']}",
-            f"--username={db['username']}", "--no-password", "--dbname=postgres",
-            "-t", "-A", "-c",
-            "SELECT datname FROM pg_database WHERE datallowconn=true AND datistemplate=false ORDER BY datname;"
-        ]
-        res = subprocess.run(cmd_list, capture_output=True, text=True, env=pg_env(db), timeout=10)
-        db_names = []
-        if res.returncode == 0:
-            db_names = [l.strip() for l in res.stdout.strip().split("\n") if l.strip() and l.strip() not in ('rdsadmin', 'azure_maintenance', 'cloudsqladmin')]
-        
-        if not db_names:
-            write_log(log_path, "WARN  Could not enumerate databases via psql. Falling back to default database.")
-            db_names = [db.get("database_name") or "postgres"]
-
-        write_log(log_path, f"INFO  Found {len(db_names)} databases to backup: {', '.join(db_names)}")
+        write_log(log_path, "INFO  All Databases requested. Streaming entire PostgreSQL instance into unified archive...")
 
         comp_info = get_compressor_info(speed_profile, log_path)
         ext = comp_info["ext"] if comp_info else "gz"
         compression_cmd = comp_info["cmd"] if comp_info else None
 
-        folder_remote_name = remote_name if remote_name.endswith("/") else f"{remote_name}/"
-        total_uploaded_bytes = 0
-        success_count = 0
+        cmd = [
+            "pg_dumpall",
+            f"--host={db['host']}", f"--port={db['port']}",
+            f"--username={db['username']}", "--no-password",
+            "--clean", "--if-exists"
+        ]
 
-        for idx, single_db in enumerate(db_names):
-            # Reset the stop_event before each database so the previous iteration's
-            # finally-block stop_event.set() doesn't cancel this one immediately.
-            if tracker and tracker.job_id in ACTIVE_STOP_EVENTS:
-                ACTIVE_STOP_EVENTS[tracker.job_id] = threading.Event()
+        env = pg_env(db)
+        pg_opts = None
+        if speed_profile == "extreme":
+            pg_opts = "-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
+        elif speed_profile == "balanced":
+            pg_opts = "-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB -c max_parallel_workers_per_gather=2 -c effective_io_concurrency=4"
+        else:
+            pg_opts = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
 
-            write_log(log_path, f"INFO  [Instance Backup] Backing up database {idx+1}/{len(db_names)}: {single_db}")
-            file_remote_name = f"{folder_remote_name}{single_db}.archive.{ext}"
+        if pg_opts and check_pg_options_supported(db, pg_opts, "postgres"):
+            env["PGOPTIONS"] = pg_opts
 
-            cmd = [
-                "pg_dump",
-                f"--host={db['host']}", f"--port={db['port']}",
-                f"--username={db['username']}", f"--dbname={single_db}",
-                "--no-password", "--format=custom",
-                "--compress=0",
-                "--no-acl", "--no-owner",
-                "--verbose"
-            ]
-            if indexing_mode == "without_index":
-                cmd += ["--section=pre-data", "--section=data"]
-            elif indexing_mode == "only_index":
-                cmd += ["--section=post-data"]
-
-            env = pg_env(db)
-            pg_opts = None
-            if speed_profile == "extreme":
-                pg_opts = "-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
-            elif speed_profile == "balanced":
-                pg_opts = "-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB -c max_parallel_workers_per_gather=2 -c effective_io_concurrency=4"
-            else:
-                pg_opts = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
-
-            if pg_opts and check_pg_options_supported(db, pg_opts, single_db):
-                env["PGOPTIONS"] = pg_opts
-
-            try:
-                stream_backup_to_storage(cmd, env, storage, file_remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
-                total_uploaded_bytes += getattr(stream_backup_to_storage, "last_size_bytes", 0) or 0
-                success_count += 1
-            except Exception as e:
-                write_log(log_path, f"ERROR Failed to backup database {single_db}: {e}")
-
-        if success_count == 0:
-            raise RuntimeError("Failed to backup any databases in PostgreSQL instance.")
-
-        stream_backup_to_storage.last_size_bytes = total_uploaded_bytes
-        write_log(log_path, f"INFO  Successfully completed backup of {success_count}/{len(db_names)} databases.")
-        return folder_remote_name
+        write_log(log_path, f"INFO  [Cluster Backup] Streaming all databases to unified archive: {remote_name}")
+        return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
 
     incremental_tables = None
     if backup_method in ("incremental", "differential"):
@@ -2701,7 +2664,7 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
         pg_opts = "-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=512MB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
 
     if pg_opts:
-        if check_pg_options_supported(db, pg_opts, dbname):
+        if check_pg_options_supported(db, pg_opts, "postgres" if is_all else dbname):
             env["PGOPTIONS"] = pg_opts
         else:
             write_log(log_path, "INFO  Connection pooler / proxy detected (or startup parameters unsupported). Skipping PGOPTIONS for connection compatibility.")
@@ -2711,24 +2674,34 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
 
 # ─── POSTGRESQL RESTORE ──────────────────────────────────────────────────────
 
-def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", collection: str = None):
+def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", collection: str = None, is_all: bool = False):
     dbname = (db.get("database_name") or "").strip()
-    if new_database:
-        create_cmd = [
-            "psql", f"--host={db['host']}", f"--port={db['port']}",
-            f"--username={db['username']}", "--no-password", "--dbname=postgres",
-            "-c", f'CREATE DATABASE "{dbname}";'
+    
+    if is_all:
+        cmd = [
+            "psql",
+            f"--host={db['host']}", f"--port={db['port']}",
+            f"--username={db['username']}", "--dbname=postgres",
+            "--no-password",
+            "-v", "ON_ERROR_STOP=0"
         ]
-        subprocess.run(create_cmd, capture_output=True, env=pg_env(db), timeout=30)
-        
-    cmd = [
-        "pg_restore",
-        f"--host={db['host']}", f"--port={db['port']}",
-        f"--username={db['username']}", f"--dbname={dbname}",
-        "--no-password", "--no-acl", "--no-owner",
-        "--disable-triggers",  # Prevent trigger execution during restore — huge server CPU saver
-        "--verbose"
-    ]
+    else:
+        if new_database:
+            create_cmd = [
+                "psql", f"--host={db['host']}", f"--port={db['port']}",
+                f"--username={db['username']}", "--no-password", "--dbname=postgres",
+                "-c", f'CREATE DATABASE "{dbname}";'
+            ]
+            subprocess.run(create_cmd, capture_output=True, env=pg_env(db), timeout=30)
+            
+        cmd = [
+            "pg_restore",
+            f"--host={db['host']}", f"--port={db['port']}",
+            f"--username={db['username']}", f"--dbname={dbname}",
+            "--no-password", "--no-acl", "--no-owner",
+            "--disable-triggers",  # Prevent trigger execution during restore — huge server CPU saver
+            "--verbose"
+        ]
     if not new_database:
         cmd += ["--clean", "--if-exists"]
         
@@ -3011,11 +2984,11 @@ def do_backup(backup_id: str):
         if target_db_name == "__all__":
             is_cluster = True
             base_name = f"{safe_db_name}_all"
-            remote_name = f"{base_name}_{date_str}/"
+            remote_name = f"{base_name}-{date_str}/backup.archive.{ext}"
         elif db["type"] == "mongodb" and collection == "full" and backup.get("is_scheduled") and not target_db_name:
             is_cluster = True
             base_name = "Mongdbbackup"
-            remote_name = f"{base_name}_{date_str}/"
+            remote_name = f"{base_name}-{date_str}/backup.archive.{ext}"
         elif collection and collection != "full":
             base_name = collection.strip().replace(" ", "_")
             remote_name = f"{base_name}-{date_str}/backup.archive.{ext}"
@@ -3049,6 +3022,23 @@ def do_backup(backup_id: str):
                         write_log(log_path, f"INFO  Estimated total cluster size: {round(total_size / (1024*1024), 2)} MB")
                 except Exception:
                     pass
+        elif db["type"] == "mongodb":
+            try:
+                import pymongo
+                m = parse_mongo_uri(db)
+                client = pymongo.MongoClient(m["uri"], serverSelectionTimeoutMS=3000)
+                if is_cluster or target_db_name == "__all__":
+                    db_names = [d for d in client.list_database_names() if d not in ("local", "config", "admin")]
+                    total_size = sum(client[d].command("dbStats").get("dataSize", 0) for d in db_names)
+                    write_log(log_path, f"INFO  Estimated total MongoDB cluster data size ({len(db_names)} databases): {round(total_size / (1024*1024), 2)} MB")
+                else:
+                    target_mongo_db = target_db_name or m["dbname"] or db.get("database_name")
+                    if target_mongo_db:
+                        total_size = client[target_mongo_db].command("dbStats").get("dataSize", 0)
+                        write_log(log_path, f"INFO  Estimated MongoDB data size: {round(total_size / (1024*1024), 2)} MB")
+                client.close()
+            except Exception as e:
+                write_log(log_path, f"WARN  Could not estimate MongoDB total size: {e}")
 
         if total_size > 0:
             update_backup(backup_id, total_mb=round(total_size / (1024 * 1024), 2))
@@ -3259,8 +3249,8 @@ def do_restore(restore_id: str):
         indexing_mode = restore.get("indexing_mode", "with_index")
 
         if target_db["type"] == "mongodb":
-            if remote_name.endswith("/") or "Mongdbbackup" in remote_name:
-                write_log(log_path, "INFO  Cluster restore detected. Discovering databases...")
+            if remote_name.endswith("/"):
+                write_log(log_path, "INFO  Legacy multi-file cluster restore detected. Discovering databases...")
                 objects = [b for b in list_storage_objects(storage, remote_name) if ".archive." in b]
                 
                 write_log(log_path, f"INFO  Found {len(objects)} databases to restore.")
@@ -3272,7 +3262,8 @@ def do_restore(restore_id: str):
                         ACTIVE_STOP_EVENTS[tracker.job_id] = threading.Event()
                     run_mongo_restore(target_db, "full", storage, obj, log_path, drop_existing=not restore.get("new_database", False), compression=obj_compression, source_dbname=db_name, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=db_name)
             else:
-                run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db.get("database_name"))
+                is_cluster_archive = ("_all-" in remote_name or "Mongdbbackup-" in remote_name or "_cluster-" in remote_name or target_db.get("database_name") == "__all__")
+                run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db.get("database_name"), is_cluster_restore=is_cluster_archive)
         elif target_db["type"] == "postgresql":
             if remote_name.endswith("/"):
                 # Instance backup — folder contains individual database archives
@@ -3305,7 +3296,8 @@ def do_restore(restore_id: str):
 
                 write_log(log_path, f"INFO  Instance restore completed: {len(objects)} databases restored.")
             else:
-                run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection)
+                is_all = ("_all-" in remote_name or target_db.get("database_name") == "__all__")
+                run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=is_all)
         elif target_db["type"] == "solr":
             run_solr_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
         else:
