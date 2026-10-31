@@ -394,6 +394,10 @@ def verify_and_resolve_bunny(storage: dict, log_path: str = None) -> dict:
                 s3_usable = False
                 if log_path:
                     write_log(log_path, f"INFO  Bunny S3 API not usable ({s3_err}). Will use REST API.")
+    except Exception as e:
+        s3_usable = False
+        if log_path:
+            write_log(log_path, f"INFO  Bunny S3 client initialization error ({e}). Will use REST API.")
 
     return {
         "success": True,
