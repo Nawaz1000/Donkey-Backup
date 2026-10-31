@@ -187,6 +187,19 @@ def read_log(log_path: str) -> str:
 
 
 
+BUNNY_KNOWN_REGIONS = [
+    {"code": "de", "name": "Falkenstein / Europe (DE)", "rest_host": "storage.bunnycdn.com", "s3_url": "https://de-s3.storage.bunnycdn.com"},
+    {"code": "ny", "name": "New York / US East (NY)", "rest_host": "ny.storage.bunnycdn.com", "s3_url": "https://ny-s3.storage.bunnycdn.com"},
+    {"code": "la", "name": "Los Angeles / US West (LA)", "rest_host": "la.storage.bunnycdn.com", "s3_url": "https://la-s3.storage.bunnycdn.com"},
+    {"code": "sg", "name": "Singapore / Asia (SG)", "rest_host": "sg.storage.bunnycdn.com", "s3_url": "https://sg-s3.storage.bunnycdn.com"},
+    {"code": "syd", "name": "Sydney / Oceania (SYD)", "rest_host": "syd.storage.bunnycdn.com", "s3_url": "https://syd-s3.storage.bunnycdn.com"},
+    {"code": "uk", "name": "London / United Kingdom (UK)", "rest_host": "uk.storage.bunnycdn.com", "s3_url": "https://uk-s3.storage.bunnycdn.com"},
+    {"code": "se", "name": "Stockholm / Europe North (SE)", "rest_host": "se.storage.bunnycdn.com", "s3_url": "https://se-s3.storage.bunnycdn.com"},
+    {"code": "br", "name": "São Paulo / South America (BR)", "rest_host": "br.storage.bunnycdn.com", "s3_url": "https://br-s3.storage.bunnycdn.com"},
+    {"code": "jh", "name": "Johannesburg / Africa (JH)", "rest_host": "jh.storage.bunnycdn.com", "s3_url": "https://jh-s3.storage.bunnycdn.com"},
+]
+
+
 def resolve_bunny_hosts(region_url_or_code: str = "") -> tuple:
     """
     Returns (rest_host, s3_endpoint_url) based on region url or region code.
@@ -219,8 +232,33 @@ def resolve_bunny_hosts(region_url_or_code: str = "") -> tuple:
     return f"{reg}.storage.bunnycdn.com", f"https://{reg}-s3.storage.bunnycdn.com"
 
 
+def get_bunny_key(storage: dict) -> str:
+    """
+    Returns the real storage zone password/key.
+    Prioritizes non-empty values that do not match the storage zone name.
+    """
+    if not isinstance(storage, dict):
+        return ""
+    if "_resolved_bunny" in storage and storage["_resolved_bunny"].get("bunny_key"):
+        return storage["_resolved_bunny"]["bunny_key"]
+
+    pwd = (storage.get("bunny_password") or "").strip()
+    acc = (storage.get("bunny_access_key") or "").strip()
+    zone = (storage.get("bunny_storage_zone") or "").strip()
+
+    # If bunny_password is set and is NOT identical to zone name, use it
+    if pwd and pwd.lower() != zone.lower():
+        return pwd
+    # If bunny_access_key is set and is NOT identical to zone name, use it
+    if acc and acc.lower() != zone.lower():
+        return acc
+    return pwd or acc
+
+
 def get_bunny_host(region_or_storage: any = None) -> str:
     if isinstance(region_or_storage, dict):
+        if "_resolved_bunny" in region_or_storage and region_or_storage["_resolved_bunny"].get("rest_host"):
+            return region_or_storage["_resolved_bunny"]["rest_host"]
         reg = region_or_storage.get("bunny_region_url") or region_or_storage.get("bunny_region") or ""
     else:
         reg = region_or_storage or ""
@@ -228,8 +266,141 @@ def get_bunny_host(region_or_storage: any = None) -> str:
     return rest_host
 
 
-def get_bunny_key(storage: dict) -> str:
-    return (storage.get("bunny_password") or storage.get("bunny_access_key") or "").strip()
+def verify_and_resolve_bunny(storage: dict, log_path: str = None) -> dict:
+    """
+    Validates Bunny credentials, auto-detects the storage zone's region endpoint
+    across all known BunnyCDN regions, and verifies S3 multipart compatibility.
+    """
+    import requests
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    zone = (storage.get("bunny_storage_zone") or "").strip()
+    bunny_key = get_bunny_key(storage)
+    pref_region = (storage.get("bunny_region_url") or storage.get("bunny_region") or "").strip()
+
+    if not zone:
+        return {"success": False, "error": "BunnyCDN Storage Zone Name is required."}
+    if not bunny_key:
+        return {
+            "success": False,
+            "error": "BunnyCDN Storage Zone Password is required. Please check your storage settings."
+        }
+    if bunny_key.strip().lower() == zone.strip().lower():
+        return {
+            "success": False,
+            "error": (
+                f"Invalid Storage Zone Password: The password cannot be the Storage Zone Name ('{zone}'). "
+                "In Bunny.net, the password is found under Storage -> [Your Zone] -> 'FTP & API Access' tab. "
+                "Please update your storage settings with the actual Password (do NOT use your Bunny Account API Key)."
+            )
+        }
+
+    cand_rest, cand_s3 = resolve_bunny_hosts(pref_region)
+    headers = {"AccessKey": bunny_key, "Accept": "application/json"}
+
+    # 1. Test candidate host first
+    cand_worked = False
+    cand_status = None
+    try:
+        r = requests.get(f"https://{cand_rest}/{zone}/", headers=headers, timeout=6)
+        cand_status = r.status_code
+        if r.status_code == 200:
+            cand_worked = True
+    except Exception as e:
+        cand_status = str(e)
+
+    matched_region = None
+    if cand_worked:
+        matched_reg_info = next((rg for rg in BUNNY_KNOWN_REGIONS if rg["rest_host"] == cand_rest), None)
+        matched_region = matched_reg_info or {
+            "code": "custom",
+            "name": cand_rest,
+            "rest_host": cand_rest,
+            "s3_url": cand_s3
+        }
+    else:
+        # Candidate failed (e.g. 401, 404, or network timeout). Probe other known regions concurrently.
+        other_regions = [rg for rg in BUNNY_KNOWN_REGIONS if rg["rest_host"] != cand_rest]
+        statuses = {cand_rest: cand_status}
+
+        def _probe(reg_info):
+            host = reg_info["rest_host"]
+            try:
+                resp = requests.get(f"https://{host}/{zone}/", headers=headers, timeout=5)
+                return reg_info, resp.status_code
+            except Exception as ex:
+                return reg_info, str(ex)
+
+        with ThreadPoolExecutor(max_workers=min(8, len(other_regions))) as executor:
+            future_to_reg = {executor.submit(_probe, rg): rg for rg in other_regions}
+            for future in as_completed(future_to_reg):
+                reg_info, st = future.result()
+                statuses[reg_info["rest_host"]] = st
+                if st == 200 and not matched_region:
+                    matched_region = reg_info
+                    for f in future_to_reg:
+                        f.cancel()
+                    break
+
+        if matched_region and log_path:
+            write_log(log_path, f"INFO  Auto-detected BunnyCDN storage zone '{zone}' is in region '{matched_region['name']}' ({matched_region['rest_host']}).")
+
+    if not matched_region:
+        all_401 = all(st == 401 for st in statuses.values() if isinstance(st, int))
+        all_404 = all(st == 404 for st in statuses.values() if isinstance(st, int))
+        if all_401:
+            err = (
+                "BunnyCDN authentication failed (401 Unauthorized) across all regions. "
+                "Please verify your credentials in Bunny.net dashboard under Storage -> [Your Zone] -> 'FTP & API Access'. "
+                "Make sure you copy the 'Password' (Read-Write password), NOT your main Bunny Account API Key."
+            )
+        elif all_404:
+            err = f"BunnyCDN Storage Zone '{zone}' not found in any region. Please check that the Storage Zone Name matches your Bunny dashboard."
+        else:
+            err = f"Failed to connect to BunnyCDN storage zone '{zone}'. Endpoint statuses: {statuses}"
+        return {"success": False, "error": err}
+
+    rest_host = matched_region["rest_host"]
+    s3_url = matched_region["s3_url"]
+
+    # 2. Check S3-compatible API usability
+    s3_usable = False
+    try:
+        import boto3
+        from botocore.config import Config
+        s3_cfg = Config(
+            s3={"addressing_style": "path"},
+            signature_version="s3v4",
+            retries={"max_attempts": 2, "mode": "standard"},
+            connect_timeout=6,
+            read_timeout=10
+        )
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=s3_url,
+            aws_access_key_id=zone,  # Storage Zone Name is Access Key ID
+            aws_secret_access_key=bunny_key,
+            region_name="de",
+            config=s3_cfg
+        )
+        s3.head_bucket(Bucket=zone)
+        s3_usable = True
+    except Exception as s3_err:
+        s3_usable = False
+        if log_path:
+            write_log(log_path, f"INFO  Bunny S3 API not usable ({s3_err}). Will use REST API.")
+
+    return {
+        "success": True,
+        "zone": zone,
+        "bunny_key": bunny_key,
+        "rest_host": rest_host,
+        "s3_url": s3_url,
+        "region_code": matched_region.get("code", "de"),
+        "region_name": matched_region.get("name", rest_host),
+        "s3_usable": s3_usable,
+        "error": None
+    }
 
 
 def get_s3_client(storage: dict):
@@ -317,11 +488,10 @@ def list_storage_objects(storage: dict, prefix: str) -> list:
                 from botocore.config import Config
                 _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
                 zone = (storage.get("bunny_storage_zone") or "").strip()
-                access_key = (storage.get("bunny_access_key") or zone).strip()
                 s3 = boto3.client(
                     "s3",
                     endpoint_url=s3_url,
-                    aws_access_key_id=access_key or zone,
+                    aws_access_key_id=zone,
                     aws_secret_access_key=bunny_key,
                     region_name="de",
                     config=Config(s3={'addressing_style': 'path'}, signature_version="s3v4", retries={'max_attempts': 2, 'mode': 'standard'}, connect_timeout=10, read_timeout=15)
@@ -392,7 +562,7 @@ def upload_metadata_file(storage: dict, remote_name: str, data_str: str):
                 s3 = boto3.client(
                     "s3",
                     endpoint_url=s3_url,
-                    aws_access_key_id=access_key or zone,
+                    aws_access_key_id=zone,
                     aws_secret_access_key=bunny_key,
                     region_name="de",
                     config=Config(s3={'addressing_style': 'path'}, signature_version='s3v4', connect_timeout=10, read_timeout=15)
@@ -454,7 +624,7 @@ def download_metadata_file(storage: dict, remote_name: str) -> str:
                 s3 = boto3.client(
                     "s3",
                     endpoint_url=s3_url,
-                    aws_access_key_id=access_key or zone,
+                    aws_access_key_id=zone,
                     aws_secret_access_key=bunny_key,
                     region_name="de",
                     config=Config(s3={'addressing_style': 'path'}, signature_version='s3v4', connect_timeout=10, read_timeout=15)
@@ -778,6 +948,15 @@ def get_compressor_info(profile: str = "default", log_path: str = None) -> dict:
 
 def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, compression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default") -> str:
     write_log(log_path, f"INFO  Starting streaming backup to {storage['type']}: {remote_name} (Profile: {speed_profile})")
+
+    # Storage pre-flight validation to catch authentication/region issues before starting dump
+    if storage.get("type") == "bunny":
+        write_log(log_path, f"INFO  Verifying BunnyCDN storage credentials and endpoint for zone '{storage.get('bunny_storage_zone')}'...")
+        bunny_check = verify_and_resolve_bunny(storage, log_path=log_path)
+        if not bunny_check["success"]:
+            write_log(log_path, f"ERROR BunnyCDN pre-flight validation failed: {bunny_check['error']}")
+            raise RuntimeError(f"BunnyCDN pre-flight validation failed: {bunny_check['error']}")
+        storage["_resolved_bunny"] = bunny_check
     
     settings = get_speed_settings(speed_profile)
     
@@ -937,39 +1116,43 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
             from botocore.config import Config
             from boto3.s3.transfer import TransferConfig
 
-            bunny_key = get_bunny_key(storage)
-            zone = (storage.get("bunny_storage_zone") or "").strip()
-            access_key = (storage.get("bunny_access_key") or zone).strip()
+            res = storage.get("_resolved_bunny")
+            if not res:
+                res = verify_and_resolve_bunny(storage, log_path=log_path)
+                if not res["success"]:
+                    raise RuntimeError(f"BunnyCDN verification failed: {res['error']}")
+
+            zone = res["zone"]
+            bunny_key = res["bunny_key"]
+            rest_host = res["rest_host"]
+            s3_url = res["s3_url"]
+            s3_available = res.get("s3_usable", False)
             clean_remote = remote_name.lstrip("/")
 
-            rest_host, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
-            write_log(log_path, f"INFO  Connecting to BunnyCDN storage zone '{zone}' (S3: {s3_url}, REST: {rest_host})")
+            write_log(log_path, f"INFO  Connecting to BunnyCDN storage zone '{zone}' ({res['region_name']} - S3: {s3_url}, REST: {rest_host})")
 
-            # First, check if S3-compatible API is available on this Bunny storage zone
-            s3_available = False
             s3_client = None
-            try:
-                s3_config = Config(
-                    s3={"addressing_style": "path"},
-                    signature_version="s3v4",
-                    retries={"max_attempts": 2, "mode": "standard"},
-                    connect_timeout=8,
-                    read_timeout=15
-                )
-                test_client = boto3.client(
-                    "s3",
-                    endpoint_url=s3_url,
-                    aws_access_key_id=access_key or zone,
-                    aws_secret_access_key=bunny_key,
-                    region_name="de",
-                    config=s3_config
-                )
-                test_client.head_bucket(Bucket=zone)
-                s3_available = True
-                s3_client = test_client
-                write_log(log_path, f"INFO  BunnyCDN S3-compatible API verified. Streaming upload via S3 multipart...")
-            except Exception as s3_check_err:
-                write_log(log_path, f"INFO  Bunny S3 API not usable ({s3_check_err}). Falling back to REST API...")
+            if s3_available:
+                try:
+                    s3_config = Config(
+                        s3={"addressing_style": "path"},
+                        signature_version="s3v4",
+                        retries={"max_attempts": 2, "mode": "standard"},
+                        connect_timeout=8,
+                        read_timeout=15
+                    )
+                    s3_client = boto3.client(
+                        "s3",
+                        endpoint_url=s3_url,
+                        aws_access_key_id=zone,
+                        aws_secret_access_key=bunny_key,
+                        region_name="de",
+                        config=s3_config
+                    )
+                    write_log(log_path, f"INFO  BunnyCDN S3-compatible API verified. Streaming upload via S3 multipart...")
+                except Exception as s3_init_err:
+                    s3_available = False
+                    write_log(log_path, f"INFO  Bunny S3 client setup failed ({s3_init_err}). Falling back to REST API...")
 
             if s3_available and s3_client:
                 # Bunny S3 multipart streaming: Boto3 buffers chunks with exact Content-Length headers
@@ -1001,7 +1184,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 spool_path = os.path.join(spool_dir, spool_filename)
                 
                 try:
-                    write_log(log_path, f"INFO  Spooling stream to calculate Content-Length for Bunny REST API...")
+                    write_log(log_path, f"INFO  Spooling stream to calculate Content-Length for Bunny REST API ({rest_host})...")
                     with open(spool_path, "wb") as f_spool:
                         while not stop_event.is_set():
                             buf = queue_reader.read(settings.get("chunk_size", 4 * 1024 * 1024))
@@ -1260,11 +1443,10 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     from botocore.config import Config
                     _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
                     zone = (storage.get("bunny_storage_zone") or "").strip()
-                    access_key = (storage.get("bunny_access_key") or zone).strip()
                     s3 = boto3.client(
                         "s3",
                         endpoint_url=s3_url,
-                        aws_access_key_id=access_key or zone,
+                        aws_access_key_id=zone,
                         aws_secret_access_key=bunny_key,
                         region_name="de",
                         config=Config(

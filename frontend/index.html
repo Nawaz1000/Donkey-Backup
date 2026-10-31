@@ -2398,23 +2398,24 @@
       </div>
       <div id="bunny-fields" style="display:none">
         <div class="form-group">
-          <label>Access Key ID (name of zone)</label>
-          <input type="text" id="st-bunny-zone" placeholder="e.g. databasus-poc" oninput="if(!document.getElementById('st-bunny-access-key').value || document.getElementById('st-bunny-access-key').dataset.autoFilled === 'true') { document.getElementById('st-bunny-access-key').value = this.value; document.getElementById('st-bunny-access-key').dataset.autoFilled = 'true'; }" />
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Access Key</label>
-            <input type="text" id="st-bunny-access-key" placeholder="Access Key / Zone Name" oninput="delete this.dataset.autoFilled" />
-          </div>
-          <div class="form-group">
-            <label>Password</label>
-            <input type="password" id="st-bunny-password" placeholder="Storage Zone Password" />
+          <label>Storage Zone Name</label>
+          <input type="text" id="st-bunny-zone" placeholder="e.g. databasus-poc" />
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">
+            Your Bunny.net Storage Zone name (from <b>Storage</b> in your Bunny dashboard).
           </div>
         </div>
         <div class="form-group">
-          <label>Region URL</label>
-          <input type="text" id="st-bunny-region-url" list="bunny-regions-list" placeholder="https://de-s3.storage.bunnycdn.com" />
+          <label>Storage Zone Password</label>
+          <input type="password" id="st-bunny-password" placeholder="Storage Zone Password (Read/Write)" />
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">
+            Found in Bunny dashboard: <b>Storage &rarr; [Your Zone] &rarr; FTP &amp; API Access &rarr; Password</b>. <span style="color:#f87171;font-weight:500;">Do NOT use your Bunny Account API Key.</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Region Endpoint (Optional / Auto-Detect)</label>
+          <input type="text" id="st-bunny-region-url" list="bunny-regions-list" placeholder="Leave blank to Auto-Detect" />
           <datalist id="bunny-regions-list">
+            <option value="">Auto-Detect Region (Recommended)</option>
             <option value="https://de-s3.storage.bunnycdn.com">Falkenstein / Europe (de-s3)</option>
             <option value="https://ny-s3.storage.bunnycdn.com">New York / US East (ny-s3)</option>
             <option value="https://la-s3.storage.bunnycdn.com">Los Angeles / US West (la-s3)</option>
@@ -2426,8 +2427,8 @@
             <option value="https://se-s3.storage.bunnycdn.com">Stockholm / Europe North (se-s3)</option>
             <option value="https://storage.bunnycdn.com">REST API (storage.bunnycdn.com)</option>
           </datalist>
-          <div style="font-size:12px;color:var(--muted);margin-top:6px">
-            Enter S3 Region Endpoint URL (e.g. <code style="color:var(--accent)">https://de-s3.storage.bunnycdn.com</code>) or REST hostname.
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">
+            Select your zone's primary region or leave blank to automatically detect it.
           </div>
         </div>
       </div>
@@ -2521,22 +2522,22 @@
       </div>
       <div id="edit-bunny-fields" style="display:none">
         <div class="form-group">
-          <label>Access Key ID (name of zone)</label>
+          <label>Storage Zone Name</label>
           <input type="text" id="edit-st-bunny-zone" placeholder="e.g. databasus-poc" />
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Access Key</label>
-            <input type="text" id="edit-st-bunny-access-key" placeholder="Access Key / Zone Name" />
-          </div>
-          <div class="form-group">
-            <label>Password</label>
-            <input type="password" id="edit-st-bunny-password" placeholder="Leave blank to keep current" />
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">
+            Your Bunny.net Storage Zone name.
           </div>
         </div>
         <div class="form-group">
-          <label>Region URL</label>
-          <input type="text" id="edit-st-bunny-region-url" list="edit-bunny-regions-list" placeholder="https://de-s3.storage.bunnycdn.com" />
+          <label>Storage Zone Password</label>
+          <input type="password" id="edit-st-bunny-password" placeholder="Leave blank to keep current password" />
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">
+            Found in Bunny dashboard: <b>Storage &rarr; [Your Zone] &rarr; FTP &amp; API Access &rarr; Password</b>. <span style="color:#f87171;font-weight:500;">Do NOT use your Bunny Account API Key.</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Region Endpoint (Optional / Auto-Detect)</label>
+          <input type="text" id="edit-st-bunny-region-url" list="edit-bunny-regions-list" placeholder="Leave blank to Auto-Detect" />
           <datalist id="edit-bunny-regions-list">
             <option value="https://de-s3.storage.bunnycdn.com">Falkenstein / Europe (de-s3)</option>
             <option value="https://ny-s3.storage.bunnycdn.com">New York / US East (ny-s3)</option>
@@ -2549,8 +2550,8 @@
             <option value="https://se-s3.storage.bunnycdn.com">Stockholm / Europe North (se-s3)</option>
             <option value="https://storage.bunnycdn.com">REST API (storage.bunnycdn.com)</option>
           </datalist>
-          <div style="font-size:12px;color:var(--muted);margin-top:6px">
-            Enter S3 Region Endpoint URL (e.g. <code style="color:var(--accent)">https://de-s3.storage.bunnycdn.com</code>) or REST hostname.
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">
+            Select your zone's primary region or leave blank to automatically detect it.
           </div>
         </div>
       </div>
@@ -3737,16 +3738,19 @@
         }
       } else if (type === 'bunny') {
         const zone = v('st-bunny-zone').trim();
-        const accessKey = v('st-bunny-access-key').trim();
         const password = v('st-bunny-password').trim();
         const regionUrl = v('st-bunny-region-url').trim();
 
-        if (!zone) { toast('Please enter Access Key ID (name of zone)', 'error'); return; }
-        if (!password && !accessKey) { toast('Please enter Password or Access Key', 'error'); return; }
+        if (!zone) { toast('Please enter Storage Zone Name', 'error'); return; }
+        if (!password) { toast('Please enter Storage Zone Password', 'error'); return; }
+        if (password.toLowerCase() === zone.toLowerCase()) {
+          toast('Storage Zone Password cannot be the Storage Zone Name. Please copy the Password from Bunny dashboard (FTP & API Access).', 'error');
+          return;
+        }
 
         payload.bunny_storage_zone = zone;
-        payload.bunny_access_key = accessKey || zone;
-        payload.bunny_password = password || accessKey;
+        payload.bunny_access_key = zone;
+        payload.bunny_password = password;
         payload.bunny_region_url = regionUrl;
       }
 
@@ -3762,6 +3766,10 @@
           method: 'POST',
           body: JSON.stringify(payload)
         });
+        if (r.detected_region_url && !v('st-bunny-region-url').trim()) {
+          const regEl = document.getElementById('st-bunny-region-url');
+          if (regEl) regEl.value = r.detected_region_url;
+        }
         resultBox.style.background = 'var(--success-dim)';
         resultBox.style.border = '1px solid rgba(0,212,170,.3)';
         resultBox.style.color = 'var(--accent)';
@@ -3811,11 +3819,17 @@
       } else if (type === 'bunny') {
         payload.bunny_storage_zone = v('edit-st-bunny-zone').trim();
         payload.bunny_region_url = v('edit-st-bunny-region-url').trim();
-        const accessKey = v('edit-st-bunny-access-key').trim();
+        payload.bunny_access_key = payload.bunny_storage_zone;
         const password = v('edit-st-bunny-password').trim();
-        if (accessKey) payload.bunny_access_key = accessKey;
-        if (password) payload.bunny_password = password;
-        if (!password && !accessKey) useSaved = true;
+        if (password) {
+          if (password.toLowerCase() === payload.bunny_storage_zone.toLowerCase()) {
+            toast('Password cannot be the Storage Zone Name.', 'error');
+            return;
+          }
+          payload.bunny_password = password;
+        } else {
+          useSaved = true;
+        }
       }
 
       try {
@@ -3859,16 +3873,19 @@
         payload.s3_endpoint_url = v('st-s3-endpoint-url');
       } else if (type === 'bunny') {
         const zone = v('st-bunny-zone').trim();
-        const accessKey = v('st-bunny-access-key').trim();
         const password = v('st-bunny-password').trim();
         const regionUrl = v('st-bunny-region-url').trim();
 
-        if (!zone) { toast('Please enter Access Key ID (name of zone)', 'error'); return; }
-        if (!password && !accessKey) { toast('Please enter Password or Access Key', 'error'); return; }
+        if (!zone) { toast('Please enter Storage Zone Name', 'error'); return; }
+        if (!password) { toast('Please enter Storage Zone Password', 'error'); return; }
+        if (password.toLowerCase() === zone.toLowerCase()) {
+          toast('Storage Zone Password cannot be the Storage Zone Name.', 'error');
+          return;
+        }
 
         payload.bunny_storage_zone = zone;
-        payload.bunny_access_key = accessKey || zone;
-        payload.bunny_password = password || accessKey;
+        payload.bunny_access_key = zone;
+        payload.bunny_password = password;
         payload.bunny_region_url = regionUrl;
       }
 
@@ -3922,7 +3939,6 @@
         document.getElementById('edit-st-s3-endpoint-url').value = s.s3_endpoint_url || '';
       } else if (s.type === 'bunny') {
         document.getElementById('edit-st-bunny-zone').value = s.bunny_storage_zone || '';
-        document.getElementById('edit-st-bunny-access-key').value = s.bunny_access_key || s.bunny_storage_zone || '';
         document.getElementById('edit-st-bunny-password').value = '';
         document.getElementById('edit-st-bunny-region-url').value = s.bunny_region_url || (s.bunny_region ? `https://${s.bunny_region}-s3.storage.bunnycdn.com` : '');
       }
@@ -3959,10 +3975,15 @@
       } else if (type === 'bunny') {
         payload.bunny_storage_zone = v('edit-st-bunny-zone').trim();
         payload.bunny_region_url = v('edit-st-bunny-region-url').trim();
-        const bAccessKey = v('edit-st-bunny-access-key').trim();
+        payload.bunny_access_key = payload.bunny_storage_zone;
         const bPassword = v('edit-st-bunny-password').trim();
-        if (bAccessKey) payload.bunny_access_key = bAccessKey;
-        if (bPassword) payload.bunny_password = bPassword;
+        if (bPassword) {
+          if (bPassword.toLowerCase() === payload.bunny_storage_zone.toLowerCase()) {
+            toast('Password cannot be the Storage Zone Name.', 'error');
+            return;
+          }
+          payload.bunny_password = bPassword;
+        }
       }
 
       try {
