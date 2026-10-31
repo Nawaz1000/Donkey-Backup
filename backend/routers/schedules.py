@@ -22,6 +22,7 @@ class ScheduleCreate(BaseModel):
     database_name: Optional[str] = None
     collection: Optional[str] = None
     folder_name: Optional[str] = None
+    retention_count: Optional[int] = None
 
 @router.get("/")
 def list_schedules(user=Depends(get_current_user)):
@@ -50,7 +51,8 @@ def list_schedules(user=Depends(get_current_user)):
                 "database_name": db_display,
                 "connection_name": db.get("name", ""),
                 "storage_name": st.get("name", ""),
-                "folder_name": s.get("folder_name", "")
+                "folder_name": s.get("folder_name", ""),
+                "retention_count": s.get("retention_count", None)
             })
     return result
 
@@ -75,6 +77,7 @@ def create_schedule(req: ScheduleCreate, user=Depends(get_current_user)):
         "database_id": req.database_id,
         "storage_id": req.storage_id,
         "folder_name": folder,
+        "retention_count": req.retention_count if (req.retention_count and req.retention_count > 0) else None,
         "frequency": req.frequency,
         "time": req.time,
         "enabled": req.enabled,
@@ -125,6 +128,7 @@ def trigger_schedule(schedule_id: str, background_tasks: BackgroundTasks, user=D
     backups = read_json("data/backups.json")
     backup = {
         "id": str(uuid.uuid4()),
+        "schedule_id": s["id"],
         "database_id": s["database_id"],
         "source_dbname": target_dbname or "__all__",
         "storage_id": s["storage_id"],
@@ -186,6 +190,7 @@ def trigger_all_schedules(background_tasks: BackgroundTasks, user=Depends(get_cu
         backups = read_json("data/backups.json")
         backup = {
             "id": str(uuid.uuid4()),
+            "schedule_id": s["id"],
             "database_id": s["database_id"],
             "source_dbname": target_dbname or "__all__",
             "storage_id": s["storage_id"],

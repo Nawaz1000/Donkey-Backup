@@ -638,6 +638,194 @@ def download_metadata_file(storage: dict, remote_name: str) -> str:
     return None
 
 
+def delete_remote_backup(storage: dict, remote_name: str, folder_name: str = None):
+    """
+    Deletes a backup and its associated files and directory from remote storage.
+    For BunnyCDN Edge Storage, deletes all matching files and sends a DELETE
+    request with a trailing slash to remove the backup's directory as well,
+    ensuring no empty folders remain behind.
+    """
+    if not remote_name or not storage:
+        return
+
+    stype = storage.get("type")
+    clean_rn = remote_name.strip("/")
+    base_folder = (folder_name or storage.get("folder_name") or "").strip().strip("/")
+    while "//" in base_folder:
+        base_folder = base_folder.replace("//", "/")
+
+    # Determine if there is a backup-specific folder (e.g. timestamped directory)
+    backup_dir = None
+    if remote_name.endswith("/"):
+        if clean_rn and clean_rn != base_folder:
+            backup_dir = clean_rn
+    else:
+        if "/" in clean_rn:
+            parent = clean_rn.rsplit("/", 1)[0]
+            if parent != base_folder:
+                backup_dir = parent
+
+    if stype == "bunny":
+        import requests
+        bunny_host = get_bunny_host(storage)
+        bunny_key = get_bunny_key(storage)
+        zone = (storage.get("bunny_storage_zone") or "").strip()
+        headers = {"AccessKey": bunny_key}
+
+        # 1. Discover all files/objects associated with this backup
+        list_prefix = (backup_dir + "/") if backup_dir else remote_name
+        objects = list_storage_objects(storage, list_prefix)
+        if clean_rn not in objects and not remote_name.endswith("/"):
+            objects.append(clean_rn)
+
+        # Delete all individual files
+        for obj in objects:
+            del_url = f"https://{bunny_host}/{zone}/{obj.lstrip('/')}"
+            try:
+                r = requests.delete(del_url, headers=headers, timeout=25)
+                log.info(f"[BunnyCDN] Deleted file {obj} (status {r.status_code})")
+            except Exception as e:
+                log.warning(f"[BunnyCDN] Failed to delete file {obj}: {e}")
+
+        # 2. Delete the backup directory itself from BunnyCDN Edge Storage!
+        # BunnyCDN Edge Storage REST API deletes an entire directory when a DELETE
+        # request is sent with a trailing slash.
+        if backup_dir:
+            clean_dir = backup_dir.strip("/")
+            del_folder_url = f"https://{bunny_host}/{zone}/{clean_dir}/"
+            try:
+                r = requests.delete(del_folder_url, headers=headers, timeout=25)
+                log.info(f"[BunnyCDN] Deleted directory {clean_dir}/ (status {r.status_code})")
+            except Exception as e:
+                log.warning(f"[BunnyCDN] Failed to delete directory {clean_dir}/: {e}")
+
+            # Also attempt to delete virtual folder marker via S3 if present
+            try:
+                import boto3
+                from botocore.config import Config
+                _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=s3_url,
+                    aws_access_key_id=zone,
+                    aws_secret_access_key=bunny_key,
+                    region_name="de",
+                    config=Config(s3={'addressing_style': 'path'}, signature_version="s3v4", retries={'max_attempts': 2, 'mode': 'standard'}, connect_timeout=10, read_timeout=15)
+                )
+                s3.delete_object(Bucket=zone, Key=f"{clean_dir}/")
+            except Exception:
+                pass
+
+    elif stype == "s3":
+        s3 = get_s3_client(storage)
+        bucket = storage["s3_bucket"]
+        search_prefix = (backup_dir + "/") if backup_dir else remote_name
+        paginator = s3.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket, Prefix=search_prefix):
+            objects_to_delete = [{'Key': item['Key']} for item in page.get('Contents', [])]
+            if objects_to_delete:
+                s3.delete_objects(Bucket=bucket, Delete={'Objects': objects_to_delete})
+        if not remote_name.endswith("/"):
+            try:
+                s3.delete_object(Bucket=bucket, Key=clean_rn)
+            except Exception:
+                pass
+
+    elif stype == "azure":
+        from azure.storage.blob import BlobServiceClient
+        conn_str = (
+            f"DefaultEndpointsProtocol=https;"
+            f"AccountName={storage['azure_account_name']};"
+            f"AccountKey={storage['azure_account_key']};"
+            f"EndpointSuffix=core.windows.net"
+        )
+        client = BlobServiceClient.from_connection_string(conn_str)
+        container = client.get_container_client(storage["azure_container"])
+        search_prefix = (backup_dir + "/") if backup_dir else remote_name
+        blobs = container.list_blobs(name_starts_with=search_prefix)
+        for blob in blobs:
+            try:
+                container.delete_blob(blob.name)
+            except Exception:
+                pass
+        if not remote_name.endswith("/"):
+            try:
+                container.delete_blob(clean_rn)
+            except Exception:
+                pass
+
+    elif stype == "gcs":
+        import json as _json
+        from google.cloud import storage as gcs
+        from google.oauth2 import service_account
+        creds_dict = _json.loads(storage["gcs_credentials_json"])
+        creds = service_account.Credentials.from_service_account_info(creds_dict)
+        client = gcs.Client(credentials=creds)
+        bucket = client.bucket(storage["gcs_bucket"])
+        search_prefix = (backup_dir + "/") if backup_dir else remote_name
+        blobs = bucket.list_blobs(prefix=search_prefix)
+        for blob in blobs:
+            try:
+                blob.delete()
+            except Exception:
+                pass
+        if not remote_name.endswith("/"):
+            try:
+                blob = bucket.get_blob(clean_rn)
+                if blob:
+                    blob.delete()
+            except Exception:
+                pass
+
+
+def prune_schedule_backups(schedule_id: str, retention_count: int):
+    """
+    Prunes completed backups for a schedule exceeding the retention_count limit.
+    Deletes both the database records and remote storage files/directories.
+    """
+    if not schedule_id or retention_count <= 0:
+        return
+    if not os.path.exists("data/backups.json") or not os.path.exists("data/storages.json"):
+        return
+
+    try:
+        backups = read_json("data/backups.json")
+        storages = read_json("data/storages.json")
+
+        # Find all completed backups created by this schedule
+        schedule_backups = [
+            b for b in backups
+            if b.get("schedule_id") == schedule_id and b.get("status") == "completed"
+        ]
+
+        # Sort descending by created_at (newest first)
+        schedule_backups.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+
+        if len(schedule_backups) <= retention_count:
+            return
+
+        to_prune = schedule_backups[retention_count:]
+        prune_ids = {b["id"] for b in to_prune}
+
+        for old_b in to_prune:
+            rn = old_b.get("remote_name")
+            sid = old_b.get("storage_id")
+            if rn and sid:
+                st = next((s for s in storages if s["id"] == sid), None)
+                if st:
+                    try:
+                        delete_remote_backup(st, rn, folder_name=old_b.get("folder_name"))
+                        log.info(f"Retention prune: deleted remote backup {old_b.get('label')}")
+                    except Exception as e:
+                        log.warning(f"Retention prune failed for {old_b.get('label')}: {e}")
+
+        updated_backups = [b for b in backups if b["id"] not in prune_ids]
+        write_json("data/backups.json", updated_backups)
+        log.info(f"Retention prune: removed {len(prune_ids)} old backup(s) for schedule {schedule_id}")
+    except Exception as e:
+        log.error(f"Error during schedule backup pruning: {e}")
+
+
 # ─── STORAGE STREAMING ───────────────────────────────────────────────────────
 
 import io
@@ -2458,6 +2646,21 @@ def do_backup(backup_id: str):
             completed_at=datetime.utcnow().isoformat() + "Z",
             duration_seconds=duration
         )
+
+        # Check schedule retention policy if this was a scheduled backup
+        sch_id = backup.get("schedule_id")
+        if sch_id:
+            try:
+                if os.path.exists("data/schedules.json"):
+                    schedules = read_json("data/schedules.json")
+                    sch = next((s for s in schedules if s["id"] == sch_id), None)
+                    if sch and sch.get("retention_count"):
+                        ret_cnt = int(sch["retention_count"])
+                        if ret_cnt > 0:
+                            write_log(log_path, f"INFO  Applying schedule retention policy (keeping last {ret_cnt} backups)...")
+                            prune_schedule_backups(sch_id, ret_cnt)
+            except Exception as e:
+                write_log(log_path, f"WARN  Could not run retention pruning: {e}")
         if backup.get("send_notifications", True):
             send_notification(
                 title="Backup Successful ✅",

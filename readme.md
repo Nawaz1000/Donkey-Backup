@@ -1,11 +1,11 @@
 # BackupVault
 
-A self-hosted database backup manager for **PostgreSQL** and **MongoDB**, with support for **Azure Blob Storage** and **Google Cloud Storage**.
+A self-hosted database backup manager for **PostgreSQL**, **MongoDB**, and **Apache Solr**, with support for **Azure Blob Storage**, **Google Cloud Storage**, **Amazon S3 / S3-Compatible**, and **BunnyCDN Edge Storage**.
 
 ## Features
 - 🔐 User authentication (JWT)
-- 🗃️ Manage PostgreSQL & MongoDB connections
-- ☁️ Azure Blob Storage & Google Cloud Storage destinations
+- 🗃️ Manage PostgreSQL, MongoDB & Apache Solr connections
+- ☁️ Azure Blob, Google Cloud Storage, Amazon S3, and BunnyCDN Edge Storage destinations
 - 💾 Manual & scheduled backups
 - 📊 Dashboard with stats
 - 🐳 Docker-ready
@@ -50,6 +50,20 @@ Open `frontend/index.html` in your browser (or serve with any static server).
 2. Create a Service Account with `Storage Object Creator` role
 3. Download the JSON key file and paste its contents
 
+### Amazon S3 / S3-Compatible
+1. Create a bucket in AWS S3 or compatible provider (MinIO, Cloudflare R2, Wasabi, DigitalOcean Spaces)
+2. Enter Bucket Name, Access Key, Secret Key, and Region
+3. (Optional) Specify Custom Endpoint URL for S3-compatible providers
+
+### BunnyCDN Edge Storage
+1. Create a Storage Zone in Bunny.net (e.g. `databasus-poc`)
+2. In Bunny.net, navigate to **Storage -> {your-zone} -> FTP & API Access**
+3. Copy the **Password** (Read/Write Password)
+   > ⚠️ **Important:** Do not use the Storage Zone Name as the password. Use the secret password generated under "FTP & API Access".
+4. Enter the **Storage Zone Name** and **Password** in BackupVault
+5. (Optional) Provide a Region URL (e.g. `https://la.storage.bunnycdn.com`) or let BackupVault automatically detect your zone's region endpoint!
+6. (Optional) Specify a folder name (e.g. `postgres-backup` or `database-backups`)
+
 ## Project Structure
 ```
 backupvault/
@@ -73,7 +87,7 @@ backupvault/
 - **Backend:** Python, FastAPI, JWT, bcrypt
 - **Databases Supported:** MongoDB, PostgreSQL, Apache Solr
 - **Frontend:** Vanilla JS, CSS (no framework needed)
-- **Storage:** Azure Blob Storage SDK, Google Cloud Storage SDK
+- **Storage:** Azure Blob Storage SDK, Google Cloud Storage SDK, Boto3 S3 SDK, BunnyCDN REST & S3 API
 - **Auth:** JWT tokens, bcrypt password hashing
 
 ## Recent Optimizations & Advanced Features
@@ -158,7 +172,16 @@ backupvault/
   - Custom User-Agent headers to prevent gateway firewalls from blocking notifications.
   - Instant Webhook testing on the Settings page to verify delivery.
   - Per-backup preference toggle to opt-out of notification dispatches for specific manual runs.
-- **Dynamic Scheduling:**
+- **Dynamic Scheduling & Automated Retention:**
   - Robust time-window based scheduler logic avoiding race conditions.
   - Native browser-integrated time picker supporting precise hour and minute selections.
+  - **Retention Policy (Keep Last N Backups):** Configure schedules to automatically retain only the last *N* completed backups (e.g. keep last 7 daily backups). Older runs exceeding the threshold are automatically pruned from both the dashboard and remote cloud storage.
+- **BunnyCDN Dual-Engine Streaming & Auto-Region Detection:**
+  - High-speed zero-copy streaming to **BunnyCDN Edge Storage** with multi-part S3 acceleration and automatic REST API fallback.
+  - Intelligent auto-detection of regional Edge Storage endpoints (`la` Los Angeles, `de` Falkenstein, `uk` London, `sg` Singapore, `syd` Sydney, `ny` New York) based on your zone's primary storage region.
+  - Pre-flight storage verification tests connectivity and ensures the storage zone password is used rather than the zone name.
+- **Automated Cloud Directory & Folder Cleanup (Zero Ghost Folders):**
+  - Backups are stored in isolated, timestamped directories (e.g. `postgres-backup/ts-prod-postgres-2026-10-31_07-14-00/backup.archive.zst`).
+  - When a backup is deleted from the UI via **"Delete from Cloud Bucket & Local"** (or pruned by a schedule's retention policy), BackupVault removes all associated archive objects and automatically issues a directory-level `DELETE` request with a trailing slash (`/`) to the BunnyCDN Edge Storage REST API (`DELETE https://{bunny_host}/{zone}/{backup_dir}/`).
+  - This guarantees that empty folders and directory markers are completely wiped from Bunny.net's File Manager, preventing orphaned empty folders from accumulating while safely preserving your root base folder (e.g. `postgres-backup/`).
 

@@ -108,6 +108,7 @@ async def scheduler_loop():
                     backups = read_json("data/backups.json")
                     backup = {
                         "id": str(uuid.uuid4()),
+                        "schedule_id": s["id"],
                         "database_id": s["database_id"],
                         "source_dbname": target_dbname or "__all__",
                         "storage_id": s["storage_id"],

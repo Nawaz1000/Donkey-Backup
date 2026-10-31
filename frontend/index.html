@@ -2018,8 +2018,25 @@
                     <div style="padding-top:16px; margin-top:12px; border-top:1px solid var(--border);">
                       <div class="form-group mb-4">
                         <label>Storage Destination</label>
-                        <select id="inline-sc-storage"
+                        <select id="inline-sc-storage" onchange="onInlineScheduleStorageChange()"
                           style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;"></select>
+                      </div>
+                      <div class="form-group mb-4">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; text-transform:none;">
+                          <input type="checkbox" id="inline-sc-use-folder" onchange="toggleInlineScheduleFolder()"
+                            style="width:16px; height:16px; accent-color:var(--accent); cursor:pointer; margin:0;" />
+                          <span>Save inside a folder in storage account?</span>
+                        </label>
+                        <div id="inline-sc-folder-group" style="display:none; margin-top:8px;">
+                          <input type="text" id="inline-sc-folder" placeholder="e.g. database-backups or prod/backups"
+                            style="background-color:var(--surface-solid); border:1px solid var(--border); padding:10px 14px; font-weight:500; width:100%; border-radius:var(--radius-sm); color:#fff; box-sizing:border-box;" />
+                        </div>
+                      </div>
+                      <div class="form-group mb-4">
+                        <label>Retention Policy (optional)</label>
+                        <input type="number" id="inline-sc-retention" placeholder="Keep all (e.g. 7 to keep last 7 backups)" min="1" max="1000"
+                          style="background-color:var(--surface-solid); border:1px solid var(--border); padding:10px 14px; font-weight:500; width:100%; border-radius:var(--radius-sm); color:#fff; box-sizing:border-box;" />
+                        <div style="font-size:11px;color:var(--muted);margin-top:4px">Automatically deletes older backups and cleans up cloud folders exceeding this limit.</div>
                       </div>
                       <div class="form-group mb-4">
                         <label>Speed Profile</label>
@@ -2799,6 +2816,11 @@
           <input type="time" id="sc-time" class="form-control" value="02:00"
             style="width:100%;height:38px;padding:8px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-sm);font-family:inherit;font-size:14px;outline:none;transition:var(--transition);" />
         </div>
+      </div>
+      <div class="form-group">
+        <label>Retention Policy (optional)</label>
+        <input type="number" id="sc-retention" placeholder="Keep all (e.g. 7 to keep last 7 backups)" min="1" max="1000" />
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Automatically deletes older backups and cleans up cloud folders exceeding this limit.</div>
       </div>
       <div id="sc-mixed-info" style="display:none">
         <div class="info-banner">
@@ -4175,6 +4197,26 @@
       if (group) group.style.display = checked ? 'block' : 'none';
     }
 
+    function toggleInlineScheduleFolder() {
+      const checked = document.getElementById('inline-sc-use-folder')?.checked;
+      const group = document.getElementById('inline-sc-folder-group');
+      if (group) group.style.display = checked ? 'block' : 'none';
+    }
+
+    function onInlineScheduleStorageChange() {
+      const el = document.getElementById('inline-sc-storage');
+      if (!el || el.selectedIndex < 0) return;
+      const opt = el.options[el.selectedIndex];
+      const defaultFolder = opt ? (opt.dataset.folder || '') : '';
+      const chk = document.getElementById('inline-sc-use-folder');
+      const folderInput = document.getElementById('inline-sc-folder');
+      if (defaultFolder) {
+        if (chk) chk.checked = true;
+        if (folderInput && !folderInput.value) folderInput.value = defaultFolder;
+      }
+      toggleInlineScheduleFolder();
+    }
+
     function onBackupStorageChange() {
       const el = document.getElementById('bk-storage');
       if (!el || el.selectedIndex < 0) return;
@@ -4750,9 +4792,10 @@
           const typeDisplay = s.backup_method === 'incremental' ? 'Incremental' : 'Full';
           const freqDisplay = s.frequency === 'weekly_mixed' ? 'Weekly Mixed' : s.frequency;
           const statusHtml = s.enabled ? '<span class="badge badge-green" style="background:var(--accent); color:#000; font-weight:600; padding:4px 8px;">Active</span>' : '<span style="background:rgba(255,255,255,0.05); color:var(--text2); padding:4px 8px; border-radius:4px; font-size:11px; border:1px solid rgba(255,255,255,0.1);">Paused</span>';
+          const retentionHtml = s.retention_count ? `<span style="font-size:11px; color:var(--muted); font-weight:normal; margin-left:6px;">(Keep ${s.retention_count})</span>` : '';
           return `
       <tr>
-        <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); font-weight:600;">${s.name}</td>
+        <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); font-weight:600;">${s.name}${retentionHtml}</td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${s.database_name}</td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);"><span style="background:rgba(255,255,255,0.05); padding:4px 8px; border-radius:4px; font-size:11px; border:1px solid rgba(255,255,255,0.1);">${typeDisplay}</span></td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2); text-transform:capitalize;">${freqDisplay}</td>
@@ -4780,7 +4823,10 @@
             onInlineScheduleDbChange();
           }
         }
-        if (stSelect) stSelect.innerHTML = sts.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+        if (stSelect) {
+          stSelect.innerHTML = sts.map(s => `<option value="${s.id}" data-folder="${s.folder_name || ''}">${s.name}</option>`).join('');
+          onInlineScheduleStorageChange();
+        }
 
         renderScheduleCalendar();
       } catch (e) { toast(e.message, 'error'); }
@@ -4877,6 +4923,9 @@
     async function runInlineSchedule() {
       const localTime = v('inline-sc-time') || '02:00';
       const dbname = v('inline-sc-dbname') || '__all__';
+      const useFolder = document.getElementById('inline-sc-use-folder') && document.getElementById('inline-sc-use-folder').checked;
+      const folderName = useFolder ? v('inline-sc-folder').trim() : '';
+      const retentionVal = parseInt(v('inline-sc-retention')) || null;
 
       try {
         await apiFetch('/schedules/', {
@@ -4892,11 +4941,14 @@
             backup_method: document.getElementById('inline-sc-type').value,
             incremental_field: v('inline-sc-incremental-field') || null,
             speed_profile: v('inline-sc-speed-profile') || 'default',
-            timezone_offset: new Date().getTimezoneOffset()
+            timezone_offset: new Date().getTimezoneOffset(),
+            folder_name: folderName || null,
+            retention_count: retentionVal
           })
         });
         toast('Schedule created!', 'success');
         document.getElementById('inline-sc-name').value = '';
+        if (document.getElementById('inline-sc-retention')) document.getElementById('inline-sc-retention').value = '';
         loadSchedules();
       } catch (e) {
         toast(e.message, 'error');
@@ -4912,6 +4964,7 @@
       const collection = dbType === 'collection' ? v('sc-collection-select') : 'full';
       const useFolder = document.getElementById('sc-use-folder') && document.getElementById('sc-use-folder').checked;
       const folderName = useFolder ? v('sc-folder').trim() : '';
+      const retentionVal = parseInt(v('sc-retention')) || null;
 
       try {
         await apiFetch('/schedules/', {
@@ -4924,7 +4977,8 @@
             timezone_offset: new Date().getTimezoneOffset(),
             database_name: dbname,
             collection: collection || 'full',
-            folder_name: folderName || null
+            folder_name: folderName || null,
+            retention_count: retentionVal
           })
         });
         closeModal('schedule-modal');
@@ -5252,8 +5306,10 @@
       if (id === 'schedule-modal') {
         const chk = document.getElementById('sc-use-folder');
         const folder = document.getElementById('sc-folder');
+        const ret = document.getElementById('sc-retention');
         if (chk) chk.checked = false;
         if (folder) folder.value = '';
+        if (ret) ret.value = '';
         toggleScheduleFolder();
         await populateSelects();
         onFreqChange();
