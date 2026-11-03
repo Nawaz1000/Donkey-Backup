@@ -12,12 +12,16 @@ FROM python:3.11-slim
 # Force stdin/stdout/stderr to be unbuffered in python containers
 ENV PYTHONUNBUFFERED=1
 
-# Install nginx, supervisor, postgresql-client, and mongodb tools
+# Install nginx, supervisor, gnupg, curl, wget, zstd, pigz, and official PostgreSQL client (v18)
 RUN apt-get update && apt-get install -y \
     nginx supervisor \
-    postgresql-client \
-    gnupg curl wget \
+    gnupg curl wget lsb-release \
     zstd pigz \
+    && install -d /etc/apt/keyrings \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /etc/apt/keyrings/postgresql.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && (apt-get install -y postgresql-client-18 || apt-get install -y postgresql-client) \
     && rm -rf /var/lib/apt/lists/*
 
 # Install MongoDB Database Tools directly (no apt repo needed)
@@ -70,6 +74,8 @@ command=uvicorn main:app --host 127.0.0.1 --port 8000\n\
 directory=/app\n\
 autostart=true\n\
 autorestart=true\n\
+stopasgroup=true\n\
+killasgroup=true\n\
 stdout_logfile=/dev/stdout\n\
 stdout_logfile_maxbytes=0\n\
 stderr_logfile=/dev/stderr\n\

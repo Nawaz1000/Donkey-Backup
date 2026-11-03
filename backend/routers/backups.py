@@ -11,6 +11,7 @@ router = APIRouter()
 
 class BackupCreate(BaseModel):
     database_id: str
+    database_name: Optional[str] = None
     storage_id: str
     label: Optional[str] = ""
     collection: Optional[str] = ""
@@ -19,6 +20,8 @@ class BackupCreate(BaseModel):
     indexing_mode: Literal["with_index", "without_index", "only_index"] = "with_index"
     send_notifications: Optional[bool] = True
     speed_profile: Literal["default", "safe", "balanced", "extreme"] = "default"
+    folder_name: Optional[str] = None
+    archive_mode: Optional[Literal["single", "multiple"]] = "single" 
 
 class RestoreRequest(BaseModel):
     backup_id: Optional[str] = None
@@ -28,6 +31,7 @@ class RestoreRequest(BaseModel):
     new_database: bool = False
     new_database_name: Optional[str] = None
     target_database_name: Optional[str] = None
+    selected_database: Optional[str] = None
     collection: Optional[str] = ""
     indexing_mode: Literal["with_index", "without_index", "only_index"] = "with_index"
     speed_profile: Literal["default", "safe", "balanced", "extreme"] = "default"
@@ -50,6 +54,7 @@ def list_backups(user=Depends(get_current_user)):
                 "database_type": db.get("type",""),
                 "storage_name": st.get("name",""),
                 "storage_type": st.get("type",""),
+                "folder_name": b.get("folder_name", ""),
             })
     return sorted(result, key=lambda x: x["created_at"], reverse=True)
 
@@ -64,12 +69,20 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
     if not storage:
         raise HTTPException(404, "Storage not found")
 
+    folder_val = req.folder_name if req.folder_name is not None else storage.get("folder_name", "")
+    folder_clean = (folder_val or "").strip().strip("/")
+    while "//" in folder_clean:
+        folder_clean = folder_clean.replace("//", "/")
+
     backups = read_json("data/backups.json")
+    target_dbname = req.database_name if req.database_name is not None else db.get("database_name", "")
     backup = {
         "id": str(uuid.uuid4()),
         "database_id": req.database_id,
-        "source_dbname": db.get("database_name", ""),
+        "database_name": target_dbname,
+        "source_dbname": target_dbname,
         "storage_id": req.storage_id,
+        "folder_name": folder_clean,
         "label": req.label or f"backup-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}",
         "collection": req.collection or "full",
         "backup_method": req.backup_method,
@@ -77,6 +90,7 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
         "indexing_mode": req.indexing_mode,
         "send_notifications": req.send_notifications,
         "speed_profile": req.speed_profile,
+        "archive_mode": req.archive_mode or "single",
         "status": "running",
         "size_mb": None,
         "remote_path": None,
@@ -106,11 +120,14 @@ def get_backup_logs(backup_id: str, user=Depends(get_current_user)):
         "logs": logs,
         "status": backup["status"],
         "error": backup.get("error"),
-        "progress_percentage": backup.get("progress_percentage", 0)
+        "progress_percentage": backup.get("progress_percentage", 0),
+        "processed_mb": backup.get("processed_mb", 0),
+        "speed_mbps": backup.get("speed_mbps", 0),
+        "total_mb": backup.get("total_mb", 0)
     }
 
 @router.delete("/{backup_id}")
-def delete_backup(backup_id: str, delete_from_remote: bool = False, user=Depends(get_current_user)):
+def delete_backup(backup_id: str, delete_from_remote: bool = True, user=Depends(get_current_user)):
     backups = read_json("data/backups.json")
     dbs = read_json("data/databases.json")
     user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
@@ -119,42 +136,35 @@ def delete_backup(backup_id: str, delete_from_remote: bool = False, user=Depends
     if not backup:
         raise HTTPException(404, "Backup not found")
         
-    if delete_from_remote and backup.get("remote_name"):
-        try:
-            storages = read_json("data/storages.json")
-            storage = next((s for s in storages if s["id"] == backup["storage_id"]), None)
-            if storage:
-                if storage["type"] == "azure":
-                    from azure.storage.blob import BlobServiceClient
-                    conn_str = (
-                        f"DefaultEndpointsProtocol=https;"
-                        f"AccountName={storage['azure_account_name']};"
-                        f"AccountKey={storage['azure_account_key']};"
-                        f"EndpointSuffix=core.windows.net"
-                    )
-                    client = BlobServiceClient.from_connection_string(conn_str)
-                    container = client.get_container_client(storage["azure_container"])
-                    blobs = container.list_blobs(name_starts_with=backup["remote_name"])
-                    for blob in blobs:
-                        container.delete_blob(blob.name)
-                elif storage["type"] == "gcs":
-                    import json
-                    from google.cloud import storage as gcs
-                    from google.oauth2 import service_account
-                    creds_dict = json.loads(storage["gcs_credentials_json"])
-                    creds = service_account.Credentials.from_service_account_info(creds_dict)
-                    client = gcs.Client(credentials=creds)
-                    bucket = client.bucket(storage["gcs_bucket"])
-                    blobs = bucket.list_blobs(prefix=backup["remote_name"])
-                    for blob in blobs:
-                        blob.delete()
-        except Exception as e:
-            print(f"Failed to delete remote backup: {e}")
-            error_str = str(e).lower()
-            if "not found" in error_str or "blobnotfound" in error_str or "does not exist" in error_str:
-                print("Blob already missing remotely, proceeding to delete local record.")
-            else:
-                raise HTTPException(400, f"Failed to delete remote backup: {str(e)}")
+    if delete_from_remote:
+        remote_name = backup.get("remote_name")
+        if not remote_name and backup.get("remote_path"):
+            rp = backup["remote_path"]
+            if "://" in rp:
+                parts = rp.split("://", 1)[1]
+                remote_name = parts.split("/", 1)[1] if "/" in parts else None
+        if not remote_name and backup.get("logs"):
+            import re
+            m = re.search(r"Streaming (?:backup|restore) to [^:]+:\s*([^\s\(]+)", backup["logs"])
+            if not m:
+                m = re.search(r"->\s*[a-zA-Z0-9]+://[^/]+/([^\s\n\r]+)", backup["logs"])
+            if m:
+                remote_name = m.group(1).strip()
+
+        if remote_name:
+            try:
+                storages = read_json("data/storages.json")
+                storage = next((s for s in storages if s["id"] == backup["storage_id"]), None)
+                if storage:
+                    from engine import delete_remote_backup
+                    delete_remote_backup(storage, remote_name, folder_name=backup.get("folder_name"))
+            except Exception as e:
+                print(f"Failed to delete remote backup: {e}")
+                error_str = str(e).lower()
+                if "not found" in error_str or "blobnotfound" in error_str or "does not exist" in error_str:
+                    print("Blob already missing remotely, proceeding to delete local record.")
+                else:
+                    raise HTTPException(400, f"Failed to delete remote backup: {str(e)}")
 
     backups = [b for b in backups if b["id"] != backup_id]
     write_json("data/backups.json", backups)
@@ -238,7 +248,10 @@ def get_restore_logs(restore_id: str, user=Depends(get_current_user)):
         "logs": logs,
         "status": restore["status"],
         "error": restore.get("error"),
-        "progress_percentage": restore.get("progress_percentage", 0)
+        "progress_percentage": restore.get("progress_percentage", 0),
+        "processed_mb": restore.get("processed_mb", 0),
+        "speed_mbps": restore.get("speed_mbps", 0),
+        "total_mb": restore.get("total_mb", 0)
     }
 
 @router.post("/restore")
@@ -280,6 +293,7 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
         "new_database": req.new_database,
         "new_database_name": req.new_database_name if req.new_database else None,
         "target_database_name": req.target_database_name,
+        "selected_database": req.selected_database,
         "collection": req.collection or "full",
         "indexing_mode": req.indexing_mode,
         "speed_profile": req.speed_profile,
@@ -325,3 +339,33 @@ def cancel_restore(restore_id: str, user=Depends(get_current_user)):
                 return {"success": True, "message": "Restore cancelled"}
             return {"success": False, "message": "Restore is not running"}
     raise HTTPException(404, "Restore not found")
+
+
+@router.post("/cleanup-stale")
+def cleanup_stale(user=Depends(get_current_user)):
+    from engine import kill_stale_backup_subprocesses
+    killed = kill_stale_backup_subprocesses()
+
+    # Mark any dangling 'running' jobs as failed
+    backups = read_json("data/backups.json")
+    b_updated = False
+    for b in backups:
+        if b.get("status") == "running":
+            b["status"] = "failed"
+            b["error"] = "Cleaned up stale interrupted job"
+            b_updated = True
+    if b_updated:
+        write_json("data/backups.json", backups)
+
+    if os.path.exists("data/restores.json"):
+        restores = read_json("data/restores.json")
+        r_updated = False
+        for r in restores:
+            if r.get("status") == "running":
+                r["status"] = "failed"
+                r["error"] = "Cleaned up stale interrupted job"
+                r_updated = True
+        if r_updated:
+            write_json("data/restores.json", restores)
+
+    return {"success": True, "killed_processes": killed, "message": f"Cleaned up {killed} stale backup/restore process(es)."}

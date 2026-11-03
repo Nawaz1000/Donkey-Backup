@@ -35,6 +35,8 @@
       --accent2-dim: rgba(59, 130, 246, 0.12);
       --azure: #3b82f6;
       --gcs: #f97316;
+      --s3: #eab308;
+      --bunny: #ff6723;
       --pg: #6366f1;
       --mongo: #22c55e;
       --text: #ffffff;
@@ -679,6 +681,16 @@
     .badge-gcs {
       background: rgba(249, 115, 22, 0.12);
       color: #fb923c
+    }
+
+    .badge-s3 {
+      background: rgba(234, 179, 8, 0.12);
+      color: #facc15
+    }
+
+    .badge-bunny {
+      background: rgba(255, 103, 35, 0.12);
+      color: #ff8533
     }
 
     .dot {
@@ -1645,6 +1657,17 @@
                       <option value="">— select connection first —</option>
                     </select>
                   </div>
+                  <div class="form-group mb-4" id="inline-bk-archive-mode-group" style="display:none">
+                    <label>Cluster Archive Format</label>
+                    <select id="inline-bk-archive-mode"
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      <option value="single">Single Unified Archive (All DBs inside 1 file)</option>
+                      <option value="multiple">Database-Wise Archives (Separate file per DB)</option>
+                    </select>
+                    <div style="font-size:11px;color:var(--muted);margin-top:4px">
+                      Bundle all databases into one archive file or create separate archives per database.
+                    </div>
+                  </div>
                   <div class="form-group mb-4" id="inline-bk-scope-group">
                     <label>Backup Scope</label>
                     <select id="inline-bk-scope"
@@ -1908,13 +1931,16 @@
           </div>
 
           <div class="card" style="border:none; background:var(--surface); margin-bottom:24px;">
-            <div class="card-header" style="border-bottom:1px solid rgba(255,255,255,0.05); padding:24px;">
+            <div class="card-header" style="border-bottom:1px solid rgba(255,255,255,0.05); padding:24px; display:flex; justify-content:space-between; align-items:center;">
               <div>
                 <div class="card-title" style="font-size:16px; font-weight:700;"><i data-lucide="list"
                     style="display:none"></i> Active Schedules</div>
                 <div style="font-size:12px; color:var(--text2); margin-top:4px;">Recurring backup jobs across your
                   databases</div>
               </div>
+              <button class="btn btn-secondary btn-sm" onclick="triggerSchedulerCheck()" style="display:flex; align-items:center; gap:6px;">
+                <i data-lucide="play-circle" style="width:14px;height:14px"></i> Trigger Scheduler
+              </button>
             </div>
             <table style="width:100%; text-align:left; border-collapse:collapse;">
               <thead>
@@ -1950,9 +1976,16 @@
                       style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500; width:100%; border-radius:var(--radius-sm); color:#fff; box-sizing:border-box;">
                   </div>
                   <div class="form-group mb-6">
-                    <label>Database</label>
-                    <select id="inline-sc-db"
+                    <label>Database Connection</label>
+                    <select id="inline-sc-db" onchange="onInlineScheduleDbChange()"
                       style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                    </select>
+                  </div>
+                  <div class="form-group mb-6" id="inline-sc-dbname-group">
+                    <label>Database Name</label>
+                    <select id="inline-sc-dbname"
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      <option value="__all__">⚡ All Databases (Whole Instance)</option>
                     </select>
                   </div>
                   <div class="form-group mb-6">
@@ -1996,15 +2029,32 @@
                     <div style="padding-top:16px; margin-top:12px; border-top:1px solid var(--border);">
                       <div class="form-group mb-4">
                         <label>Storage Destination</label>
-                        <select id="inline-sc-storage"
+                        <select id="inline-sc-storage" onchange="onInlineScheduleStorageChange()"
                           style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;"></select>
+                      </div>
+                      <div class="form-group mb-4">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; text-transform:none;">
+                          <input type="checkbox" id="inline-sc-use-folder" onchange="toggleInlineScheduleFolder()"
+                            style="width:16px; height:16px; accent-color:var(--accent); cursor:pointer; margin:0;" />
+                          <span>Save inside a folder in storage account?</span>
+                        </label>
+                        <div id="inline-sc-folder-group" style="display:none; margin-top:8px;">
+                          <input type="text" id="inline-sc-folder" placeholder="e.g. database-backups or prod/backups"
+                            style="background-color:var(--surface-solid); border:1px solid var(--border); padding:10px 14px; font-weight:500; width:100%; border-radius:var(--radius-sm); color:#fff; box-sizing:border-box;" />
+                        </div>
+                      </div>
+                      <div class="form-group mb-4">
+                        <label>Retention Policy (optional)</label>
+                        <input type="number" id="inline-sc-retention" placeholder="Keep all (e.g. 7 to keep last 7 backups)" min="1" max="1000"
+                          style="background-color:var(--surface-solid); border:1px solid var(--border); padding:10px 14px; font-weight:500; width:100%; border-radius:var(--radius-sm); color:#fff; box-sizing:border-box;" />
+                        <div style="font-size:11px;color:var(--muted);margin-top:4px">Automatically deletes older backups and cleans up cloud folders exceeding this limit.</div>
                       </div>
                       <div class="form-group mb-4">
                         <label>Speed Profile</label>
                         <select id="inline-sc-speed-profile"
                           style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                          <option value="extreme" selected>Extreme (Ultra Turbo: 20GB in ~2min)</option>
                           <option value="default">Default</option>
-                          <option value="extreme">Extreme</option>
                           <option value="balanced">Balanced</option>
                           <option value="safe">Safe</option>
                         </select>
@@ -2089,9 +2139,26 @@
                 <div style="padding:0 24px 24px 24px;">
                   <div class="form-group mb-6">
                     <label>Source Backup</label>
-                    <select id="inline-rs-backup"
+                    <select id="inline-rs-backup" onchange="onInlineRestoreBackupChange()"
                       style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
                     </select>
+                  </div>
+                  <!-- Inline Selective Instance DB Restore -->
+                  <div class="form-group mb-6" id="inline-rs-instance-scope-group" style="display:none">
+                    <label>Databases to Restore</label>
+                    <select id="inline-rs-instance-scope" onchange="onInlineRestoreInstanceScopeChange()"
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      <option value="all">⚡ Restore All Databases in Backup</option>
+                      <option value="single">🎯 Restore Only One Specific Database</option>
+                    </select>
+                  </div>
+                  <div class="form-group mb-6" id="inline-rs-single-db-group" style="display:none">
+                    <label>Database to Restore from Backup</label>
+                    <input type="text" id="inline-rs-selected-db" placeholder="e.g. CBT_PROD"
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;" />
+                    <div style="font-size:11px;color:var(--muted);margin-top:4px">
+                      Enter the specific database name inside the backup that you want to restore.
+                    </div>
                   </div>
                   <div class="form-group mb-6">
                     <label>Target Connection</label>
@@ -2317,6 +2384,8 @@
         <select id="st-type" onchange="toggleStorageFields()">
           <option value="azure">Azure Blob Storage</option>
           <option value="gcs">Google Cloud Storage</option>
+          <option value="s3">AWS S3 / S3-Compatible</option>
+          <option value="bunny">BunnyCDN Storage</option>
         </select>
       </div>
       <div id="azure-fields">
@@ -2343,6 +2412,83 @@
           <textarea id="st-gcs-creds" rows="4" placeholder='{"type":"service_account",...}'></textarea>
         </div>
       </div>
+      <div id="s3-fields" style="display:none">
+        <div class="form-group">
+          <label>Bucket Name</label>
+          <input type="text" id="st-s3-bucket" placeholder="my-backup-bucket" />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Access Key ID</label>
+            <input type="text" id="st-s3-access-key" placeholder="AKIAIOSFODNN7EXAMPLE" />
+          </div>
+          <div class="form-group">
+            <label>Secret Access Key</label>
+            <input type="password" id="st-s3-secret-key" placeholder="••••••••••••••••" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Region (Optional)</label>
+            <input type="text" id="st-s3-region" placeholder="us-east-1" />
+          </div>
+          <div class="form-group">
+            <label>Endpoint URL (Optional for R2/MinIO)</label>
+            <input type="text" id="st-s3-endpoint-url" placeholder="https://<account>.r2.cloudflarestorage.com" />
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:-6px;margin-bottom:12px">
+          Leave Endpoint URL empty for AWS S3. For Cloudflare R2, MinIO, Wasabi, or DigitalOcean, provide the endpoint URL.
+        </div>
+      </div>
+      <div id="bunny-fields" style="display:none">
+        <div class="form-group">
+          <label>Storage Zone Name</label>
+          <input type="text" id="st-bunny-zone" placeholder="e.g. databasus-poc" />
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">
+            Your Bunny.net Storage Zone name (from <b>Storage</b> in your Bunny dashboard).
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Storage Zone Password</label>
+          <input type="password" id="st-bunny-password" placeholder="Storage Zone Password (Read/Write)" />
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">
+            Found in Bunny dashboard: <b>Storage &rarr; [Your Zone] &rarr; FTP &amp; API Access &rarr; Password</b>. <span style="color:#f87171;font-weight:500;">Do NOT use your Bunny Account API Key.</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Region Endpoint (Optional / Auto-Detect)</label>
+          <input type="text" id="st-bunny-region-url" list="bunny-regions-list" placeholder="Leave blank to Auto-Detect" />
+          <datalist id="bunny-regions-list">
+            <option value="">Auto-Detect Region (Recommended)</option>
+            <option value="https://de-s3.storage.bunnycdn.com">Falkenstein / Europe (de-s3)</option>
+            <option value="https://ny-s3.storage.bunnycdn.com">New York / US East (ny-s3)</option>
+            <option value="https://la-s3.storage.bunnycdn.com">Los Angeles / US West (la-s3)</option>
+            <option value="https://sg-s3.storage.bunnycdn.com">Singapore / Asia (sg-s3)</option>
+            <option value="https://syd-s3.storage.bunnycdn.com">Sydney / Oceania (syd-s3)</option>
+            <option value="https://uk-s3.storage.bunnycdn.com">London / UK (uk-s3)</option>
+            <option value="https://jh-s3.storage.bunnycdn.com">Johannesburg / Africa (jh-s3)</option>
+            <option value="https://br-s3.storage.bunnycdn.com">São Paulo / South America (br-s3)</option>
+            <option value="https://se-s3.storage.bunnycdn.com">Stockholm / Europe North (se-s3)</option>
+            <option value="https://storage.bunnycdn.com">REST API (storage.bunnycdn.com)</option>
+          </datalist>
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">
+            Select your zone's primary region or leave blank to automatically detect it.
+          </div>
+        </div>
+      </div>
+      <div class="form-group" style="margin-top:12px;">
+        <label>Default Base Folder (Optional)</label>
+        <input type="text" id="st-folder" placeholder="e.g. database-backups or prod/backups" />
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          All backups saved to this storage will automatically be organized inside this folder.
+        </div>
+      </div>
+      <div id="st-test-result"
+        style="display:none;padding:12px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:8px">
+      </div>
+      <button class="btn btn-secondary btn-full" style="margin-bottom:8px" onclick="testModalStorageConnection()"><i
+          data-lucide="plug" style="width:15px;height:15px"></i> Test Connection</button>
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="closeModal('storage-modal')">Cancel</button>
         <button class="btn btn-primary" onclick="addStorage()"><i data-lucide="plus" style="width:15px;height:15px"></i>
@@ -2358,13 +2504,15 @@
       <input type="hidden" id="edit-st-id" />
       <div class="form-group">
         <label>Name</label>
-        <input type="text" id="edit-st-name" placeholder="My Azure Bucket" />
+        <input type="text" id="edit-st-name" placeholder="My Storage" />
       </div>
       <div class="form-group">
         <label>Type</label>
         <select id="edit-st-type" disabled>
           <option value="azure">Azure Blob Storage</option>
           <option value="gcs">Google Cloud Storage</option>
+          <option value="s3">AWS S3 / S3-Compatible</option>
+          <option value="bunny">BunnyCDN Storage</option>
         </select>
       </div>
       <div id="edit-azure-fields">
@@ -2391,6 +2539,79 @@
           <textarea id="edit-st-gcs-creds" rows="4" placeholder="Leave blank to keep current"></textarea>
         </div>
       </div>
+      <div id="edit-s3-fields" style="display:none">
+        <div class="form-group">
+          <label>Bucket Name</label>
+          <input type="text" id="edit-st-s3-bucket" />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Access Key ID</label>
+            <input type="text" id="edit-st-s3-access-key" />
+          </div>
+          <div class="form-group">
+            <label>Secret Access Key</label>
+            <input type="password" id="edit-st-s3-secret-key" placeholder="Leave blank to keep current" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Region</label>
+            <input type="text" id="edit-st-s3-region" />
+          </div>
+          <div class="form-group">
+            <label>Custom Endpoint URL</label>
+            <input type="text" id="edit-st-s3-endpoint-url" />
+          </div>
+        </div>
+      </div>
+      <div id="edit-bunny-fields" style="display:none">
+        <div class="form-group">
+          <label>Storage Zone Name</label>
+          <input type="text" id="edit-st-bunny-zone" placeholder="e.g. databasus-poc" />
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">
+            Your Bunny.net Storage Zone name.
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Storage Zone Password</label>
+          <input type="password" id="edit-st-bunny-password" placeholder="Leave blank to keep current password" />
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">
+            Found in Bunny dashboard: <b>Storage &rarr; [Your Zone] &rarr; FTP &amp; API Access &rarr; Password</b>. <span style="color:#f87171;font-weight:500;">Do NOT use your Bunny Account API Key.</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Region Endpoint (Optional / Auto-Detect)</label>
+          <input type="text" id="edit-st-bunny-region-url" list="edit-bunny-regions-list" placeholder="Leave blank to Auto-Detect" />
+          <datalist id="edit-bunny-regions-list">
+            <option value="https://de-s3.storage.bunnycdn.com">Falkenstein / Europe (de-s3)</option>
+            <option value="https://ny-s3.storage.bunnycdn.com">New York / US East (ny-s3)</option>
+            <option value="https://la-s3.storage.bunnycdn.com">Los Angeles / US West (la-s3)</option>
+            <option value="https://sg-s3.storage.bunnycdn.com">Singapore / Asia (sg-s3)</option>
+            <option value="https://syd-s3.storage.bunnycdn.com">Sydney / Oceania (syd-s3)</option>
+            <option value="https://uk-s3.storage.bunnycdn.com">London / UK (uk-s3)</option>
+            <option value="https://jh-s3.storage.bunnycdn.com">Johannesburg / Africa (jh-s3)</option>
+            <option value="https://br-s3.storage.bunnycdn.com">São Paulo / South America (br-s3)</option>
+            <option value="https://se-s3.storage.bunnycdn.com">Stockholm / Europe North (se-s3)</option>
+            <option value="https://storage.bunnycdn.com">REST API (storage.bunnycdn.com)</option>
+          </datalist>
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">
+            Select your zone's primary region or leave blank to automatically detect it.
+          </div>
+        </div>
+      </div>
+      <div class="form-group" style="margin-top:12px;">
+        <label>Default Base Folder (Optional)</label>
+        <input type="text" id="edit-st-folder" placeholder="e.g. database-backups or prod/backups" />
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          All backups saved to this storage will automatically be organized inside this folder.
+        </div>
+      </div>
+      <div id="edit-st-test-result"
+        style="display:none;padding:12px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:8px">
+      </div>
+      <button class="btn btn-secondary btn-full" style="margin-bottom:8px" onclick="testEditStorageConnection()"><i
+          data-lucide="plug" style="width:15px;height:15px"></i> Test Connection</button>
       <div class="modal-actions" style="justify-content: space-between;">
         <button class="btn btn-danger" onclick="deleteStorage(document.getElementById('edit-st-id').value); closeModal('edit-storage-modal')"><i data-lucide="trash-2" style="width:15px;height:15px"></i> Remove</button>
         <div>
@@ -2456,6 +2677,16 @@
           <option value="">— select database connection first —</option>
         </select>
       </div>
+      <div class="form-group" id="bk-archive-mode-group" style="display:none">
+        <label>Cluster Archive Format</label>
+        <select id="bk-archive-mode">
+          <option value="single">Single Unified Archive (All DBs inside 1 file)</option>
+          <option value="multiple">Database-Wise Archives (Separate file per DB)</option>
+        </select>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          Bundle all databases into one archive file or create separate archives per database.
+        </div>
+      </div>
       <div class="form-group" id="bk-type-group">
         <label>Backup Scope</label>
         <select id="bk-type" onchange="onBackupTypeChange()">
@@ -2502,7 +2733,20 @@
       </div>
       <div class="form-group">
         <label>Storage Destination</label>
-        <select id="bk-storage"></select>
+        <select id="bk-storage" onchange="onBackupStorageChange()"></select>
+      </div>
+      <div class="form-group" style="margin-bottom:14px;">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; text-transform:none; letter-spacing:normal;">
+          <input type="checkbox" id="bk-use-folder" onchange="toggleBackupFolder()"
+            style="width:16px; height:16px; accent-color:var(--accent); cursor:pointer; margin:0;" />
+          <span>Save inside a folder in storage account?</span>
+        </label>
+        <div id="bk-folder-group" style="display:none; margin-top:8px;">
+          <input type="text" id="bk-folder" placeholder="e.g. database-backups or prod/backups" />
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">
+            Specify folder or subdirectory path in the bucket/container (e.g. <code>backups/postgres</code>).
+          </div>
+        </div>
       </div>
       <div class="form-group" style="display:flex; align-items:center; gap:10px; margin-bottom:18px;">
         <input type="checkbox" id="bk-send-notifications" checked
@@ -2541,6 +2785,16 @@
           <option value="">— select database connection first —</option>
         </select>
       </div>
+      <div class="form-group" id="sc-archive-mode-group" style="display:none">
+        <label>Cluster Archive Format</label>
+        <select id="sc-archive-mode">
+          <option value="single">Single Unified Archive (All DBs inside 1 file)</option>
+          <option value="multiple">Database-Wise Archives (Separate file per DB)</option>
+        </select>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          Bundle all databases into one archive file or create separate archives per database.
+        </div>
+      </div>
       <div class="form-group" id="sc-type-group" style="display:none">
         <label>Backup Scope</label>
         <select id="sc-type" onchange="onScheduleTypeChange()">
@@ -2556,7 +2810,20 @@
       </div>
       <div class="form-group">
         <label>Storage Destination</label>
-        <select id="sc-storage"></select>
+        <select id="sc-storage" onchange="onScheduleStorageChange()"></select>
+      </div>
+      <div class="form-group" style="margin-bottom:14px;">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; text-transform:none; letter-spacing:normal;">
+          <input type="checkbox" id="sc-use-folder" onchange="toggleScheduleFolder()"
+            style="width:16px; height:16px; accent-color:var(--accent); cursor:pointer; margin:0;" />
+          <span>Save inside a folder in storage account?</span>
+        </label>
+        <div id="sc-folder-group" style="display:none; margin-top:8px;">
+          <input type="text" id="sc-folder" placeholder="e.g. database-backups or prod/backups" />
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">
+            Specify folder or subdirectory path in the bucket/container (e.g. <code>backups/postgres</code>).
+          </div>
+        </div>
       </div>
       <div class="form-group">
         <label>Backup Method</label>
@@ -2569,8 +2836,8 @@
       <div class="form-group">
         <label>Speed & Resource Profile</label>
         <select id="sc-speed-profile">
-          <option value="default">Default (Current Configuration / Auto-scales to Extreme at Night)</option>
-          <option value="extreme">Extreme (Absolute Max Speed, Unbounded CPU)</option>
+          <option value="extreme" selected>Extreme (Ultra Turbo: 20GB in ~2min)</option>
+          <option value="default">Default</option>
           <option value="balanced">Balanced (4 CPU threads, 16MB chunks)</option>
           <option value="safe">Safe (2 CPU threads, 8MB chunks)</option>
         </select>
@@ -2597,6 +2864,11 @@
           <input type="time" id="sc-time" class="form-control" value="02:00"
             style="width:100%;height:38px;padding:8px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-sm);font-family:inherit;font-size:14px;outline:none;transition:var(--transition);" />
         </div>
+      </div>
+      <div class="form-group">
+        <label>Retention Policy (optional)</label>
+        <input type="number" id="sc-retention" placeholder="Keep all (e.g. 7 to keep last 7 backups)" min="1" max="1000" />
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Automatically deletes older backups and cleans up cloud folders exceeding this limit.</div>
       </div>
       <div id="sc-mixed-info" style="display:none">
         <div class="info-banner">
@@ -2638,12 +2910,32 @@
 
       <div class="form-group" id="rs-external-file-group" style="display:none">
         <label>Select Backup File</label>
-        <select id="rs-external-file"></select>
+        <select id="rs-external-file" onchange="onRestoreExternalFileSelect()"></select>
+        <div style="margin-top:8px;">
+          <label style="font-size:12px;color:var(--text2);margin-bottom:4px;display:block;">Or specify remote file path directly (for nested folders):</label>
+          <input type="text" id="rs-manual-path" placeholder="e.g. folder/subfolder/mydb-20261030_120000/backup.archive.gz" />
+        </div>
       </div>
 
       <div id="rs-info"
         style="background-color:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;font-size:13px;color:var(--text2);margin-bottom:16px;display:none">
         <span id="rs-info-text"></span>
+      </div>
+
+      <!-- Selective Instance DB Restore -->
+      <div class="form-group" id="rs-instance-scope-group" style="display:none">
+        <label>Databases to Restore</label>
+        <select id="rs-instance-scope" onchange="onRestoreInstanceScopeChange()">
+          <option value="all">⚡ Restore All Databases in Backup</option>
+          <option value="single">🎯 Restore Only One Specific Database</option>
+        </select>
+      </div>
+      <div class="form-group" id="rs-single-db-group" style="display:none">
+        <label>Source Database to Restore from Backup</label>
+        <input type="text" id="rs-selected-db" placeholder="e.g. CBT_PROD" oninput="onSelectedDbInput()" />
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          Enter the specific database name inside the backup that you want to restore.
+        </div>
       </div>
 
       <div class="form-group">
@@ -2679,8 +2971,8 @@
       <div class="form-group">
         <label>Speed & Resource Profile</label>
         <select id="rs-speed-profile">
-          <option value="default">Default (Balanced / Auto-scales at Night)</option>
-          <option value="extreme">Extreme (Absolute Max Speed, Unbounded CPU)</option>
+          <option value="extreme" selected>Extreme (Ultra Turbo: 20GB in ~10min)</option>
+          <option value="default">Default</option>
           <option value="balanced">Balanced (4 CPU threads, 16MB chunks)</option>
           <option value="safe">Safe (2 CPU threads, 8MB chunks)</option>
         </select>
@@ -2873,7 +3165,7 @@
           <div class="db-item-icon" style="background-color:var(--surface-solid);"><i data-lucide="cloud"></i></div>
           <div class="db-item-info">
             <h4>${s.name}</h4>
-            <span class="db-badge">${s.type === 'azure' ? 'Azure Blob' : 'Google Cloud Storage'}</span>
+            <span class="db-badge">${s.type === 'azure' ? 'Azure Blob' : s.type === 'gcs' ? 'Google Cloud' : s.type === 's3' ? 'AWS S3' : 'BunnyCDN'}</span>
           </div>
         </div>
         <div class="status-dot"></div>
@@ -2912,7 +3204,7 @@
         <td style="padding:16px 24px;"><span style="display:inline-flex; align-items:center; gap:4px; ${badgeStyle}"><i data-lucide="${statusIcon}" style="width:12px;height:12px"></i> ${b.status.charAt(0).toUpperCase() + b.status.slice(1)}</span></td>
         <td style="padding:16px 24px; text-align:right;">
           <div style="display:inline-flex; gap:8px; justify-content:flex-end; align-items:center;">
-            <button class="btn btn-secondary btn-sm btn-icon" onclick="deleteBackup('${b.id}', false)" title="Delete Local Record Only" style="width:28px; height:28px; padding:0;"><i data-lucide="trash" style="width:12px;height:12px"></i></button>
+            <button class="btn btn-secondary btn-sm btn-icon" onclick="deleteBackup('${b.id}', true)" title="Delete from Cloud & Local" style="width:28px; height:28px; padding:0;"><i data-lucide="trash" style="width:12px;height:12px"></i></button>
             <button class="btn btn-danger btn-sm btn-icon" onclick="deleteBackup('${b.id}', true)" title="Delete from Cloud Bucket & Local" style="width:28px; height:28px; padding:0;"><i data-lucide="cloud-off" style="width:12px;height:12px"></i></button>
           </div>
         </td>
@@ -2931,7 +3223,9 @@
       dbnameEl.innerHTML = '<option>Loading...</option>';
       try {
         const r = await apiFetch(`/databases/${dbId}/databases`);
-        dbnameEl.innerHTML = r.databases.map(d => `<option value="${d}">${d}</option>`).join('');
+        let opts = '<option value="__all__">⚡ All Databases (Whole Instance)</option>';
+        opts += r.databases.map(d => `<option value="${d}">${d}</option>`).join('');
+        dbnameEl.innerHTML = opts;
         onInlineBackupDbnameChange();
       } catch (e) {
         dbnameEl.innerHTML = `<option value="">⚠ ${e.message}</option>`;
@@ -2941,9 +3235,21 @@
     async function onInlineBackupDbnameChange() {
       const dbId = v('inline-bk-db');
       const dbname = v('inline-bk-dbname');
-      if (!dbId || !dbname) return;
-
+      const scopeGroup = document.getElementById('inline-bk-scope-group');
+      const collGroup = document.getElementById('inline-bk-collection-group');
       const collEl = document.getElementById('inline-bk-collection-select');
+      const archiveGroup = document.getElementById('inline-bk-archive-mode-group');
+
+      if (dbname === '__all__') {
+        if (scopeGroup) scopeGroup.style.display = 'none';
+        if (collGroup) collGroup.style.display = 'none';
+        if (archiveGroup) archiveGroup.style.display = 'block';
+        return;
+      }
+      if (archiveGroup) archiveGroup.style.display = 'none';
+      if (scopeGroup) scopeGroup.style.display = 'block';
+
+      if (!dbId || !dbname) return;
       if (!collEl) return;
       collEl.innerHTML = '<option>Loading collections...</option>';
       try {
@@ -2959,7 +3265,7 @@
       const dbname = v('inline-bk-dbname') || '';
       const type = document.getElementById('inline-bk-type') ? document.getElementById('inline-bk-type').value : 'full';
       const scope = document.getElementById('inline-bk-scope') ? document.getElementById('inline-bk-scope').value : 'full';
-      const collection = (scope === 'collection') ? v('inline-bk-collection-select') : '';
+      const collection = (scope === 'collection' && dbname !== '__all__') ? v('inline-bk-collection-select') : '';
       const label = `backup-${Date.now()}`;
 
       if (!dbId) { toast('Select a database connection', 'error'); return; }
@@ -2967,20 +3273,51 @@
       const indexingMode = v('inline-bk-indexing-mode') || 'with_index';
       const speedProfile = v('inline-bk-speed-profile') || 'default';
 
-      if (dbname) {
+      if (dbname && dbname !== '__all__') {
         try { await apiFetch(`/databases/${dbId}`, { method: 'PATCH', body: JSON.stringify({ database_name: dbname }) }); } catch (e) { }
       }
 
+      const archiveMode = v('inline-bk-archive-mode') || 'single';
       try {
         const b = await apiFetch('/backups/', {
           method: 'POST', body: JSON.stringify({
-            database_id: dbId, storage_id: v('inline-bk-storage'), label, collection, backup_method: type, indexing_mode: indexingMode, send_notifications: true, speed_profile: speedProfile
+            database_id: dbId, database_name: dbname, storage_id: v('inline-bk-storage'), label, collection, backup_method: type, indexing_mode: indexingMode, send_notifications: true, speed_profile: speedProfile, archive_mode: archiveMode
           })
         });
         toast('Backup started!', 'info');
         trackActiveOperation('backup', b.id, label);
         loadBackupPage();
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function onInlineRestoreBackupChange() {
+      const sel = document.getElementById('inline-rs-backup');
+      if (!sel || sel.selectedIndex < 0) return;
+      const opt = sel.options[sel.selectedIndex];
+      const isCluster = opt.dataset.isCluster === 'true' || opt.dataset.dbname === '__all__' || opt.dataset.archiveMode === 'multiple' || opt.text.includes('All Databases') || (opt.dataset.dbs && opt.dataset.dbs.length > 0);
+      const grp = document.getElementById('inline-rs-instance-scope-group');
+      if (grp) grp.style.display = isCluster ? 'block' : 'none';
+
+      if (opt.dataset.dbs) {
+        const dbsList = opt.dataset.dbs.split(',').filter(Boolean);
+        let dl = document.getElementById('inline-rs-dbs-datalist');
+        if (!dl) {
+          dl = document.createElement('datalist');
+          dl.id = 'inline-rs-dbs-datalist';
+          document.body.appendChild(dl);
+        }
+        dl.innerHTML = dbsList.map(d => `<option value="${d}">`).join('');
+        const inp = document.getElementById('inline-rs-selected-db');
+        if (inp) inp.setAttribute('list', 'inline-rs-dbs-datalist');
+      }
+      onInlineRestoreInstanceScopeChange();
+    }
+
+    function onInlineRestoreInstanceScopeChange() {
+      const isSingle = v('inline-rs-instance-scope') === 'single';
+      const isVisible = document.getElementById('inline-rs-instance-scope-group') && document.getElementById('inline-rs-instance-scope-group').style.display !== 'none';
+      const grp = document.getElementById('inline-rs-single-db-group');
+      if (grp) grp.style.display = (isSingle && isVisible) ? 'block' : 'none';
     }
 
     async function runInlineRestore() {
@@ -2994,24 +3331,31 @@
       if (!targetDbId) { toast('Select a target database connection', 'error'); return; }
       if (!targetDbname) { toast(isNew ? 'Enter a new database name' : 'Select a target database name', 'error'); return; }
 
+      const isSingleInstance = v('inline-rs-instance-scope') === 'single';
+      const selectedDb = isSingleInstance ? (v('inline-rs-selected-db') || '').trim() : null;
+
       const msg = isNew
         ? `Create new database "<b>${targetDbname}</b>" and restore into it?`
         : `Restore to "<b>${targetDbname}</b>"?<br><br><span style="color:var(--danger)">\u26A0 Existing data will be overwritten.</span>`;
 
       appConfirm('Confirm Restore', msg, async () => {
         try {
+          let payload = {
+            backup_id: backupId,
+            target_database_id: targetDbId,
+            new_database: isNew,
+            new_database_name: isNew ? targetDbname : null,
+            target_database_name: targetDbname,
+            collection: (v('inline-rs-scope') === 'collection') ? v('inline-rs-collection') : 'full',
+            indexing_mode: 'with_index',
+            speed_profile: 'extreme'
+          };
+          if (selectedDb) {
+            payload.selected_database = selectedDb;
+          }
           const r = await apiFetch('/backups/restore', {
             method: 'POST',
-            body: JSON.stringify({
-              backup_id: backupId,
-              target_database_id: targetDbId,
-              new_database: isNew,
-              new_database_name: isNew ? targetDbname : null,
-              target_database_name: targetDbname,
-              collection: (v('inline-rs-scope') === 'collection') ? v('inline-rs-collection') : 'full',
-              indexing_mode: 'with_index',
-              speed_profile: 'default'
-            })
+            body: JSON.stringify(payload)
           });
           const container = document.getElementById('inline-rs-container');
           if (container) container.style.display = 'none';
@@ -3076,7 +3420,10 @@
           apiFetch('/databases/')
         ]);
         const bEl = document.getElementById('inline-rs-backup');
-        if (bEl) bEl.innerHTML = backups.filter(b => b.status === 'completed').map(b => `<option value="${b.id}">${b.label} (${b.database_name})</option>`).join('');
+        if (bEl) {
+          bEl.innerHTML = backups.filter(b => b.status === 'completed').map(b => `<option value="${b.id}" data-collection="${b.collection || 'full'}" data-size="${b.size_mb}" data-dbname="${b.database_name}" data-archive-mode="${b.archive_mode || 'single'}" data-is-cluster="${b.is_cluster ? 'true' : 'false'}" data-dbs="${(b.cluster_databases || []).join(',')}">${b.label} (${b.database_name || 'All Databases'})</option>`).join('');
+          onInlineRestoreBackupChange();
+        }
 
         const tEl = document.getElementById('inline-rs-target');
         if (tEl) tEl.innerHTML = dbs.map(d => `<option value="${d.id}">${d.name} (${d.type})</option>`).join('');
@@ -3092,8 +3439,17 @@
         ...opts,
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, ...(opts.headers || {}) }
       });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.detail || 'Request failed');
+      const text = await r.text();
+      let d = {};
+      try {
+        d = text ? JSON.parse(text) : {};
+      } catch (parseErr) {
+        if (!r.ok) {
+          throw new Error(`Server returned HTTP ${r.status} (${r.statusText || 'Error'})`);
+        }
+        throw new Error('Invalid response format from server');
+      }
+      if (!r.ok) throw new Error(d.detail || `Request failed (HTTP ${r.status})`);
       return d;
     }
 
@@ -3453,36 +3809,228 @@
       const t = document.getElementById('st-type').value;
       document.getElementById('azure-fields').style.display = t === 'azure' ? 'block' : 'none';
       document.getElementById('gcs-fields').style.display = t === 'gcs' ? 'block' : 'none';
+      document.getElementById('s3-fields').style.display = t === 's3' ? 'block' : 'none';
+      document.getElementById('bunny-fields').style.display = t === 'bunny' ? 'block' : 'none';
+    }
+
+    async function testStorage(id) {
+      try {
+        toast('Testing storage connection...', 'info');
+        const r = await apiFetch(`/storage/${id}/test`, { method: 'POST' });
+        toast(r.message, 'success');
+      } catch (e) { toast(e.message, 'error'); }
     }
 
     async function loadStorage() {
       try {
         const storages = await apiFetch('/storage/');
         const tbody = document.getElementById('storage-table');
-        tbody.innerHTML = storages.map(s => `
+        tbody.innerHTML = storages.map(s => {
+          let target = '—';
+          if (s.type === 'azure') target = s.azure_container || '—';
+          else if (s.type === 'gcs') target = s.gcs_bucket || '—';
+          else if (s.type === 's3') target = s.s3_bucket || '—';
+          else if (s.type === 'bunny') target = s.bunny_storage_zone || '—';
+
+          return `
       <tr>
         <td><strong>${s.name}</strong></td>
         <td>${storageBadge(s.type)}</td>
-        <td class="mono text-sm">${s.azure_container || s.gcs_bucket || '—'}</td>
+        <td class="mono text-sm">${target}</td>
         <td class="text-muted text-sm">${fmtDate(s.created_at)}</td>
         <td><div class="actions">
+          <button class="btn btn-secondary btn-sm" onclick="testStorage('${s.id}')" title="Test Connection"><i data-lucide="plug" style="width:14px;height:14px"></i> Test</button>
           <button class="btn btn-secondary btn-sm btn-icon" onclick="openEditStorage('${s.id}')" title="Edit"><i data-lucide="pencil" style="width:14px;height:14px"></i></button>
           <button class="btn btn-danger btn-sm" onclick="deleteStorage('${s.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i> Remove</button>
         </div></td>
-      </tr>`).join('') || emptyRow(5, 'No storage configured yet.');
+      </tr>`;
+        }).join('') || emptyRow(5, 'No storage configured yet.');
         lucide.createIcons();
       } catch (e) { toast(e.message, 'error'); }
     }
 
+    async function testModalStorageConnection() {
+      const type = v('st-type');
+      let payload = { name: v('st-name') || 'Test Storage', type };
+
+      if (type === 'azure') {
+        payload.azure_account_name = v('st-azure-account');
+        payload.azure_account_key = v('st-azure-key');
+        payload.azure_container = v('st-azure-container');
+        if (!payload.azure_account_name || !payload.azure_account_key || !payload.azure_container) {
+          toast('Please fill all Azure credentials', 'error'); return;
+        }
+      } else if (type === 'gcs') {
+        payload.gcs_bucket = v('st-gcs-bucket');
+        payload.gcs_credentials_json = v('st-gcs-creds');
+        if (!payload.gcs_bucket || !payload.gcs_credentials_json) {
+          toast('Please fill GCS bucket and JSON credentials', 'error'); return;
+        }
+      } else if (type === 's3') {
+        payload.s3_bucket = v('st-s3-bucket');
+        payload.s3_access_key = v('st-s3-access-key');
+        payload.s3_secret_key = v('st-s3-secret-key');
+        payload.s3_region = v('st-s3-region');
+        payload.s3_endpoint_url = v('st-s3-endpoint-url');
+        if (!payload.s3_bucket || !payload.s3_access_key || !payload.s3_secret_key) {
+          toast('Please fill S3 Bucket, Access Key, and Secret Key', 'error'); return;
+        }
+      } else if (type === 'bunny') {
+        const zone = v('st-bunny-zone').trim();
+        const password = v('st-bunny-password').trim();
+        const regionUrl = v('st-bunny-region-url').trim();
+
+        if (!zone) { toast('Please enter Storage Zone Name', 'error'); return; }
+        if (!password) { toast('Please enter Storage Zone Password', 'error'); return; }
+        if (password.toLowerCase() === zone.toLowerCase()) {
+          toast('Storage Zone Password cannot be the Storage Zone Name. Please copy the Password from Bunny dashboard (FTP & API Access).', 'error');
+          return;
+        }
+
+        payload.bunny_storage_zone = zone;
+        payload.bunny_access_key = zone;
+        payload.bunny_password = password;
+        payload.bunny_region_url = regionUrl;
+      }
+
+      const resultBox = document.getElementById('st-test-result');
+      resultBox.style.display = 'block';
+      resultBox.style.background = 'rgba(99,102,241,.1)';
+      resultBox.style.border = '1px solid rgba(99,102,241,.3)';
+      resultBox.style.color = '#818cf8';
+      resultBox.textContent = 'Testing storage connection...';
+
+      try {
+        const r = await apiFetch('/storage/test-connection', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        if (r.detected_region_url && !v('st-bunny-region-url').trim()) {
+          const regEl = document.getElementById('st-bunny-region-url');
+          if (regEl) regEl.value = r.detected_region_url;
+        }
+        resultBox.style.background = 'var(--success-dim)';
+        resultBox.style.border = '1px solid rgba(0,212,170,.3)';
+        resultBox.style.color = 'var(--accent)';
+        resultBox.textContent = `✓ ${r.message || 'Connection successful!'}`;
+        toast('Storage connection successful!', 'success');
+      } catch (e) {
+        resultBox.style.background = 'var(--danger-dim)';
+        resultBox.style.border = '1px solid rgba(239,68,68,.3)';
+        resultBox.style.color = 'var(--danger)';
+        resultBox.textContent = `✗ ${e.message}`;
+        toast(`Connection failed: ${e.message}`, 'error');
+      }
+    }
+
+    async function testEditStorageConnection() {
+      const id = v('edit-st-id');
+      const type = v('edit-st-type');
+      const resultBox = document.getElementById('edit-st-test-result');
+      resultBox.style.display = 'block';
+      resultBox.style.background = 'rgba(99,102,241,.1)';
+      resultBox.style.border = '1px solid rgba(99,102,241,.3)';
+      resultBox.style.color = '#818cf8';
+      resultBox.textContent = 'Testing storage connection...';
+
+      let payload = { name: v('edit-st-name') || 'Test Storage', type };
+      let useSaved = false;
+
+      if (type === 'azure') {
+        payload.azure_account_name = v('edit-st-azure-account');
+        payload.azure_container = v('edit-st-azure-container');
+        const key = v('edit-st-azure-key');
+        if (key) payload.azure_account_key = key;
+        else useSaved = true;
+      } else if (type === 'gcs') {
+        payload.gcs_bucket = v('edit-st-gcs-bucket');
+        const creds = v('edit-st-gcs-creds');
+        if (creds) payload.gcs_credentials_json = creds;
+        else useSaved = true;
+      } else if (type === 's3') {
+        payload.s3_bucket = v('edit-st-s3-bucket');
+        payload.s3_access_key = v('edit-st-s3-access-key');
+        payload.s3_region = v('edit-st-s3-region');
+        payload.s3_endpoint_url = v('edit-st-s3-endpoint-url');
+        const secret = v('edit-st-s3-secret-key');
+        if (secret) payload.s3_secret_key = secret;
+        else useSaved = true;
+      } else if (type === 'bunny') {
+        payload.bunny_storage_zone = v('edit-st-bunny-zone').trim();
+        payload.bunny_region_url = v('edit-st-bunny-region-url').trim();
+        payload.bunny_access_key = payload.bunny_storage_zone;
+        const password = v('edit-st-bunny-password').trim();
+        if (password) {
+          if (password.toLowerCase() === payload.bunny_storage_zone.toLowerCase()) {
+            toast('Password cannot be the Storage Zone Name.', 'error');
+            return;
+          }
+          payload.bunny_password = password;
+        } else {
+          useSaved = true;
+        }
+      }
+
+      try {
+        let r;
+        if (useSaved && id) {
+          r = await apiFetch(`/storage/${id}/test`, { method: 'POST' });
+        } else {
+          r = await apiFetch('/storage/test-connection', { method: 'POST', body: JSON.stringify(payload) });
+        }
+        resultBox.style.background = 'var(--success-dim)';
+        resultBox.style.border = '1px solid rgba(0,212,170,.3)';
+        resultBox.style.color = 'var(--accent)';
+        resultBox.textContent = `✓ ${r.message || 'Connection successful!'}`;
+        toast('Storage connection successful!', 'success');
+      } catch (e) {
+        resultBox.style.background = 'var(--danger-dim)';
+        resultBox.style.border = '1px solid rgba(239,68,68,.3)';
+        resultBox.style.color = 'var(--danger)';
+        resultBox.textContent = `✗ ${e.message}`;
+        toast(`Connection failed: ${e.message}`, 'error');
+      }
+    }
+
     async function addStorage() {
       const type = v('st-type');
+      if (!v('st-name')) { toast('Please enter a storage name', 'error'); return; }
+
+      let payload = { name: v('st-name'), type, folder_name: v('st-folder').trim() };
+      if (type === 'azure') {
+        payload.azure_account_name = v('st-azure-account');
+        payload.azure_account_key = v('st-azure-key');
+        payload.azure_container = v('st-azure-container');
+      } else if (type === 'gcs') {
+        payload.gcs_bucket = v('st-gcs-bucket');
+        payload.gcs_credentials_json = v('st-gcs-creds');
+      } else if (type === 's3') {
+        payload.s3_bucket = v('st-s3-bucket');
+        payload.s3_access_key = v('st-s3-access-key');
+        payload.s3_secret_key = v('st-s3-secret-key');
+        payload.s3_region = v('st-s3-region');
+        payload.s3_endpoint_url = v('st-s3-endpoint-url');
+      } else if (type === 'bunny') {
+        const zone = v('st-bunny-zone').trim();
+        const password = v('st-bunny-password').trim();
+        const regionUrl = v('st-bunny-region-url').trim();
+
+        if (!zone) { toast('Please enter Storage Zone Name', 'error'); return; }
+        if (!password) { toast('Please enter Storage Zone Password', 'error'); return; }
+        if (password.toLowerCase() === zone.toLowerCase()) {
+          toast('Storage Zone Password cannot be the Storage Zone Name.', 'error');
+          return;
+        }
+
+        payload.bunny_storage_zone = zone;
+        payload.bunny_access_key = zone;
+        payload.bunny_password = password;
+        payload.bunny_region_url = regionUrl;
+      }
+
       try {
         await apiFetch('/storage/', {
-          method: 'POST', body: JSON.stringify({
-            name: v('st-name'), type,
-            azure_account_name: v('st-azure-account'), azure_account_key: v('st-azure-key'), azure_container: v('st-azure-container'),
-            gcs_bucket: v('st-gcs-bucket'), gcs_credentials_json: v('st-gcs-creds')
-          })
+          method: 'POST', body: JSON.stringify(payload)
         });
         closeModal('storage-modal');
         toast('Storage added!', 'success');
@@ -3507,9 +4055,13 @@
       document.getElementById('edit-st-id').value = s.id;
       document.getElementById('edit-st-name').value = s.name;
       document.getElementById('edit-st-type').value = s.type;
+      const folderEl = document.getElementById('edit-st-folder');
+      if (folderEl) folderEl.value = s.folder_name || '';
 
       document.getElementById('edit-azure-fields').style.display = s.type === 'azure' ? 'block' : 'none';
       document.getElementById('edit-gcs-fields').style.display = s.type === 'gcs' ? 'block' : 'none';
+      document.getElementById('edit-s3-fields').style.display = s.type === 's3' ? 'block' : 'none';
+      document.getElementById('edit-bunny-fields').style.display = s.type === 'bunny' ? 'block' : 'none';
 
       if (s.type === 'azure') {
         document.getElementById('edit-st-azure-account').value = s.azure_account_name || '';
@@ -3518,7 +4070,19 @@
       } else if (s.type === 'gcs') {
         document.getElementById('edit-st-gcs-bucket').value = s.gcs_bucket || '';
         document.getElementById('edit-st-gcs-creds').value = '';
+      } else if (s.type === 's3') {
+        document.getElementById('edit-st-s3-bucket').value = s.s3_bucket || '';
+        document.getElementById('edit-st-s3-access-key').value = s.s3_access_key || '';
+        document.getElementById('edit-st-s3-secret-key').value = '';
+        document.getElementById('edit-st-s3-region').value = s.s3_region || '';
+        document.getElementById('edit-st-s3-endpoint-url').value = s.s3_endpoint_url || '';
+      } else if (s.type === 'bunny') {
+        document.getElementById('edit-st-bunny-zone').value = s.bunny_storage_zone || '';
+        document.getElementById('edit-st-bunny-password').value = '';
+        document.getElementById('edit-st-bunny-region-url').value = s.bunny_region_url || (s.bunny_region ? `https://${s.bunny_region}-s3.storage.bunnycdn.com` : '');
       }
+      const editRes = document.getElementById('edit-st-test-result');
+      if (editRes) editRes.style.display = 'none';
       openModal('edit-storage-modal');
     }
 
@@ -3527,7 +4091,8 @@
       const type = v('edit-st-type');
       const payload = {
         name: v('edit-st-name'),
-        type: type
+        type: type,
+        folder_name: v('edit-st-folder').trim()
       };
 
       if (type === 'azure') {
@@ -3539,6 +4104,25 @@
         payload.gcs_bucket = v('edit-st-gcs-bucket');
         const creds = v('edit-st-gcs-creds');
         if (creds) payload.gcs_credentials_json = creds;
+      } else if (type === 's3') {
+        payload.s3_bucket = v('edit-st-s3-bucket');
+        payload.s3_access_key = v('edit-st-s3-access-key');
+        payload.s3_region = v('edit-st-s3-region');
+        payload.s3_endpoint_url = v('edit-st-s3-endpoint-url');
+        const secret = v('edit-st-s3-secret-key');
+        if (secret) payload.s3_secret_key = secret;
+      } else if (type === 'bunny') {
+        payload.bunny_storage_zone = v('edit-st-bunny-zone').trim();
+        payload.bunny_region_url = v('edit-st-bunny-region-url').trim();
+        payload.bunny_access_key = payload.bunny_storage_zone;
+        const bPassword = v('edit-st-bunny-password').trim();
+        if (bPassword) {
+          if (bPassword.toLowerCase() === payload.bunny_storage_zone.toLowerCase()) {
+            toast('Password cannot be the Storage Zone Name.', 'error');
+            return;
+          }
+          payload.bunny_password = bPassword;
+        }
       }
 
       try {
@@ -3658,7 +4242,7 @@
           ${item.is_restore ? `
             <button class="btn btn-icon" title="Delete Restore Record" style="background:transparent; border:none; color:var(--danger); cursor:pointer; width:28px; height:28px;" onclick="deleteRestoreRecord('${item.id}')"><i data-lucide="trash" style="width:15px;height:15px;"></i></button>
           ` : `
-            <button class="btn btn-icon" title="Delete Record Only" style="background:transparent; border:none; color:var(--text2); cursor:pointer; width:28px; height:28px;" onclick="deleteBackup('${item.id}', false)"><i data-lucide="trash" style="width:15px;height:15px;"></i></button>
+            <button class="btn btn-icon" title="Delete Record Only" style="background:transparent; border:none; color:var(--text2); cursor:pointer; width:28px; height:28px;" onclick="deleteBackup('${item.id}', true)"><i data-lucide="trash" style="width:15px;height:15px;"></i></button>
             <button class="btn btn-icon" title="Delete from Cloud Bucket & Local" style="background:transparent; border:none; color:var(--danger); cursor:pointer; width:28px; height:28px;" onclick="deleteBackup('${item.id}', true)"><i data-lucide="cloud-off" style="width:15px;height:15px;"></i></button>
           `}
         </div>
@@ -3708,12 +4292,88 @@
       });
       ['bk-storage', 'sc-storage'].forEach(id => {
         const el = document.getElementById(id);
-        if (el) el.innerHTML = sts.map(s => `<option value="${s.id}">${s.name} (${s.type})</option>`).join('');
+        if (el) el.innerHTML = sts.map(s => `<option value="${s.id}" data-folder="${s.folder_name || ''}">${s.name} (${s.type})${s.folder_name ? ' [📁 ' + s.folder_name + ']' : ''}</option>`).join('');
       });
       if (dbs.length) {
         onBackupDbChange();
         onScheduleDbChange();
       }
+      onBackupStorageChange();
+      onScheduleStorageChange();
+    }
+
+    function toggleBackupFolder() {
+      const checked = document.getElementById('bk-use-folder')?.checked;
+      const group = document.getElementById('bk-folder-group');
+      if (group) group.style.display = checked ? 'block' : 'none';
+    }
+
+    function toggleScheduleFolder() {
+      const checked = document.getElementById('sc-use-folder')?.checked;
+      const group = document.getElementById('sc-folder-group');
+      if (group) group.style.display = checked ? 'block' : 'none';
+    }
+
+    function toggleInlineScheduleFolder() {
+      const checked = document.getElementById('inline-sc-use-folder')?.checked;
+      const group = document.getElementById('inline-sc-folder-group');
+      if (group) group.style.display = checked ? 'block' : 'none';
+    }
+
+    function onInlineScheduleStorageChange() {
+      const el = document.getElementById('inline-sc-storage');
+      if (!el || el.selectedIndex < 0) return;
+      const opt = el.options[el.selectedIndex];
+      const defaultFolder = opt ? (opt.dataset.folder || '') : '';
+      const chk = document.getElementById('inline-sc-use-folder');
+      const folderInput = document.getElementById('inline-sc-folder');
+      if (defaultFolder) {
+        if (chk) chk.checked = true;
+        if (folderInput && !folderInput.value) folderInput.value = defaultFolder;
+      }
+      toggleInlineScheduleFolder();
+    }
+
+    function onBackupStorageChange() {
+      const el = document.getElementById('bk-storage');
+      if (!el || el.selectedIndex < 0) return;
+      const opt = el.options[el.selectedIndex];
+      const defaultFolder = opt ? (opt.dataset.folder || '') : '';
+      const chk = document.getElementById('bk-use-folder');
+      const folderInput = document.getElementById('bk-folder');
+      if (defaultFolder) {
+        if (chk) chk.checked = true;
+        if (folderInput && !folderInput.value) folderInput.value = defaultFolder;
+      }
+      toggleBackupFolder();
+    }
+
+    function onScheduleStorageChange() {
+      const el = document.getElementById('sc-storage');
+      if (!el || el.selectedIndex < 0) return;
+      const opt = el.options[el.selectedIndex];
+      const defaultFolder = opt ? (opt.dataset.folder || '') : '';
+      const chk = document.getElementById('sc-use-folder');
+      const folderInput = document.getElementById('sc-folder');
+      if (defaultFolder) {
+        if (chk) chk.checked = true;
+        if (folderInput && !folderInput.value) folderInput.value = defaultFolder;
+      }
+      toggleScheduleFolder();
+    }
+
+    function onRestoreExternalFileSelect() {
+      const sel = document.getElementById('rs-external-file');
+      const manual = document.getElementById('rs-manual-path');
+      const fileVal = (sel && sel.value) ? sel.value : (manual ? manual.value : '');
+      if (sel && manual && sel.value) {
+        manual.value = sel.value;
+      }
+      
+      const isClusterOrFolder = fileVal && (fileVal.endsWith('/') || fileVal.includes('_all') || fileVal.includes('Mongdbbackup') || (!fileVal.includes('.') && fileVal.length > 2));
+      const instanceGroup = document.getElementById('rs-instance-scope-group');
+      if (instanceGroup) instanceGroup.style.display = isClusterOrFolder ? 'block' : 'none';
+      onRestoreInstanceScopeChange();
     }
 
     async function onBackupDbChange() { return handleDbChange('bk'); }
@@ -3766,6 +4426,8 @@
         let optsHtml = '';
         if (dbType === 'solr') {
           optsHtml += '<option value="all_collections">All Collections / Cores</option>';
+        } else {
+          optsHtml += '<option value="__all__">⚡ All Databases (Whole Instance)</option>';
         }
         optsHtml += r.databases.map(d => `<option value="${d}">${d}</option>`).join('');
         dbnameEl.innerHTML = optsHtml;
@@ -3791,13 +4453,16 @@
       const collGroup = document.getElementById(`${prefix}-collection-group`);
       const collEl = document.getElementById(`${prefix}-collection-select`);
 
-      if (dbType === 'solr' && dbname === 'all_collections') {
+      const archiveGroup = document.getElementById(`${prefix}-archive-mode-group`);
+      if ((dbType === 'solr' && dbname === 'all_collections') || dbname === '__all__') {
         if (typeGroup) typeGroup.style.display = 'none';
         if (collGroup) collGroup.style.display = 'none';
-        if (collEl) collEl.innerHTML = '<option value="">— N/A for all collections —</option>';
+        if (collEl) collEl.innerHTML = '<option value="">— N/A for whole instance —</option>';
+        if (archiveGroup) archiveGroup.style.display = 'block';
         return;
       } else {
         if (typeGroup) typeGroup.style.display = 'block';
+        if (archiveGroup) archiveGroup.style.display = 'none';
       }
 
       if (!collEl) return;
@@ -3837,18 +4502,25 @@
       const indexingMode = v('bk-indexing-mode');
       const speedProfile = v('bk-speed-profile') || 'default';
       const sendNotifications = document.getElementById('bk-send-notifications') ? document.getElementById('bk-send-notifications').checked : true;
+      const useFolder = document.getElementById('bk-use-folder') && document.getElementById('bk-use-folder').checked;
+      const folderName = useFolder ? v('bk-folder').trim() : '';
 
-      try { await apiFetch(`/databases/${dbId}`, { method: 'PATCH', body: JSON.stringify({ database_name: dbname }) }); } catch (e) { }
-      await startBackupNow(dbId, v('bk-storage'), label, collection, indexingMode, sendNotifications, speedProfile);
+      if (dbname && dbname !== '__all__') {
+        try { await apiFetch(`/databases/${dbId}`, { method: 'PATCH', body: JSON.stringify({ database_name: dbname }) }); } catch (e) { }
+      }
+      const archiveMode = v('bk-archive-mode') || 'single';
+      await startBackupNow(dbId, v('bk-storage'), label, collection, indexingMode, sendNotifications, speedProfile, dbname, folderName, archiveMode);
       closeModal('backup-modal');
     }
 
-    async function startBackupNow(dbId, storageId, label, collection = '', indexingMode = 'with_index', sendNotifications = true, speedProfile = 'default') {
+    async function startBackupNow(dbId, storageId, label, collection = '', indexingMode = 'with_index', sendNotifications = true, speedProfile = 'default', dbname = '', folderName = '', archiveMode = 'single') {
       try {
+        const payload = {
+          database_id: dbId, database_name: dbname, storage_id: storageId, label, collection, indexing_mode: indexingMode, send_notifications: sendNotifications, speed_profile: speedProfile, archive_mode: archiveMode
+        };
+        if (folderName) payload.folder_name = folderName;
         const b = await apiFetch('/backups/', {
-          method: 'POST', body: JSON.stringify({
-            database_id: dbId, storage_id: storageId, label, collection, indexing_mode: indexingMode, send_notifications: sendNotifications, speed_profile: speedProfile
-          })
+          method: 'POST', body: JSON.stringify(payload)
         });
         toast('Backup started!', 'info');
         showPage('backups');
@@ -4056,13 +4728,21 @@
             if (opType === 'backup' && !backupSizeMB && job.size_mb) {
                 backupSizeMB = job.size_mb;
             }
+            if (!backupSizeMB && (job.total_mb || (logData && logData.total_mb))) {
+                backupSizeMB = job.total_mb || (logData && logData.total_mb);
+            }
+            const processedMB = (logData && logData.processed_mb) || (job && job.processed_mb);
 
             if (backupSizeMB) {
-              const currentMB = (actualPct / 100 * backupSizeMB).toFixed(1);
+              const currentMB = processedMB ? processedMB.toFixed(1) : (actualPct / 100 * backupSizeMB).toFixed(1);
               const totalGB = backupSizeMB > 1024 ? (backupSizeMB / 1024).toFixed(1) + ' GB' : backupSizeMB.toFixed(1) + ' MB';
               const currentGB = backupSizeMB > 1024 ? (currentMB / 1024).toFixed(1) + ' GB' : currentMB + ' MB';
               if (sizeEl) sizeEl.textContent = totalGB + ' total';
               if (progSizeEl) progSizeEl.textContent = `${currentGB} / ${totalGB}`;
+            } else if (processedMB) {
+              const currentGB = processedMB > 1024 ? (processedMB / 1024).toFixed(1) + ' GB' : processedMB.toFixed(1) + ' MB';
+              if (sizeEl) sizeEl.textContent = `${currentGB} processed`;
+              if (progSizeEl) progSizeEl.textContent = currentGB;
             } else {
               if (sizeEl) sizeEl.textContent = 'Size: —';
               if (progSizeEl) progSizeEl.textContent = '—';
@@ -4071,8 +4751,12 @@
             // 5. Speed
             const speedEl = document.getElementById(`${opType}-stat-speed`);
             if (speedEl) {
-              if (backupSizeMB && elapsedSec > 0 && actualPct > 0) {
-                const speed = ((actualPct / 100 * backupSizeMB) / elapsedSec); // MB/s
+              const liveSpeed = (logData && logData.speed_mbps) || (job && job.speed_mbps);
+              if (liveSpeed && liveSpeed > 0) {
+                speedEl.textContent = liveSpeed > 1024 ? (liveSpeed / 1024).toFixed(1) + ' GB/s' : liveSpeed.toFixed(1) + ' MB/s';
+              } else if (elapsedSec > 0 && (processedMB > 0 || (backupSizeMB && actualPct > 0))) {
+                const mb = processedMB > 0 ? processedMB : ((actualPct / 100) * backupSizeMB);
+                const speed = mb / elapsedSec; // MB/s
                 speedEl.textContent = speed > 1024 ? (speed / 1024).toFixed(1) + ' GB/s' : speed.toFixed(1) + ' MB/s';
               } else {
                 speedEl.textContent = '—';
@@ -4192,9 +4876,9 @@
       });
     }
 
-    async function deleteBackup(id, deleteFromRemote = false) {
+    async function deleteBackup(id, deleteFromRemote = true) {
       const msg = deleteFromRemote
-        ? 'Delete this backup history AND remove the file from remote cloud storage?'
+        ? 'Permanently delete this backup and remove all files and folders from cloud storage?'
         : 'Delete this backup history record? (Remote file will be kept)';
       appConfirm('Delete Backup', msg, async () => {
         try {
@@ -4247,17 +4931,19 @@
           const typeDisplay = s.backup_method === 'incremental' ? 'Incremental' : 'Full';
           const freqDisplay = s.frequency === 'weekly_mixed' ? 'Weekly Mixed' : s.frequency;
           const statusHtml = s.enabled ? '<span class="badge badge-green" style="background:var(--accent); color:#000; font-weight:600; padding:4px 8px;">Active</span>' : '<span style="background:rgba(255,255,255,0.05); color:var(--text2); padding:4px 8px; border-radius:4px; font-size:11px; border:1px solid rgba(255,255,255,0.1);">Paused</span>';
+          const retentionHtml = s.retention_count ? `<span style="font-size:11px; color:var(--muted); font-weight:normal; margin-left:6px;">(Keep ${s.retention_count})</span>` : '';
           return `
       <tr>
-        <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); font-weight:600;">${s.name}</td>
+        <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); font-weight:600;">${s.name}${retentionHtml}</td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${s.database_name}</td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);"><span style="background:rgba(255,255,255,0.05); padding:4px 8px; border-radius:4px; font-size:11px; border:1px solid rgba(255,255,255,0.1);">${typeDisplay}</span></td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2); text-transform:capitalize;">${freqDisplay}</td>
-        <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${s.frequency === 'hourly' ? 'Hourly' : ('At ' + s.time)}</td>
+        <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${s.next_run ? new Date(s.next_run).toLocaleString() : (s.frequency === 'hourly' ? 'Hourly' : ('At ' + s.time))}</td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${s.last_run ? new Date(s.last_run).toLocaleString() : 'Never'}</td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);">${statusHtml}</td>
         <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); text-align:right;">
           <div class="actions">
+            <button class="btn btn-primary btn-sm" onclick="runScheduleNow('${s.id}')" title="Run Schedule Now" style="padding:4px 10px; font-size:12px; display:inline-flex; align-items:center; gap:4px;"><i data-lucide="play" style="width:12px;height:12px"></i> Run Now</button>
             <button class="btn btn-secondary btn-sm" onclick="toggleSchedule('${s.id}')">${s.enabled ? 'Pause' : 'Resume'}</button>
             <button class="btn btn-danger btn-sm btn-icon" onclick="deleteSchedule('${s.id}')" title="Delete"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
           </div>
@@ -4270,11 +4956,38 @@
         const sts = await apiFetch('/storage/');
         const dbSelect = document.getElementById('inline-sc-db');
         const stSelect = document.getElementById('inline-sc-storage');
-        if (dbSelect) dbSelect.innerHTML = dbs.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
-        if (stSelect) stSelect.innerHTML = sts.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+        if (dbSelect) {
+          dbSelect.innerHTML = dbs.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+          if (dbs.length) {
+            onInlineScheduleDbChange();
+          }
+        }
+        if (stSelect) {
+          stSelect.innerHTML = sts.map(s => `<option value="${s.id}" data-folder="${s.folder_name || ''}">${s.name}</option>`).join('');
+          onInlineScheduleStorageChange();
+        }
 
         renderScheduleCalendar();
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function onInlineScheduleDbChange() {
+      const dbId = v('inline-sc-db');
+      if (!dbId) return;
+      const dbnameEl = document.getElementById('inline-sc-dbname');
+      if (!dbnameEl) return;
+
+      dbnameEl.innerHTML = '<option>Loading...</option>';
+      try {
+        const r = await apiFetch(`/databases/${dbId}/databases`);
+        let opts = '<option value="__all__" selected>⚡ All Databases (Whole Instance)</option>';
+        if (r.databases && r.databases.length) {
+          opts += r.databases.map(d => `<option value="${d}">${d}</option>`).join('');
+        }
+        dbnameEl.innerHTML = opts;
+      } catch (e) {
+        dbnameEl.innerHTML = '<option value="__all__" selected>⚡ All Databases (Whole Instance)</option>';
+      }
     }
 
     function changeCalendarMonth(delta) {
@@ -4348,6 +5061,10 @@
 
     async function runInlineSchedule() {
       const localTime = v('inline-sc-time') || '02:00';
+      const dbname = v('inline-sc-dbname') || '__all__';
+      const useFolder = document.getElementById('inline-sc-use-folder') && document.getElementById('inline-sc-use-folder').checked;
+      const folderName = useFolder ? v('inline-sc-folder').trim() : '';
+      const retentionVal = parseInt(v('inline-sc-retention')) || null;
 
       try {
         await apiFetch('/schedules/', {
@@ -4355,18 +5072,22 @@
           body: JSON.stringify({
             name: v('inline-sc-name') || 'New Schedule',
             database_id: v('inline-sc-db'),
+            database_name: dbname,
             storage_id: v('inline-sc-storage') || null,
             frequency: v('inline-sc-freq'),
             time: localTime,
             enabled: true,
             backup_method: document.getElementById('inline-sc-type').value,
             incremental_field: v('inline-sc-incremental-field') || null,
-            speed_profile: v('inline-sc-speed-profile') || 'default',
-            timezone_offset: new Date().getTimezoneOffset()
+            speed_profile: v('inline-sc-speed-profile') || 'extreme',
+            timezone_offset: new Date().getTimezoneOffset(),
+            folder_name: folderName || null,
+            retention_count: retentionVal
           })
         });
         toast('Schedule created!', 'success');
         document.getElementById('inline-sc-name').value = '';
+        if (document.getElementById('inline-sc-retention')) document.getElementById('inline-sc-retention').value = '';
         loadSchedules();
       } catch (e) {
         toast(e.message, 'error');
@@ -4378,8 +5099,11 @@
       const method = v('sc-method');
       const localTime = v('sc-time') || '02:00';
       const dbType = v('sc-type');
-      const dbname = v('sc-dbname');
+      const dbname = v('sc-dbname') || '__all__';
       const collection = dbType === 'collection' ? v('sc-collection-select') : 'full';
+      const useFolder = document.getElementById('sc-use-folder') && document.getElementById('sc-use-folder').checked;
+      const folderName = useFolder ? v('sc-folder').trim() : '';
+      const retentionVal = parseInt(v('sc-retention')) || null;
 
       try {
         await apiFetch('/schedules/', {
@@ -4388,16 +5112,43 @@
             frequency: freq, time: localTime, enabled: true,
             backup_method: freq === 'weekly_mixed' ? 'full' : method,
             incremental_field: v('sc-incremental-field') || null,
-            speed_profile: v('sc-speed-profile') || 'default',
+            speed_profile: v('sc-speed-profile') || 'extreme',
             timezone_offset: new Date().getTimezoneOffset(),
-            database_name: dbname || null,
-            collection: collection || 'full'
+            database_name: dbname,
+            collection: collection || 'full',
+            folder_name: folderName || null,
+            retention_count: retentionVal,
+            archive_mode: v('sc-archive-mode') || 'single'
           })
         });
         closeModal('schedule-modal');
         toast('Schedule created!', 'success');
         loadSchedules();
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function runScheduleNow(id) {
+      try {
+        toast('Starting scheduled backup...', 'info');
+        const res = await apiFetch(`/schedules/${id}/run`, { method: 'POST' });
+        toast(res.message || 'Scheduled backup started!', 'success');
+        loadSchedules();
+        if (typeof loadBackups === 'function') loadBackups();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    }
+
+    async function triggerSchedulerCheck() {
+      try {
+        toast('Running scheduler check...', 'info');
+        const res = await apiFetch('/schedules/trigger', { method: 'POST' });
+        toast(res.message || 'Scheduler check complete!', 'success');
+        loadSchedules();
+        if (typeof loadBackups === 'function') loadBackups();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
     }
 
     async function toggleSchedule(id) {
@@ -4448,14 +5199,14 @@
       const [backups, dbs, storages] = await Promise.all([apiFetch('/backups/'), apiFetch('/databases/'), apiFetch('/storage/')]);
       const completed = backups.filter(b => b.status === 'completed' && b.remote_name);
       document.getElementById('rs-backup').innerHTML = completed.length
-        ? completed.map(b => `<option value="${b.id}" data-collection="${b.collection || 'full'}" data-size="${b.size_mb}" data-dbname="${b.database_name}">${b.label} — ${b.database_name} (${fmtDate(b.created_at)})</option>`).join('')
+        ? completed.map(b => `<option value="${b.id}" data-collection="${b.collection || 'full'}" data-size="${b.size_mb}" data-dbname="${b.database_name}" data-archive-mode="${b.archive_mode || 'single'}" data-is-cluster="${b.is_cluster ? 'true' : 'false'}" data-dbs="${(b.cluster_databases || []).join(',')}">${b.label} — ${b.database_name || 'All Databases'} (${fmtDate(b.created_at)})</option>`).join('')
         : '<option value="">— no completed backups —</option>';
       document.getElementById('rs-target-db').innerHTML = dbs.map(d =>
         `<option value="${d.id}">${d.name} (${d.type})</option>`
       ).join('');
-      document.getElementById('rs-external-storage').innerHTML = storages.map(s =>
-        `<option value="${s.id}">${s.name} (${s.type})</option>`
-      ).join('<option value="">— select storage —</option>');
+      document.getElementById('rs-external-storage').innerHTML = '<option value="">— select storage —</option>' + storages.map(s =>
+        `<option value="${s.id}">${s.name} (${s.type.toUpperCase()})</option>`
+      ).join('');
 
       onRestoreSourceChange();
       onRestoreBackupChange();
@@ -4483,9 +5234,14 @@
       sel.innerHTML = '<option>Loading files...</option>';
       try {
         const res = await apiFetch(`/storage/${storageId}/files`);
-        sel.innerHTML = res.files.length
-          ? res.files.map(f => `<option value="${f.name}">${f.name} (${(f.size / 1024 / 1024).toFixed(2)} MB)</option>`).join('')
+        const filesList = Array.isArray(res) ? res : (res && res.files ? res.files : []);
+        sel.innerHTML = filesList.length
+          ? filesList.map(f => `<option value="${f.name}">${f.name} (${(f.size / 1024 / 1024).toFixed(2)} MB)</option>`).join('')
           : '<option value="">— no backup files found —</option>';
+        const manualEl = document.getElementById('rs-manual-path');
+        if (manualEl) {
+          manualEl.value = filesList.length > 0 ? filesList[0].name : '';
+        }
       } catch (e) {
         sel.innerHTML = `<option value="">⚠ ${e.message}</option>`;
       }
@@ -4496,11 +5252,53 @@
       const opt = sel.options[sel.selectedIndex];
       const info = document.getElementById('rs-info');
       const infoText = document.getElementById('rs-info-text');
-      if (opt && opt.value) {
+      const isExternal = v('rs-source-type') === 'external';
+
+      if (opt && opt.value && !isExternal) {
         info.style.display = 'block';
         infoText.innerHTML = `<strong>${opt.text.split(' — ')[0]}</strong> &nbsp;|&nbsp; Collection: <strong>${opt.dataset.collection || 'full'}</strong> &nbsp;|&nbsp; Size: <strong>${opt.dataset.size || '?'} MB</strong> &nbsp;|&nbsp; Source DB: <strong>${opt.dataset.dbname || '?'}</strong>`;
+        
+        const isCluster = opt.dataset.isCluster === 'true' || opt.dataset.dbname === '__all__' || opt.dataset.archiveMode === 'multiple' || opt.text.includes('All Databases') || (opt.dataset.dbs && opt.dataset.dbs.length > 0);
+        const instanceGroup = document.getElementById('rs-instance-scope-group');
+        if (instanceGroup) instanceGroup.style.display = isCluster ? 'block' : 'none';
+
+        if (opt.dataset.dbs) {
+          const dbsList = opt.dataset.dbs.split(',').filter(Boolean);
+          let dl = document.getElementById('rs-dbs-datalist');
+          if (!dl) {
+            dl = document.createElement('datalist');
+            dl.id = 'rs-dbs-datalist';
+            document.body.appendChild(dl);
+          }
+          dl.innerHTML = dbsList.map(d => `<option value="${d}">`).join('');
+          const inp = document.getElementById('rs-selected-db');
+          if (inp) inp.setAttribute('list', 'rs-dbs-datalist');
+        }
       } else {
-        info.style.display = 'none';
+        if (!isExternal) info.style.display = 'none';
+      }
+      onRestoreInstanceScopeChange();
+    }
+
+    function onRestoreInstanceScopeChange() {
+      const isSingle = v('rs-instance-scope') === 'single';
+      const isInstanceVisible = document.getElementById('rs-instance-scope-group') && document.getElementById('rs-instance-scope-group').style.display !== 'none';
+      const singleGroup = document.getElementById('rs-single-db-group');
+      if (singleGroup) singleGroup.style.display = (isSingle && isInstanceVisible) ? 'block' : 'none';
+    }
+
+    function onSelectedDbInput() {
+      const val = (v('rs-selected-db') || '').trim();
+      const targetDbnameEl = document.getElementById('rs-target-dbname');
+      const isNew = document.getElementById('rs-new-fields').style.display !== 'none';
+      if (val && !isNew && targetDbnameEl) {
+        // If target dropdown has matching option, preselect it
+        for (let i = 0; i < targetDbnameEl.options.length; i++) {
+          if (targetDbnameEl.options[i].value.toLowerCase() === val.toLowerCase()) {
+            targetDbnameEl.selectedIndex = i;
+            break;
+          }
+        }
       }
     }
 
@@ -4624,8 +5422,9 @@
 
       if (!isExternal && !backupId) { toast('Select a backup to restore', 'error'); return; }
       const storageId = v('rs-external-storage');
-      const file = v('rs-external-file');
-      if (isExternal && (!storageId || !file)) { toast('Select a bucket and file', 'error'); return; }
+      const manualFile = v('rs-manual-path') ? v('rs-manual-path').trim() : '';
+      const file = manualFile || v('rs-external-file');
+      if (isExternal && (!storageId || !file)) { toast('Select a bucket and file or specify remote path', 'error'); return; }
 
       if (!targetDbId) { toast('Select a target database connection', 'error'); return; }
       if (!targetDbname) { toast(isNew ? 'Enter a new database name' : 'Select a target database name', 'error'); return; }
@@ -4646,8 +5445,16 @@
             target_database_name: targetDbname,
             collection: (v('rs-scope') === 'collection') ? v('rs-collection') : 'full',
             indexing_mode: v('rs-indexing-mode'),
-            speed_profile: v('rs-speed-profile') || 'default'
+            speed_profile: v('rs-speed-profile') || 'extreme'
           };
+
+          const instanceScopeGroup = document.getElementById('rs-instance-scope-group');
+          const isInstanceBackup = instanceScopeGroup && instanceScopeGroup.style.display !== 'none';
+          const isSingleSelected = isInstanceBackup && v('rs-instance-scope') === 'single';
+          const selectedDb = isSingleSelected ? (v('rs-selected-db') || '').trim() : null;
+          if (selectedDb) {
+            payload.selected_database = selectedDb;
+          }
 
           if (isExternal) {
             payload.storage_id = storageId;
@@ -4678,12 +5485,30 @@
     // ---- MODALS ----
     async function openModal(id) {
       document.getElementById(id).classList.add('open');
-      if (id === 'backup-modal' || id === 'schedule-modal') {
+      if (id === 'backup-modal') {
+        const chk = document.getElementById('bk-use-folder');
+        const folder = document.getElementById('bk-folder');
+        if (chk) chk.checked = false;
+        if (folder) folder.value = '';
+        toggleBackupFolder();
         await populateSelects();
+      }
+      if (id === 'schedule-modal') {
+        const chk = document.getElementById('sc-use-folder');
+        const folder = document.getElementById('sc-folder');
+        const ret = document.getElementById('sc-retention');
+        if (chk) chk.checked = false;
+        if (folder) folder.value = '';
+        if (ret) ret.value = '';
+        toggleScheduleFolder();
+        await populateSelects();
+        onFreqChange();
       }
       if (id === 'restore-modal') {
         await populateRestoreSelects();
         setRestoreMode('existing');
+        const manual = document.getElementById('rs-manual-path');
+        if (manual) manual.value = '';
       }
       if (id === 'db-modal') {
         document.getElementById('db-name').value = '';
@@ -4698,8 +5523,15 @@
         document.getElementById('db-test-result').style.display = 'none';
         onDbTypeChange('db');
       }
-      if (id === 'schedule-modal') {
-        onFreqChange();
+      if (id === 'storage-modal') {
+        const folderEl = document.getElementById('st-folder');
+        if (folderEl) folderEl.value = '';
+        const stRes = document.getElementById('st-test-result');
+        if (stRes) stRes.style.display = 'none';
+      }
+      if (id === 'edit-storage-modal') {
+        const editRes = document.getElementById('edit-st-test-result');
+        if (editRes) editRes.style.display = 'none';
       }
       lucide.createIcons();
     }
@@ -4733,9 +5565,11 @@
       return '<span class="badge badge-mongo" style="margin-right:6px"><i data-lucide="leaf" style="width:12px;height:12px"></i> Mongo</span>';
     }
     function storageBadge(t) {
-      return t === 'azure'
-        ? '<span class="badge badge-azure" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> Azure</span>'
-        : '<span class="badge badge-gcs" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> GCS</span>';
+      if (t === 'azure') return '<span class="badge badge-azure" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> Azure</span>';
+      if (t === 'gcs') return '<span class="badge badge-gcs" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> GCS</span>';
+      if (t === 's3') return '<span class="badge badge-s3" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> S3</span>';
+      if (t === 'bunny') return '<span class="badge badge-bunny" style="margin-right:6px"><i data-lucide="cloud" style="width:12px;height:12px"></i> BunnyCDN</span>';
+      return `<span class="badge badge-blue" style="margin-right:6px">${t}</span>`;
     }
     function statusBadge(s) {
       const m = { completed: 'badge-green', running: 'badge-orange', failed: 'badge-red' };

@@ -12,6 +12,7 @@ import os
 import shutil
 import logging
 import tempfile
+import uuid
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, quote, urlparse
 from utils import read_json, write_json, send_notification, parse_mongo_uri
@@ -30,21 +31,88 @@ ACTIVE_STOP_EVENTS = {}
 
 def cancel_job(job_id: str) -> bool:
     found = False
-    if job_id in ACTIVE_PROCESSES:
-        for p in ACTIVE_PROCESSES[job_id]:
-            try:
-                p.terminate()
-                p.kill()
-            except Exception:
-                pass
-        found = True
     if job_id in ACTIVE_STOP_EVENTS:
         try:
             ACTIVE_STOP_EVENTS[job_id].set()
             found = True
         except Exception:
             pass
+
+    if job_id in ACTIVE_PROCESSES:
+        for p in ACTIVE_PROCESSES[job_id]:
+            try:
+                if p.poll() is None:
+                    p.terminate()
+            except Exception:
+                pass
+        for p in ACTIVE_PROCESSES[job_id]:
+            try:
+                p.wait(timeout=1.0)
+            except Exception:
+                try:
+                    p.kill()
+                    p.wait(timeout=1.0)
+                except Exception:
+                    pass
+        found = True
+        ACTIVE_PROCESSES.pop(job_id, None)
+
+    ACTIVE_STOP_EVENTS.pop(job_id, None)
     return found
+
+
+def kill_stale_backup_subprocesses() -> int:
+    """
+    Terminates and reaps any orphaned backup/compression CLI processes
+    (e.g., pg_dump, pg_dumpall, zstd, pigz, mongodump, mongorestore, psql)
+    left behind by aborted, crashed, or interrupted jobs.
+    Returns the count of killed stale processes.
+    """
+    killed_count = 0
+    target_names = {"pg_dump", "pg_dumpall", "zstd", "pigz", "mongodump", "mongorestore"}
+
+    # 1. Kill any active processes tracked in memory
+    for j_id in list(ACTIVE_PROCESSES.keys()):
+        try:
+            cancel_job(j_id)
+            killed_count += 1
+        except Exception:
+            pass
+    ACTIVE_PROCESSES.clear()
+    ACTIVE_STOP_EVENTS.clear()
+
+    # 2. On Linux, scan /proc for any orphaned tool processes running without an active job
+    if os.path.exists("/proc"):
+        my_pid = os.getpid()
+        import signal
+        try:
+            for pid_dir in os.listdir("/proc"):
+                if not pid_dir.isdigit():
+                    continue
+                pid = int(pid_dir)
+                if pid == my_pid or pid == 1:
+                    continue
+                comm_path = f"/proc/{pid}/comm"
+                if os.path.exists(comm_path):
+                    try:
+                        with open(comm_path, "r") as f:
+                            comm = f.read().strip()
+                        if comm in target_names:
+                            log.warning(f"Reaping stale orphan backup process: {comm} (PID {pid})")
+                            try:
+                                os.kill(pid, signal.SIGTERM)
+                                time.sleep(0.05)
+                                os.kill(pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            killed_count += 1
+                    except Exception:
+                        pass
+        except Exception as e:
+            log.warning(f"Could not inspect /proc for stale processes: {e}")
+
+    return killed_count
+
 
 
 
@@ -119,8 +187,437 @@ def read_log(log_path: str) -> str:
 
 
 
+BUNNY_KNOWN_REGIONS = [
+    {"code": "de", "name": "Falkenstein / Europe (DE)", "rest_host": "storage.bunnycdn.com", "s3_url": "https://de-s3.storage.bunnycdn.com"},
+    {"code": "ny", "name": "New York / US East (NY)", "rest_host": "ny.storage.bunnycdn.com", "s3_url": "https://ny-s3.storage.bunnycdn.com"},
+    {"code": "la", "name": "Los Angeles / US West (LA)", "rest_host": "la.storage.bunnycdn.com", "s3_url": "https://la-s3.storage.bunnycdn.com"},
+    {"code": "sg", "name": "Singapore / Asia (SG)", "rest_host": "sg.storage.bunnycdn.com", "s3_url": "https://sg-s3.storage.bunnycdn.com"},
+    {"code": "syd", "name": "Sydney / Oceania (SYD)", "rest_host": "syd.storage.bunnycdn.com", "s3_url": "https://syd-s3.storage.bunnycdn.com"},
+    {"code": "uk", "name": "London / United Kingdom (UK)", "rest_host": "uk.storage.bunnycdn.com", "s3_url": "https://uk-s3.storage.bunnycdn.com"},
+    {"code": "se", "name": "Stockholm / Europe North (SE)", "rest_host": "se.storage.bunnycdn.com", "s3_url": "https://se-s3.storage.bunnycdn.com"},
+    {"code": "br", "name": "São Paulo / South America (BR)", "rest_host": "br.storage.bunnycdn.com", "s3_url": "https://br-s3.storage.bunnycdn.com"},
+    {"code": "jh", "name": "Johannesburg / Africa (JH)", "rest_host": "jh.storage.bunnycdn.com", "s3_url": "https://jh-s3.storage.bunnycdn.com"},
+]
+
+
+def resolve_bunny_hosts(region_url_or_code: str = "") -> tuple:
+    """
+    Returns (rest_host, s3_endpoint_url) based on region url or region code.
+    E.g.
+    'https://de-s3.storage.bunnycdn.com' -> ('storage.bunnycdn.com', 'https://de-s3.storage.bunnycdn.com')
+    'https://ny-s3.storage.bunnycdn.com' -> ('ny.storage.bunnycdn.com', 'https://ny-s3.storage.bunnycdn.com')
+    'https://ny.storage.bunnycdn.com'    -> ('ny.storage.bunnycdn.com', 'https://ny-s3.storage.bunnycdn.com')
+    'https://storage.bunnycdn.com'       -> ('storage.bunnycdn.com', 'https://de-s3.storage.bunnycdn.com')
+    'ny'                                 -> ('ny.storage.bunnycdn.com', 'https://ny-s3.storage.bunnycdn.com')
+    'de' or ''                           -> ('storage.bunnycdn.com', 'https://de-s3.storage.bunnycdn.com')
+    """
+    raw = (region_url_or_code or "").strip().lower()
+    if raw.startswith("http://"):
+        raw = raw[7:]
+    elif raw.startswith("https://"):
+        raw = raw[8:]
+    raw = raw.strip("/")
+
+    if "storage.bunnycdn.com" in raw:
+        prefix = raw.split(".")[0]
+        if prefix in ("storage", "de", "de-s3"):
+            return "storage.bunnycdn.com", "https://de-s3.storage.bunnycdn.com"
+        reg = prefix.replace("-s3", "")
+        return f"{reg}.storage.bunnycdn.com", f"https://{reg}-s3.storage.bunnycdn.com"
+
+    if not raw or raw in ("de", "falkenstein", "default", "main"):
+        return "storage.bunnycdn.com", "https://de-s3.storage.bunnycdn.com"
+
+    reg = raw.replace("-s3", "")
+    return f"{reg}.storage.bunnycdn.com", f"https://{reg}-s3.storage.bunnycdn.com"
+
+
+def get_bunny_key(storage: dict) -> str:
+    """
+    Returns the real storage zone password/key.
+    Prioritizes non-empty values that do not match the storage zone name.
+    """
+    if not isinstance(storage, dict):
+        return ""
+    if "_resolved_bunny" in storage and storage["_resolved_bunny"].get("bunny_key"):
+        return storage["_resolved_bunny"]["bunny_key"]
+
+    pwd = (storage.get("bunny_password") or "").strip()
+    acc = (storage.get("bunny_access_key") or "").strip()
+    zone = (storage.get("bunny_storage_zone") or "").strip()
+
+    # If bunny_password is set and is NOT identical to zone name, use it
+    if pwd and pwd.lower() != zone.lower():
+        return pwd
+    # If bunny_access_key is set and is NOT identical to zone name, use it
+    if acc and acc.lower() != zone.lower():
+        return acc
+    return pwd or acc
+
+
+def get_bunny_host(region_or_storage: any = None) -> str:
+    if isinstance(region_or_storage, dict):
+        if "_resolved_bunny" in region_or_storage and region_or_storage["_resolved_bunny"].get("rest_host"):
+            return region_or_storage["_resolved_bunny"]["rest_host"]
+        reg = (region_or_storage.get("bunny_region_url") or region_or_storage.get("bunny_region") or "").strip()
+        if not reg and region_or_storage.get("bunny_storage_zone"):
+            try:
+                res = verify_and_resolve_bunny(region_or_storage)
+                if res and res.get("success"):
+                    region_or_storage["_resolved_bunny"] = res
+                    return res["rest_host"]
+            except Exception:
+                pass
+    else:
+        reg = (region_or_storage or "").strip()
+    rest_host, _ = resolve_bunny_hosts(reg)
+    return rest_host
+
+
+def verify_and_resolve_bunny(storage: dict, log_path: str = None) -> dict:
+    """
+    Validates Bunny credentials, auto-detects the storage zone's region endpoint
+    across all known BunnyCDN regions, and verifies S3 multipart compatibility.
+    """
+    import requests
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    zone = (storage.get("bunny_storage_zone") or "").strip()
+    bunny_key = get_bunny_key(storage)
+    pref_region = (storage.get("bunny_region_url") or storage.get("bunny_region") or "").strip()
+
+    if not zone:
+        return {"success": False, "error": "BunnyCDN Storage Zone Name is required."}
+    if not bunny_key:
+        return {
+            "success": False,
+            "error": "BunnyCDN Storage Zone Password is required. Please check your storage settings."
+        }
+    if bunny_key.strip().lower() == zone.strip().lower():
+        return {
+            "success": False,
+            "error": (
+                f"Invalid Storage Zone Password: The password cannot be the Storage Zone Name ('{zone}'). "
+                "In Bunny.net, the password is found under Storage -> [Your Zone] -> 'FTP & API Access' tab. "
+                "Please update your storage settings with the actual Password (do NOT use your Bunny Account API Key)."
+            )
+        }
+
+    cand_rest, cand_s3 = resolve_bunny_hosts(pref_region)
+    headers = {"AccessKey": bunny_key, "Accept": "application/json"}
+
+    # 1. Test candidate host first
+    cand_worked = False
+    cand_status = None
+    try:
+        r = requests.get(f"https://{cand_rest}/{zone}/", headers=headers, timeout=6)
+        cand_status = r.status_code
+        if r.status_code == 200:
+            cand_worked = True
+    except Exception as e:
+        cand_status = str(e)
+
+    matched_region = None
+    if cand_worked:
+        matched_reg_info = next((rg for rg in BUNNY_KNOWN_REGIONS if rg["rest_host"] == cand_rest), None)
+        matched_region = matched_reg_info or {
+            "code": "custom",
+            "name": cand_rest,
+            "rest_host": cand_rest,
+            "s3_url": cand_s3
+        }
+    else:
+        # Candidate failed (e.g. 401, 404, or network timeout). Probe other known regions concurrently.
+        other_regions = [rg for rg in BUNNY_KNOWN_REGIONS if rg["rest_host"] != cand_rest]
+        statuses = {cand_rest: cand_status}
+
+        def _probe(reg_info):
+            host = reg_info["rest_host"]
+            try:
+                resp = requests.get(f"https://{host}/{zone}/", headers=headers, timeout=5)
+                return reg_info, resp.status_code
+            except Exception as ex:
+                return reg_info, str(ex)
+
+        with ThreadPoolExecutor(max_workers=min(8, len(other_regions))) as executor:
+            future_to_reg = {executor.submit(_probe, rg): rg for rg in other_regions}
+            for future in as_completed(future_to_reg):
+                reg_info, st = future.result()
+                statuses[reg_info["rest_host"]] = st
+                if st == 200 and not matched_region:
+                    matched_region = reg_info
+                    for f in future_to_reg:
+                        f.cancel()
+                    break
+
+        if matched_region and log_path:
+            write_log(log_path, f"INFO  Auto-detected BunnyCDN storage zone '{zone}' is in region '{matched_region['name']}' ({matched_region['rest_host']}).")
+
+    if not matched_region:
+        all_401 = all(st == 401 for st in statuses.values() if isinstance(st, int))
+        all_404 = all(st == 404 for st in statuses.values() if isinstance(st, int))
+        if all_401:
+            err = (
+                "BunnyCDN authentication failed (401 Unauthorized) across all regions. "
+                "Please verify your credentials in Bunny.net dashboard under Storage -> [Your Zone] -> 'FTP & API Access'. "
+                "Make sure you copy the 'Password' (Read-Write password), NOT your main Bunny Account API Key."
+            )
+        elif all_404:
+            err = f"BunnyCDN Storage Zone '{zone}' not found in any region. Please check that the Storage Zone Name matches your Bunny dashboard."
+        else:
+            err = f"Failed to connect to BunnyCDN storage zone '{zone}'. Endpoint statuses: {statuses}"
+        return {"success": False, "error": err}
+
+    rest_host = matched_region["rest_host"]
+    s3_url = matched_region["s3_url"]
+    region_code = matched_region.get("code", "de")
+
+    # 2. Check S3-compatible API usability with auto-matched region
+    s3_usable = False
+    try:
+        import boto3
+        from botocore.config import Config
+        s3_cfg = Config(
+            s3={"addressing_style": "path"},
+            signature_version="s3v4",
+            retries={"max_attempts": 2, "mode": "standard"},
+            connect_timeout=6,
+            read_timeout=10,
+            max_pool_connections=64
+        )
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=s3_url,
+            aws_access_key_id=zone,  # Storage Zone Name is Access Key ID
+            aws_secret_access_key=bunny_key,
+            region_name=region_code,
+            config=s3_cfg
+        )
+        try:
+            s3.head_bucket(Bucket=zone)
+            s3_usable = True
+        except Exception:
+            try:
+                s3.list_objects_v2(Bucket=zone, MaxKeys=1)
+                s3_usable = True
+            except Exception as s3_err:
+                try:
+                    s3_fb = boto3.client(
+                        "s3",
+                        endpoint_url=s3_url,
+                        aws_access_key_id=zone,
+                        aws_secret_access_key=bunny_key,
+                        region_name="us-east-1",
+                        config=s3_cfg
+                    )
+                    s3_fb.list_objects_v2(Bucket=zone, MaxKeys=1)
+                    s3_usable = True
+                    region_code = "us-east-1"
+                except Exception:
+                    # BunnyCDN Storage Zones inherently support S3 multipart on their regional S3 endpoints
+                    s3_usable = True
+                    if log_path:
+                        write_log(log_path, f"INFO  Bunny S3 verification note: {s3_err}. Enabling S3 multipart streaming.")
+    except Exception as e:
+        s3_usable = False
+        if log_path:
+            write_log(log_path, f"INFO  Bunny S3 client initialization error ({e}). Will use REST API.")
+
+    return {
+        "success": True,
+        "zone": zone,
+        "bunny_key": bunny_key,
+        "rest_host": rest_host,
+        "s3_url": s3_url,
+        "region_code": region_code,
+        "region_name": matched_region.get("name", rest_host),
+        "s3_usable": s3_usable,
+        "error": None
+    }
+
+
+def get_s3_client(storage: dict, max_pool: int = 64):
+    import boto3
+    from botocore.config import Config
+    
+    config = Config(
+        retries={'max_attempts': 3, 'mode': 'standard'},
+        connect_timeout=30,
+        read_timeout=3600,
+        max_pool_connections=max_pool
+    )
+    kwargs = {
+        "aws_access_key_id": storage.get("s3_access_key"),
+        "aws_secret_access_key": storage.get("s3_secret_key"),
+        "config": config
+    }
+    if storage.get("s3_region"):
+        kwargs["region_name"] = storage["s3_region"].strip()
+    if storage.get("s3_endpoint_url"):
+        kwargs["endpoint_url"] = storage["s3_endpoint_url"].strip()
+        
+    return boto3.client("s3", **kwargs)
+
+
+def list_storage_objects(storage: dict, prefix: str) -> list:
+    """List object keys matching prefix in the given storage."""
+    stype = storage["type"]
+    prefix = prefix or ""
+    if stype == "azure":
+        from azure.storage.blob import BlobServiceClient
+        conn_str = f"DefaultEndpointsProtocol=https;AccountName={storage['azure_account_name']};AccountKey={storage['azure_account_key']};EndpointSuffix=core.windows.net"
+        client = BlobServiceClient.from_connection_string(conn_str)
+        container = client.get_container_client(storage["azure_container"])
+        return [b.name for b in container.list_blobs(name_starts_with=prefix)]
+    elif stype == "gcs":
+        import json as _json
+        from google.cloud import storage as gcs
+        from google.oauth2 import service_account
+        creds_dict = _json.loads(storage["gcs_credentials_json"])
+        creds = service_account.Credentials.from_service_account_info(creds_dict)
+        client = gcs.Client(credentials=creds)
+        bucket = client.bucket(storage["gcs_bucket"])
+        return [b.name for b in bucket.list_blobs(prefix=prefix)]
+    elif stype == "s3":
+        s3 = get_s3_client(storage)
+        paginator = s3.get_paginator('list_objects_v2')
+        results = []
+        for page in paginator.paginate(Bucket=storage["s3_bucket"], Prefix=prefix):
+            for item in page.get("Contents", []):
+                results.append(item["Key"])
+        return results
+    elif stype == "bunny":
+        import requests
+        bunny_res = storage.get("_resolved_bunny")
+        if not bunny_res or not bunny_res.get("success"):
+            bunny_res = verify_and_resolve_bunny(storage)
+            if bunny_res and bunny_res.get("success"):
+                storage["_resolved_bunny"] = bunny_res
+
+        if bunny_res and bunny_res.get("success"):
+            bunny_host = bunny_res["rest_host"]
+            bunny_key = bunny_res["bunny_key"]
+            zone = bunny_res["zone"]
+            s3_url = bunny_res["s3_url"]
+            region_code = bunny_res.get("region_code") or "de"
+        else:
+            bunny_host = get_bunny_host(storage)
+            bunny_key = get_bunny_key(storage)
+            zone = (storage.get("bunny_storage_zone") or "").strip()
+            _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or "")
+            region_code = "de"
+
+        headers = {"AccessKey": bunny_key, "Accept": "application/json"}
+        results = []
+
+        def list_bunny_dir(subpath=""):
+            clean = subpath.strip("/")
+            url = f"https://{bunny_host}/{zone}/{clean}/" if clean else f"https://{bunny_host}/{zone}/"
+            resp = requests.get(url, headers=headers, timeout=25)
+            if resp.status_code == 200:
+                for item in resp.json():
+                    obj_name = item.get("ObjectName", "")
+                    full_name = f"{clean}/{obj_name}".strip("/") if clean else obj_name
+                    if item.get("IsDirectory"):
+                        list_bunny_dir(full_name)
+                    else:
+                        if not prefix or full_name.startswith(prefix.strip("/")):
+                            results.append(full_name)
+
+        clean_prefix = prefix.strip("/")
+        start_dir = clean_prefix if prefix.endswith("/") else (clean_prefix.rsplit("/", 1)[0] if "/" in clean_prefix else "")
+        try:
+            list_bunny_dir(start_dir)
+        except Exception:
+            pass
+
+        # Fallback to Bunny S3-compatible API if REST returned nothing
+        if not results:
+            try:
+                import boto3
+                from botocore.config import Config
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=s3_url,
+                    aws_access_key_id=zone,
+                    aws_secret_access_key=bunny_key,
+                    region_name=region_code,
+                    config=Config(s3={'addressing_style': 'path'}, signature_version="s3v4", retries={'max_attempts': 2, 'mode': 'standard'}, connect_timeout=10, read_timeout=15)
+                )
+                paginator = s3.get_paginator('list_objects_v2')
+                for page in paginator.paginate(Bucket=zone, Prefix=prefix):
+                    for item in page.get("Contents", []):
+                        results.append(item["Key"])
+            except Exception:
+                pass
+        return results
+    return []
+
+
+def get_storage_object_size(storage: dict, remote_name: str) -> int:
+    """Returns the size of a remote object in bytes, or 0 if unknown/error."""
+    if not remote_name or not storage:
+        return 0
+    clean_remote = remote_name.lstrip("/")
+    stype = storage.get("type")
+    try:
+        if stype == "azure":
+            from azure.storage.blob import BlobServiceClient
+            conn_str = f"DefaultEndpointsProtocol=https;AccountName={storage['azure_account_name']};AccountKey={storage['azure_account_key']};EndpointSuffix=core.windows.net"
+            client = BlobServiceClient.from_connection_string(conn_str)
+            container = client.get_container_client(storage["azure_container"])
+            blob_props = container.get_blob_client(clean_remote).get_blob_properties()
+            return blob_props.size or 0
+        elif stype == "gcs":
+            import json as _json
+            from google.cloud import storage as gcs
+            from google.oauth2 import service_account
+            creds_dict = _json.loads(storage["gcs_credentials_json"])
+            creds = service_account.Credentials.from_service_account_info(creds_dict)
+            client = gcs.Client(credentials=creds)
+            bucket = client.bucket(storage["gcs_bucket"])
+            blob = bucket.get_blob(clean_remote)
+            return blob.size if blob else 0
+        elif stype == "s3":
+            s3 = get_s3_client(storage)
+            head = s3.head_object(Bucket=storage["s3_bucket"], Key=clean_remote)
+            return head.get("ContentLength", 0)
+        elif stype == "bunny":
+            import requests
+            bunny_host = get_bunny_host(storage)
+            bunny_key = get_bunny_key(storage)
+            zone = (storage.get("bunny_storage_zone") or "").strip()
+            url = f"https://{bunny_host}/{zone}/{clean_remote}"
+            try:
+                resp = requests.head(url, headers={"AccessKey": bunny_key}, timeout=15)
+                if resp.status_code == 200 and "Content-Length" in resp.headers:
+                    return int(resp.headers["Content-Length"])
+            except Exception:
+                pass
+            try:
+                import boto3
+                from botocore.config import Config
+                _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=s3_url,
+                    aws_access_key_id=zone,
+                    aws_secret_access_key=bunny_key,
+                    region_name="de",
+                    config=Config(s3={'addressing_style': 'path'}, signature_version='s3v4', connect_timeout=10, read_timeout=15)
+                )
+                head = s3.head_object(Bucket=zone, Key=clean_remote)
+                return head.get("ContentLength", 0)
+            except Exception:
+                pass
+    except Exception as e:
+        log.warning(f"Failed to get storage object size for {remote_name}: {e}")
+    return 0
+
+
 def upload_metadata_file(storage: dict, remote_name: str, data_str: str):
-    if storage["type"] == "azure":
+    stype = storage["type"]
+    if stype == "azure":
         from azure.storage.blob import BlobServiceClient
         conn_str = (
             f"DefaultEndpointsProtocol=https;"
@@ -131,7 +628,7 @@ def upload_metadata_file(storage: dict, remote_name: str, data_str: str):
         client = BlobServiceClient.from_connection_string(conn_str)
         container = client.get_container_client(storage["azure_container"])
         container.upload_blob(name=remote_name, data=data_str, overwrite=True)
-    elif storage["type"] == "gcs":
+    elif stype == "gcs":
         import json
         from google.cloud import storage as gcs
         from google.oauth2 import service_account
@@ -141,10 +638,52 @@ def upload_metadata_file(storage: dict, remote_name: str, data_str: str):
         bucket = client.bucket(storage["gcs_bucket"])
         blob = bucket.blob(remote_name)
         blob.upload_from_string(data_str)
+    elif stype == "s3":
+        s3 = get_s3_client(storage)
+        s3.put_object(
+            Bucket=storage["s3_bucket"],
+            Key=remote_name,
+            Body=data_str.encode("utf-8"),
+            ContentType="application/json"
+        )
+    elif stype == "bunny":
+        import requests
+        bunny_host = get_bunny_host(storage)
+        bunny_key = get_bunny_key(storage)
+        zone = (storage.get("bunny_storage_zone") or "").strip()
+        access_key = (storage.get("bunny_access_key") or zone).strip()
+        clean_remote = remote_name.lstrip("/")
+        encoded = data_str.encode("utf-8")
+        url = f"https://{bunny_host}/{zone}/{clean_remote}"
+        headers = {"AccessKey": bunny_key, "Content-Type": "application/json", "Content-Length": str(len(encoded))}
+        success = False
+        try:
+            resp = requests.put(url, headers=headers, data=encoded, timeout=30)
+            if resp.status_code in (200, 201):
+                success = True
+        except Exception:
+            pass
+        if not success:
+            try:
+                import boto3
+                from botocore.config import Config
+                _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=s3_url,
+                    aws_access_key_id=zone,
+                    aws_secret_access_key=bunny_key,
+                    region_name="de",
+                    config=Config(s3={'addressing_style': 'path'}, signature_version='s3v4', connect_timeout=10, read_timeout=15)
+                )
+                s3.put_object(Bucket=zone, Key=clean_remote, Body=encoded, ContentType="application/json")
+            except Exception:
+                pass
 
 def download_metadata_file(storage: dict, remote_name: str) -> str:
     try:
-        if storage["type"] == "azure":
+        stype = storage["type"]
+        if stype == "azure":
             from azure.storage.blob import BlobServiceClient
             conn_str = (
                 f"DefaultEndpointsProtocol=https;"
@@ -157,7 +696,7 @@ def download_metadata_file(storage: dict, remote_name: str) -> str:
             blob_client = container.get_blob_client(remote_name)
             if blob_client.exists():
                 return blob_client.download_blob().readall().decode("utf-8")
-        elif storage["type"] == "gcs":
+        elif stype == "gcs":
             import json
             from google.cloud import storage as gcs
             from google.oauth2 import service_account
@@ -168,9 +707,301 @@ def download_metadata_file(storage: dict, remote_name: str) -> str:
             blob = bucket.blob(remote_name)
             if blob.exists():
                 return blob.download_as_string().decode("utf-8")
+        elif stype == "s3":
+            s3 = get_s3_client(storage)
+            obj = s3.get_object(Bucket=storage["s3_bucket"], Key=remote_name)
+            return obj["Body"].read().decode("utf-8")
+        elif stype == "bunny":
+            import requests
+            bunny_host = get_bunny_host(storage)
+            bunny_key = get_bunny_key(storage)
+            zone = (storage.get("bunny_storage_zone") or "").strip()
+            access_key = (storage.get("bunny_access_key") or zone).strip()
+            clean_remote = remote_name.lstrip("/")
+            url = f"https://{bunny_host}/{zone}/{clean_remote}"
+            headers = {"AccessKey": bunny_key}
+            try:
+                resp = requests.get(url, headers=headers, timeout=30)
+                if resp.status_code == 200:
+                    return resp.text
+            except Exception:
+                pass
+            try:
+                import boto3
+                from botocore.config import Config
+                _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or storage.get("bunny_region") or "")
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=s3_url,
+                    aws_access_key_id=zone,
+                    aws_secret_access_key=bunny_key,
+                    region_name="de",
+                    config=Config(s3={'addressing_style': 'path'}, signature_version='s3v4', connect_timeout=10, read_timeout=15)
+                )
+                obj = s3.get_object(Bucket=zone, Key=clean_remote)
+                return obj["Body"].read().decode("utf-8")
+            except Exception:
+                pass
     except Exception:
         pass
     return None
+
+
+def delete_remote_backup(storage: dict, remote_name: str, folder_name: str = None):
+    """
+    Deletes a backup and its associated files and directory from remote storage.
+    For BunnyCDN Edge Storage, deletes all matching files and sends a DELETE
+    request with a trailing slash to remove the backup's directory as well,
+    ensuring no empty folders remain behind.
+    """
+    if not remote_name or not storage:
+        return
+
+    stype = storage.get("type")
+    clean_rn = remote_name.strip("/")
+    base_folder = (folder_name or storage.get("folder_name") or "").strip().strip("/")
+    while "//" in base_folder:
+        base_folder = base_folder.replace("//", "/")
+
+    # Determine if there is a backup-specific folder (e.g. timestamped directory)
+    backup_dir = None
+    if remote_name.endswith("/"):
+        if clean_rn and clean_rn != base_folder:
+            backup_dir = clean_rn
+    else:
+        if "/" in clean_rn:
+            parent = clean_rn.rsplit("/", 1)[0]
+            if parent != base_folder:
+                backup_dir = parent
+
+    if stype == "bunny":
+        import requests
+        import boto3
+        from botocore.config import Config
+
+        # 1. Ensure Bunny zone and regional endpoints are accurately auto-detected
+        bunny_res = storage.get("_resolved_bunny")
+        if not bunny_res or not bunny_res.get("success"):
+            bunny_res = verify_and_resolve_bunny(storage)
+            if bunny_res and bunny_res.get("success"):
+                storage["_resolved_bunny"] = bunny_res
+
+        if bunny_res and bunny_res.get("success"):
+            bunny_host = bunny_res["rest_host"]
+            bunny_key = bunny_res["bunny_key"]
+            zone = bunny_res["zone"]
+            s3_url = bunny_res["s3_url"]
+            region_code = bunny_res.get("region_code") or "de"
+        else:
+            bunny_host = get_bunny_host(storage)
+            bunny_key = get_bunny_key(storage)
+            zone = (storage.get("bunny_storage_zone") or "").strip()
+            _, s3_url = resolve_bunny_hosts(storage.get("bunny_region_url") or "")
+            region_code = "de"
+
+        headers = {"AccessKey": bunny_key}
+
+        # Initialize S3 client for Bunny
+        s3_client = None
+        try:
+            s3_client = boto3.client(
+                "s3",
+                endpoint_url=s3_url,
+                aws_access_key_id=zone,
+                aws_secret_access_key=bunny_key,
+                region_name=region_code,
+                config=Config(
+                    s3={'addressing_style': 'path'},
+                    signature_version="s3v4",
+                    retries={'max_attempts': 3, 'mode': 'standard'},
+                    connect_timeout=10,
+                    read_timeout=15,
+                    max_pool_connections=32
+                )
+            )
+        except Exception as ex:
+            log.warning(f"[BunnyCDN] S3 client setup note for delete: {ex}")
+
+        # 2. Discover all objects associated with this backup
+        list_prefix = (backup_dir + "/") if backup_dir else remote_name
+        objects = set(list_storage_objects(storage, list_prefix))
+
+        # Always include the direct remote_name and .indexes.json file if not directory
+        if not remote_name.endswith("/"):
+            objects.add(clean_rn)
+            objects.add(clean_rn + ".indexes.json")
+
+        # Also discover objects via S3 paginator across all prefixes to ensure no files are missed
+        if s3_client:
+            prefixes_to_scan = [list_prefix, clean_rn]
+            if backup_dir:
+                prefixes_to_scan.extend([backup_dir, backup_dir + "/"])
+            for pfx in set(prefixes_to_scan):
+                try:
+                    paginator = s3_client.get_paginator('list_objects_v2')
+                    for page in paginator.paginate(Bucket=zone, Prefix=pfx.lstrip("/")):
+                        for item in page.get("Contents", []):
+                            objects.add(item["Key"])
+                except Exception as s3_list_err:
+                    log.warning(f"[BunnyCDN] S3 list objects warning for prefix {pfx}: {s3_list_err}")
+
+        # 3. Delete all individual files via S3 batch and REST
+        if s3_client and objects:
+            try:
+                obj_list = [k.lstrip("/") for k in objects]
+                for i in range(0, len(obj_list), 500):
+                    batch = [{'Key': k} for k in obj_list[i:i+500]]
+                    s3_client.delete_objects(Bucket=zone, Delete={'Objects': batch})
+                log.info(f"[BunnyCDN S3] Batch deleted {len(obj_list)} objects.")
+            except Exception as s3_batch_err:
+                log.warning(f"[BunnyCDN S3] Batch delete fallback note: {s3_batch_err}")
+
+        for obj in objects:
+            clean_obj = obj.lstrip("/")
+            if s3_client:
+                try:
+                    s3_client.delete_object(Bucket=zone, Key=clean_obj)
+                    log.info(f"[BunnyCDN S3] Deleted object {clean_obj}")
+                except Exception:
+                    pass
+
+            del_url = f"https://{bunny_host}/{zone}/{clean_obj}"
+            try:
+                r = requests.delete(del_url, headers=headers, timeout=15)
+                log.info(f"[BunnyCDN REST] Deleted file {clean_obj} (status {r.status_code})")
+            except Exception as e:
+                log.warning(f"[BunnyCDN REST] Failed to delete file {clean_obj}: {e}")
+
+        # 4. Recursively delete the entire backup directory from BunnyCDN Edge Storage!
+        # When all files inside are deleted, Bunny.net removes the directory cleanly.
+        if backup_dir:
+            clean_dir = backup_dir.strip("/")
+
+            # Delete via REST API directory endpoint
+            del_folder_url = f"https://{bunny_host}/{zone}/{clean_dir}/"
+            try:
+                r = requests.delete(del_folder_url, headers=headers, timeout=25)
+                log.info(f"[BunnyCDN REST] Deleted directory {clean_dir}/ (status {r.status_code})")
+            except Exception as e:
+                log.warning(f"[BunnyCDN REST] Failed to delete directory {clean_dir}/: {e}")
+
+            # Also delete virtual folder markers via S3
+            if s3_client:
+                for marker in [f"{clean_dir}/", clean_dir]:
+                    try:
+                        s3_client.delete_object(Bucket=zone, Key=marker)
+                        log.info(f"[BunnyCDN S3] Deleted folder marker {marker}")
+                    except Exception:
+                        pass
+
+    elif stype == "s3":
+        s3 = get_s3_client(storage)
+        bucket = storage["s3_bucket"]
+        search_prefix = (backup_dir + "/") if backup_dir else remote_name
+        paginator = s3.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket, Prefix=search_prefix):
+            objects_to_delete = [{'Key': item['Key']} for item in page.get('Contents', [])]
+            if objects_to_delete:
+                s3.delete_objects(Bucket=bucket, Delete={'Objects': objects_to_delete})
+        if not remote_name.endswith("/"):
+            try:
+                s3.delete_object(Bucket=bucket, Key=clean_rn)
+            except Exception:
+                pass
+
+    elif stype == "azure":
+        from azure.storage.blob import BlobServiceClient
+        conn_str = (
+            f"DefaultEndpointsProtocol=https;"
+            f"AccountName={storage['azure_account_name']};"
+            f"AccountKey={storage['azure_account_key']};"
+            f"EndpointSuffix=core.windows.net"
+        )
+        client = BlobServiceClient.from_connection_string(conn_str)
+        container = client.get_container_client(storage["azure_container"])
+        search_prefix = (backup_dir + "/") if backup_dir else remote_name
+        blobs = container.list_blobs(name_starts_with=search_prefix)
+        for blob in blobs:
+            try:
+                container.delete_blob(blob.name)
+            except Exception:
+                pass
+        if not remote_name.endswith("/"):
+            try:
+                container.delete_blob(clean_rn)
+            except Exception:
+                pass
+
+    elif stype == "gcs":
+        import json as _json
+        from google.cloud import storage as gcs
+        from google.oauth2 import service_account
+        creds_dict = _json.loads(storage["gcs_credentials_json"])
+        creds = service_account.Credentials.from_service_account_info(creds_dict)
+        client = gcs.Client(credentials=creds)
+        bucket = client.bucket(storage["gcs_bucket"])
+        search_prefix = (backup_dir + "/") if backup_dir else remote_name
+        blobs = bucket.list_blobs(prefix=search_prefix)
+        for blob in blobs:
+            try:
+                blob.delete()
+            except Exception:
+                pass
+        if not remote_name.endswith("/"):
+            try:
+                blob = bucket.get_blob(clean_rn)
+                if blob:
+                    blob.delete()
+            except Exception:
+                pass
+
+
+def prune_schedule_backups(schedule_id: str, retention_count: int):
+    """
+    Prunes completed backups for a schedule exceeding the retention_count limit.
+    Deletes both the database records and remote storage files/directories.
+    """
+    if not schedule_id or retention_count <= 0:
+        return
+    if not os.path.exists("data/backups.json") or not os.path.exists("data/storages.json"):
+        return
+
+    try:
+        backups = read_json("data/backups.json")
+        storages = read_json("data/storages.json")
+
+        # Find all completed backups created by this schedule
+        schedule_backups = [
+            b for b in backups
+            if b.get("schedule_id") == schedule_id and b.get("status") == "completed"
+        ]
+
+        # Sort descending by created_at (newest first)
+        schedule_backups.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+
+        if len(schedule_backups) <= retention_count:
+            return
+
+        to_prune = schedule_backups[retention_count:]
+        prune_ids = {b["id"] for b in to_prune}
+
+        for old_b in to_prune:
+            rn = old_b.get("remote_name")
+            sid = old_b.get("storage_id")
+            if rn and sid:
+                st = next((s for s in storages if s["id"] == sid), None)
+                if st:
+                    try:
+                        delete_remote_backup(st, rn, folder_name=old_b.get("folder_name"))
+                        log.info(f"Retention prune: deleted remote backup {old_b.get('label')}")
+                    except Exception as e:
+                        log.warning(f"Retention prune failed for {old_b.get('label')}: {e}")
+
+        updated_backups = [b for b in backups if b["id"] not in prune_ids]
+        write_json("data/backups.json", updated_backups)
+        log.info(f"Retention prune: removed {len(prune_ids)} old backup(s) for schedule {schedule_id}")
+    except Exception as e:
+        log.error(f"Error during schedule backup pruning: {e}")
 
 
 # ─── STORAGE STREAMING ───────────────────────────────────────────────────────
@@ -182,6 +1013,25 @@ import shutil
 import time
 import re
 from collections import deque
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+
+def optimize_pipe_fd(stream_or_fd):
+    """
+    On Linux, increase pipe capacity from standard 64KB to 1MB (1048576 bytes)
+    to minimize context switching between subprocesses in the streaming pipeline.
+    """
+    if not fcntl or not hasattr(fcntl, "F_SETPIPE_SZ"):
+        return
+    try:
+        fd = stream_or_fd.fileno() if hasattr(stream_or_fd, "fileno") else stream_or_fd
+        fcntl.fcntl(fd, fcntl.F_SETPIPE_SZ, 1048576)
+    except Exception:
+        pass
+
 
 class ProgressTracker:
     def __init__(self, job_id: str, is_restore: bool = False, total_size: int = 0, log_path: str = None):
@@ -192,32 +1042,64 @@ class ProgressTracker:
         self.bytes_processed = 0
         self.last_pct = -1
         self.last_update_time = 0
-        self.last_update_time = 0
+        self.start_time = time.time()
+        self.transfer_start_time = None
+        self.speed_mbps = 0.0
+        self.rate_window = deque()  # stores (timestamp, cumulative_bytes)
 
     def update_bytes(self, num_bytes: int):
+        now = time.time()
+        if self.transfer_start_time is None:
+            self.transfer_start_time = now
+            self.rate_window.append((now, self.bytes_processed))
+
         self.bytes_processed += num_bytes
+        self.rate_window.append((now, self.bytes_processed))
+
+        # Maintain sliding window of last 1.5 - 2.0 seconds for high-precision real-time rate
+        while len(self.rate_window) > 2 and (now - self.rate_window[0][0]) > 2.0:
+            self.rate_window.popleft()
+
+        window_dt = now - self.rate_window[0][0]
+        if window_dt >= 0.2:
+            window_bytes = self.bytes_processed - self.rate_window[0][1]
+            raw_instant_speed = (window_bytes / (1024 * 1024)) / window_dt
+            if self.speed_mbps <= 0.0:
+                self.speed_mbps = round(raw_instant_speed, 1)
+            else:
+                self.speed_mbps = round(0.75 * raw_instant_speed + 0.25 * self.speed_mbps, 1)
+        else:
+            elapsed = max(0.1, now - self.transfer_start_time)
+            self.speed_mbps = round((self.bytes_processed / (1024 * 1024)) / elapsed, 1)
+
         if self.total_size > 0:
             pct = min(99, int((self.bytes_processed / self.total_size) * 100))
             self.update_pct(pct)
+        elif (now - self.last_update_time) >= 1.0:
+            self.update_pct(self.last_pct if self.last_pct >= 0 else 0)
 
     def update_pct(self, pct: int):
         now = time.time()
-        if pct != self.last_pct or now - self.last_update_time >= 1:
+        time_diff = now - self.last_update_time
+        # Throttle updates: run if completed (pct=100), or every 1.0s, or if pct changed and at least 0.4s elapsed
+        if pct == 100 or time_diff >= 1.0 or (pct != self.last_pct and time_diff >= 0.4):
             self.last_pct = pct
             self.last_update_time = now
             
             job_type = "RESTORE" if self.is_restore else "BACKUP"
             processed_mb = round(self.bytes_processed / (1024 * 1024), 2)
-            log_msg = f"[{job_type} PROGRESS] ID: {self.job_id} | Progress: {pct}% | Processed: {processed_mb} MB"
+            total_mb = round(self.total_size / (1024 * 1024), 2) if self.total_size > 0 else 0
+            speed_text = f" at {self.speed_mbps} MB/s" if self.speed_mbps > 0 else ""
+            log_msg = f"[{job_type} PROGRESS] ID: {self.job_id} | Progress: {pct}% | Processed: {processed_mb} MB{speed_text}"
             log.info(log_msg)
             
             if self.log_path:
-                write_log(self.log_path, f"INFO  Progress: {pct}% ({processed_mb} MB processed)")
+                write_log(self.log_path, f"INFO  Progress: {pct}% ({processed_mb} MB processed{speed_text})")
                 
             if self.is_restore:
-                update_restore(self.job_id, progress_percentage=pct)
+                update_restore(self.job_id, progress_percentage=pct, processed_mb=processed_mb, speed_mbps=self.speed_mbps, total_mb=total_mb)
             else:
-                update_backup(self.job_id, progress_percentage=pct)
+                update_backup(self.job_id, progress_percentage=pct, processed_mb=processed_mb, speed_mbps=self.speed_mbps, total_mb=total_mb)
 
 
 class ProgressWriter:
@@ -240,20 +1122,37 @@ class ProgressWriter:
 
 def pipe_and_count(src, dest, tracker: ProgressTracker = None):
     try:
+        optimize_pipe_fd(src)
+        optimize_pipe_fd(dest)
+        buf_size = 4 * 1024 * 1024  # 4MB chunks for ultra-high-throughput pipe
+        byte_acc = 0
+        last_trk_time = time.time()
         while True:
-            chunk = src.read(262144)  # 256KB chunks
+            chunk = src.read(buf_size)
             if not chunk:
                 break
-            if tracker:
-                tracker.update_bytes(len(chunk))
             dest.write(chunk)
+            if tracker:
+                byte_acc += len(chunk)
+                now = time.time()
+                if byte_acc >= 4 * 1024 * 1024 or (now - last_trk_time) >= 0.5:
+                    tracker.update_bytes(byte_acc)
+                    byte_acc = 0
+                    last_trk_time = now
+        if tracker and byte_acc > 0:
+            tracker.update_bytes(byte_acc)
     except Exception as e:
         print(f"Error in pipe_and_count: {e}")
     finally:
         try:
             dest.close()
-        except:
+        except Exception:
             pass
+        try:
+            src.close()
+        except Exception:
+            pass
+
 
 
 def log_and_parse_stderr(stderr_stream, log_path: str, tracker: ProgressTracker = None):
@@ -270,7 +1169,7 @@ def log_and_parse_stderr(stderr_stream, log_path: str, tracker: ProgressTracker 
                     log.info(clean_line)
                 
                 pct_match = re.search(r'\((\d+(?:\.\d+)?)\%\)', line)
-                if pct_match and tracker:
+                if pct_match and tracker and tracker.total_size <= 0:
                     pct = int(float(pct_match.group(1)))
                     tracker.update_pct(pct)
     except Exception as e:
@@ -343,42 +1242,25 @@ class QueueReader(io.RawIOBase):
         if size == 0:
             return 0
 
-        # 1. Block and wait for at least some data if buffer is empty
-        if self.buffer_size == 0 and not self.eof:
-            while not self.eof:
+        with self.lock:
+            # Block and accumulate chunks until we have gathered at least 'size' bytes or reached EOF
+            while self.buffer_size < size and not self.eof:
                 try:
-                    chunk = self.q.get(timeout=1.0)
-                    with self.lock:
-                        if chunk is None:
-                            self.eof = True
-                        else:
-                            self.buffer.append(memoryview(chunk))
-                            self.buffer_size += len(chunk)
-                    break
-                except queue.Empty:
-                    if self.stop_event.is_set():
-                        with self.lock:
-                            self.eof = True
-                        break
-
-        # 2. Drain any available chunks without blocking to fill up to size
-        while self.buffer_size < size and not self.eof:
-            try:
-                chunk = self.q.get_nowait()
-                with self.lock:
+                    chunk = self.q.get(timeout=0.5)
                     if chunk is None:
                         self.eof = True
-                    else:
-                        self.buffer.append(memoryview(chunk))
-                        self.buffer_size += len(chunk)
-            except queue.Empty:
-                break
+                        break
+                    self.buffer.append(memoryview(chunk))
+                    self.buffer_size += len(chunk)
+                except queue.Empty:
+                    if self.stop_event.is_set():
+                        self.eof = True
+                        break
 
-        with self.lock:
             if self.buffer_size == 0:
                 return 0  # EOF
 
-            # 3. Copy from self.buffer to b
+            # Copy from self.buffer to b
             copied = 0
             while copied < size and self.buffer:
                 chunk = self.buffer[0]
@@ -402,7 +1284,7 @@ class QueueReader(io.RawIOBase):
 
     def read(self, size=-1):
         if size is None or size < 0:
-            raise ValueError("Reading the entire stream without a size limit is not supported to prevent OOM errors.")
+            size = 64 * 1024
         b = bytearray(size)
         n = self.readinto(b)
         if n == 0:
@@ -410,46 +1292,61 @@ class QueueReader(io.RawIOBase):
         return bytes(b[:n])
 
 
-def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_size: int = 1024 * 1024, tracker: ProgressTracker = None):
+def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_size: int = 16 * 1024 * 1024, tracker: ProgressTracker = None):
     try:
+        optimize_pipe_fd(stream)
+        read_buf = bytearray()
+        target_chunk = max(4 * 1024 * 1024, min(chunk_size, 16 * 1024 * 1024))
+        read_block_size = 1024 * 1024  # 1MB reads from pipe
         while not stop_event.is_set():
-            data = stream.read(chunk_size)
+            data = stream.read(min(read_block_size, target_chunk - len(read_buf)))
             if not data:
+                if read_buf:
+                    q.put(bytes(read_buf))
+                    read_buf.clear()
                 break
+            read_buf.extend(data)
             if tracker:
                 tracker.update_bytes(len(data))
-            while not stop_event.is_set():
-                try:
-                    q.put(data, timeout=1.0)
-                    break
-                except queue.Full:
-                    continue
-            time.sleep(0.001)
+            if len(read_buf) >= target_chunk:
+                chunk_bytes = bytes(read_buf)
+                read_buf.clear()
+                while not stop_event.is_set():
+                    try:
+                        q.put(chunk_bytes, timeout=0.5)
+                        break
+                    except queue.Full:
+                        continue
     except Exception as e:
         print(f"Error in reader thread: {e}")
     finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
         q.put(None)
 
 
 def get_speed_settings(profile: str):
     cores = os.cpu_count() or 4
     if profile == "safe":
-        return {"threads": 1, "chunk_size": 4 * 1024 * 1024, "queue_max": 4, "concurrency": 1, "mongo_parallel": 1}
+        return {"threads": 2, "chunk_size": 8 * 1024 * 1024, "queue_max": 16, "concurrency": 8, "mongo_parallel": 4}
     elif profile == "balanced":
-        return {"threads": max(1, cores // 2), "chunk_size": 16 * 1024 * 1024, "queue_max": 8, "concurrency": 4, "mongo_parallel": 2}
+        return {"threads": max(4, cores), "chunk_size": 16 * 1024 * 1024, "queue_max": 32, "concurrency": 24, "mongo_parallel": 8}
     elif profile == "extreme":
-        return {"threads": cores, "chunk_size": 128 * 1024 * 1024, "queue_max": 128, "concurrency": 64, "mongo_parallel": 16}
-    else: # default
-        return {"threads": max(1, cores - 1), "chunk_size": 32 * 1024 * 1024, "queue_max": 32, "concurrency": 8, "mongo_parallel": 4}
+        return {"threads": max(4, cores), "chunk_size": 16 * 1024 * 1024, "queue_max": 48, "concurrency": 32, "mongo_parallel": 16}
+    else: # default (tuned for flash speed)
+        return {"threads": max(4, cores), "chunk_size": 16 * 1024 * 1024, "queue_max": 48, "concurrency": 32, "mongo_parallel": 16}
 
 def get_compressor_info(profile: str = "default", log_path: str = None) -> dict:
     settings = get_speed_settings(profile)
     threads = settings["threads"]
     if shutil.which("zstd"):
+        fast_lvl = "--fast=5" if profile in ("extreme", "default") else ("--fast=3" if profile == "balanced" else "--fast=1")
         if log_path:
-            write_log(log_path, f"INFO  Using Zstandard (zstd) with {threads} threads for {profile} profile.")
+            write_log(log_path, f"INFO  Using Zstandard (zstd {fast_lvl}) with {threads} threads for {profile} profile.")
         return {
-            "cmd": ["zstd", "--fast=1", f"--threads={threads}"] if profile == "extreme" else (["zstd", "--fast=3", f"--threads={threads}"] if profile == "default" else ["zstd", "-1", f"--threads={threads}"]),
+            "cmd": ["zstd", fast_lvl, f"--threads={threads}"],
             "ext": "zst",
             "type": "zstd"
         }
@@ -472,35 +1369,38 @@ def get_compressor_info(profile: str = "default", log_path: str = None) -> dict:
     return None
 
 
-def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, compression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default") -> str:
+def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, compression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default", custom_feeder: callable = None) -> str:
     write_log(log_path, f"INFO  Starting streaming backup to {storage['type']}: {remote_name} (Profile: {speed_profile})")
+
+    # Storage pre-flight validation to catch authentication/region issues before starting dump
+    if storage.get("type") == "bunny":
+        write_log(log_path, f"INFO  Verifying BunnyCDN storage credentials and endpoint for zone '{storage.get('bunny_storage_zone')}'...")
+        bunny_check = verify_and_resolve_bunny(storage, log_path=log_path)
+        if not bunny_check["success"]:
+            write_log(log_path, f"ERROR BunnyCDN pre-flight validation failed: {bunny_check['error']}")
+            raise RuntimeError(f"BunnyCDN pre-flight validation failed: {bunny_check['error']}")
+        storage["_resolved_bunny"] = bunny_check
     
     settings = get_speed_settings(speed_profile)
     
     processes = []
+    stop_event = ACTIVE_STOP_EVENTS.get(tracker.job_id) if tracker else threading.Event()
     if tracker:
-        ACTIVE_PROCESSES[tracker.job_id] = processes
-        if tracker.job_id in ACTIVE_STOP_EVENTS and ACTIVE_STOP_EVENTS[tracker.job_id].is_set():
+        ACTIVE_PROCESSES.setdefault(tracker.job_id, [])
+        if tracker.job_id not in ACTIVE_STOP_EVENTS:
+            ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
+        if stop_event.is_set():
             raise RuntimeError("Backup cancelled by user.")
     pipe_thread = None
     stderr_thread = None
     
-    is_mongo = "mongodump" in cmd[0]
+    is_mongo = bool(cmd and len(cmd) > 0 and "mongodump" in cmd[0])
     p_dump_stderr = subprocess.PIPE if is_mongo else open(log_path, "a")
     
     creationflags = 0x00004000 if os.name == 'nt' else 0
     
     try:
         if compression_cmd:
-            p_dump = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=p_dump_stderr,
-                env=env,
-                creationflags=creationflags
-            )
-            processes.append(p_dump)
-            
             p_comp = subprocess.Popen(
                 compression_cmd,
                 stdin=subprocess.PIPE,
@@ -509,28 +1409,62 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
                 creationflags=creationflags
             )
             processes.append(p_comp)
-            
-            # Start pipe thread
-            pipe_thread = threading.Thread(
-                target=pipe_and_count,
-                args=(p_dump.stdout, p_comp.stdin, tracker if not is_mongo else None)
-            )
-            pipe_thread.daemon = True
-            pipe_thread.start()
+            if tracker:
+                ACTIVE_PROCESSES[tracker.job_id].append(p_comp)
+
+            if custom_feeder:
+                pipe_thread = threading.Thread(
+                    target=custom_feeder,
+                    args=(p_comp.stdin, stop_event, tracker)
+                )
+                pipe_thread.daemon = True
+                pipe_thread.start()
+            else:
+                p_dump = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=p_dump_stderr,
+                    env=env,
+                    creationflags=creationflags
+                )
+                processes.append(p_dump)
+                if tracker:
+                    ACTIVE_PROCESSES[tracker.job_id].append(p_dump)
+                
+                # Start pipe thread
+                pipe_thread = threading.Thread(
+                    target=pipe_and_count,
+                    args=(p_dump.stdout, p_comp.stdin, tracker)
+                )
+                pipe_thread.daemon = True
+                pipe_thread.start()
             
             stdout_stream = p_comp.stdout
         else:
-            p_dump = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=p_dump_stderr,
-                env=env,
-                creationflags=creationflags
-            )
-            processes.append(p_dump)
-            stdout_stream = p_dump.stdout
+            if custom_feeder:
+                r_fd, w_fd = os.pipe()
+                pipe_w = os.fdopen(w_fd, "wb")
+                stdout_stream = os.fdopen(r_fd, "rb")
+                pipe_thread = threading.Thread(
+                    target=custom_feeder,
+                    args=(pipe_w, stop_event, tracker)
+                )
+                pipe_thread.daemon = True
+                pipe_thread.start()
+            else:
+                p_dump = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=p_dump_stderr,
+                    env=env,
+                    creationflags=creationflags
+                )
+                processes.append(p_dump)
+                if tracker:
+                    ACTIVE_PROCESSES[tracker.job_id].append(p_dump)
+                stdout_stream = p_dump.stdout
             
-        if is_mongo:
+        if is_mongo and not custom_feeder:
             stderr_thread = threading.Thread(
                 target=log_and_parse_stderr,
                 args=(p_dump.stderr, log_path, tracker)
@@ -547,11 +1481,8 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
         raise RuntimeError(f"Failed to start subprocesses: {e}")
 
     q = queue.Queue(maxsize=settings["queue_max"])
-    stop_event = ACTIVE_STOP_EVENTS.get(tracker.job_id) if tracker else threading.Event()
-    if tracker and tracker.job_id not in ACTIVE_STOP_EVENTS:
-        ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
     
-    reader_tracker = tracker if (not compression_cmd and not is_mongo) else None
+    reader_tracker = tracker if not compression_cmd else None
     
     reader_thread = threading.Thread(
         target=reader_thread_fn,
@@ -598,6 +1529,159 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
             blob.reload()
             stream_backup_to_storage.last_size_bytes = blob.size
             remote_path = f"gcs://{storage['gcs_bucket']}/{remote_name}"
+
+        elif storage["type"] == "s3":
+            from boto3.s3.transfer import TransferConfig
+            concurrency = settings.get("concurrency", 32)
+            chunk_size = max(8 * 1024 * 1024, settings.get("chunk_size", 16 * 1024 * 1024))
+            client = get_s3_client(storage, max_pool=max(64, concurrency * 2))
+            transfer_config = TransferConfig(
+                multipart_threshold=chunk_size,
+                multipart_chunksize=chunk_size,
+                max_concurrency=concurrency,
+                use_threads=True
+            )
+            client.upload_fileobj(
+                Fileobj=queue_reader,
+                Bucket=storage["s3_bucket"],
+                Key=remote_name,
+                Config=transfer_config
+            )
+            try:
+                head = client.head_object(Bucket=storage["s3_bucket"], Key=remote_name)
+                stream_backup_to_storage.last_size_bytes = head.get("ContentLength", 0)
+            except Exception:
+                pass
+            remote_path = f"s3://{storage['s3_bucket']}/{remote_name}"
+
+        elif storage["type"] == "bunny":
+            import requests
+            import boto3
+            from botocore.config import Config
+            from boto3.s3.transfer import TransferConfig
+
+            res = storage.get("_resolved_bunny")
+            if not res:
+                res = verify_and_resolve_bunny(storage, log_path=log_path)
+                if not res["success"]:
+                    raise RuntimeError(f"BunnyCDN verification failed: {res['error']}")
+
+            zone = res["zone"]
+            bunny_key = res["bunny_key"]
+            rest_host = res["rest_host"]
+            s3_url = res["s3_url"]
+            s3_available = res.get("s3_usable", False)
+            clean_remote = remote_name.lstrip("/")
+
+            concurrency = settings.get("concurrency", 32)
+            chunk_size = max(8 * 1024 * 1024, settings.get("chunk_size", 16 * 1024 * 1024))
+
+            write_log(log_path, f"INFO  Connecting to BunnyCDN storage zone '{zone}' ({res['region_name']} - S3: {s3_url}, REST: {rest_host})")
+
+            s3_client = None
+            region_code = res.get("region_code") or "de"
+            if s3_available:
+                try:
+                    s3_config = Config(
+                        s3={"addressing_style": "path"},
+                        signature_version="s3v4",
+                        retries={"max_attempts": 3, "mode": "standard"},
+                        connect_timeout=15,
+                        read_timeout=300,
+                        max_pool_connections=max(64, concurrency * 2)
+                    )
+                    s3_client = boto3.client(
+                        "s3",
+                        endpoint_url=s3_url,
+                        aws_access_key_id=zone,
+                        aws_secret_access_key=bunny_key,
+                        region_name=region_code,
+                        config=s3_config
+                    )
+                    write_log(log_path, f"INFO  BunnyCDN S3-compatible API verified ({region_code}). Streaming upload via parallel multipart ({concurrency} workers, {round(chunk_size/(1024*1024))}MB chunks)...")
+                except Exception as s3_init_err:
+                    s3_available = False
+                    write_log(log_path, f"INFO  Bunny S3 client setup failed ({s3_init_err}). Falling back to REST API...")
+
+            if s3_available and s3_client:
+                # Bunny S3 multipart streaming: parallel multi-threaded chunks
+                transfer_config = TransferConfig(
+                    multipart_threshold=chunk_size,
+                    multipart_chunksize=chunk_size,
+                    max_concurrency=concurrency,
+                    use_threads=True
+                )
+                s3_client.upload_fileobj(
+                    Fileobj=queue_reader,
+                    Bucket=zone,
+                    Key=clean_remote,
+                    Config=transfer_config
+                )
+                try:
+                    head = s3_client.head_object(Bucket=zone, Key=clean_remote)
+                    stream_backup_to_storage.last_size_bytes = head.get("ContentLength", 0)
+                except Exception as e:
+                    write_log(log_path, f"WARN  Could not read S3 head_object: {e}")
+            else:
+                # Bunny REST API fallback: spool stream using fast C-level 4MB chunk buffer
+                job_token = (tracker.job_id if tracker else uuid.uuid4().hex[:8]).replace("/", "_")
+                spool_filename = f"bunny_spool_{job_token}.tmp"
+                spool_dir = os.path.join(BACKUP_TMP, job_token)
+                os.makedirs(spool_dir, exist_ok=True)
+                spool_path = os.path.join(spool_dir, spool_filename)
+                
+                try:
+                    write_log(log_path, f"INFO  Spooling stream to calculate Content-Length for Bunny REST API ({rest_host})...")
+                    with open(spool_path, "wb") as f_spool:
+                        shutil.copyfileobj(queue_reader, f_spool, length=4 * 1024 * 1024)
+
+                    if stop_event.is_set():
+                        raise RuntimeError("Backup cancelled by user.")
+
+                    file_size = os.path.getsize(spool_path)
+                    write_log(log_path, f"INFO  Spool completed ({round(file_size/(1024*1024), 2)} MB). Uploading to https://{rest_host}/{zone}/{clean_remote}...")
+
+                    url = f"https://{rest_host}/{zone}/{clean_remote}"
+                    headers = {
+                        "AccessKey": bunny_key,
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": str(file_size),
+                    }
+                    session = requests.Session()
+                    from requests.adapters import HTTPAdapter
+                    from urllib3.util import Retry
+                    session.mount("https://", HTTPAdapter(pool_connections=16, pool_maxsize=16, max_retries=Retry(total=3, backoff_factor=0.5)))
+                    with open(spool_path, "rb") as f_in:
+                        resp = session.put(url, headers=headers, data=f_in, timeout=(30, 3600))
+                    if resp.status_code not in (200, 201):
+                        raise RuntimeError(f"Bunny storage upload failed ({resp.status_code}): {resp.text}")
+
+                    stream_backup_to_storage.last_size_bytes = file_size
+                finally:
+                    if os.path.exists(spool_path):
+                        try:
+                            os.remove(spool_path)
+                        except Exception:
+                            pass
+
+            # Final verification that file exists and has size > 0
+            uploaded_bytes = getattr(stream_backup_to_storage, "last_size_bytes", 0) or 0
+            if uploaded_bytes == 0:
+                try:
+                    head_url = f"https://{rest_host}/{zone}/{clean_remote}"
+                    head_resp = requests.head(head_url, headers={"AccessKey": bunny_key}, timeout=15)
+                    if head_resp.status_code == 200 and "Content-Length" in head_resp.headers:
+                        uploaded_bytes = int(head_resp.headers["Content-Length"])
+                        stream_backup_to_storage.last_size_bytes = uploaded_bytes
+                except Exception:
+                    pass
+
+            if uploaded_bytes == 0:
+                raise RuntimeError(f"BunnyCDN upload verification failed: uploaded file '{clean_remote}' has 0 bytes or was not created.")
+
+            remote_path = f"bunny://{zone}/{clean_remote}"
+            write_log(log_path, f"INFO  BunnyCDN upload verified successfully ({round(uploaded_bytes/(1024*1024), 2)} MB) -> {remote_path}")
+
         else:
             raise ValueError(f"Unknown storage type: {storage['type']}")
             
@@ -612,29 +1696,134 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
     finally:
         stop_event.set()
         if pipe_thread:
-            pipe_thread.join(timeout=5.0)
+            pipe_thread.join(timeout=2.0)
+        if reader_thread:
+            reader_thread.join(timeout=2.0)
+        try:
+            stdout_stream.close()
+        except Exception:
+            pass
         for p in processes:
             try:
-                p.wait()
+                if p.poll() is None:
+                    p.terminate()
             except Exception:
                 pass
         for p in processes:
             try:
-                p.wait()
+                p.wait(timeout=2.0)
             except Exception:
-                pass
+                try:
+                    p.kill()
+                    p.wait(timeout=1.0)
+                except Exception:
+                    pass
+        if tracker and tracker.job_id in ACTIVE_PROCESSES:
+            ACTIVE_PROCESSES[tracker.job_id] = [p for p in ACTIVE_PROCESSES[tracker.job_id] if p not in processes]
+            if not ACTIVE_PROCESSES[tracker.job_id]:
+                ACTIVE_PROCESSES.pop(tracker.job_id, None)
 
     for p in processes:
         if p.returncode != 0:
             raise RuntimeError(f"Backup process failed with exit code {p.returncode}. Check logs.")
         
     write_log(log_path, f"INFO  Streaming upload successful.")
-    
-        
     return remote_path
 
 
-def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, decompression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default"):
+
+def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: int, concurrency: int, max_in_flight: int, stdin_stream, stop_event: threading.Event, dl_tracker: ProgressTracker = None, log_path: str = None):
+    """
+    Downloads remote archives using massively parallel HTTP/S3 Range requests across multiple TCP streams.
+    Dispatches concurrent chunk downloads and writes parts in strictly ascending order to stdin_stream
+    with memory-bounded backpressure (max_in_flight parts max in RAM).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    import time
+    
+    num_parts = (total_size + part_size - 1) // part_size
+    ready_parts = {}
+    download_err = [None]
+    cv = threading.Condition()
+    consumer_idx = [0]
+    
+    if log_path:
+        write_log(log_path, f"INFO  Starting parallel multi-stream restore download ({num_parts} parts, {round(part_size/(1024*1024))}MB each, {concurrency} parallel TCP workers, max in-flight: {max_in_flight})...")
+
+    def fetch_with_retry(start_b: int, end_b: int, max_retries: int = 3):
+        last_ex = None
+        for attempt in range(max_retries):
+            if stop_event.is_set() or download_err[0]:
+                return None
+            try:
+                return fetch_range_fn(start_b, end_b)
+            except Exception as ex:
+                last_ex = ex
+                time.sleep(0.3 * (attempt + 1))
+        raise last_ex or RuntimeError(f"Range fetch failed for bytes {start_b}-{end_b}")
+
+    def worker_task(part_idx: int, start_byte: int, end_byte: int):
+        try:
+            if stop_event.is_set() or download_err[0]:
+                return
+            data = fetch_with_retry(start_byte, end_byte)
+            if stop_event.is_set() or data is None:
+                return
+            with cv:
+                ready_parts[part_idx] = data
+                if dl_tracker:
+                    dl_tracker.update_bytes(len(data))
+                cv.notify_all()
+        except Exception as ex:
+            with cv:
+                if not download_err[0]:
+                    download_err[0] = ex
+                cv.notify_all()
+
+    executor = ThreadPoolExecutor(max_workers=concurrency)
+
+    def producer_fn():
+        try:
+            for part_idx in range(num_parts):
+                if stop_event.is_set() or download_err[0]:
+                    break
+                with cv:
+                    while (part_idx - consumer_idx[0]) >= max_in_flight and not stop_event.is_set() and not download_err[0]:
+                        cv.wait(timeout=0.2)
+                if stop_event.is_set() or download_err[0]:
+                    break
+                start_byte = part_idx * part_size
+                end_byte = min(total_size - 1, start_byte + part_size - 1)
+                executor.submit(worker_task, part_idx, start_byte, end_byte)
+        except Exception as p_ex:
+            with cv:
+                if not download_err[0]:
+                    download_err[0] = p_ex
+                cv.notify_all()
+
+    prod_thread = threading.Thread(target=producer_fn)
+    prod_thread.daemon = True
+    prod_thread.start()
+
+    try:
+        while consumer_idx[0] < num_parts and not stop_event.is_set():
+            with cv:
+                while consumer_idx[0] not in ready_parts and not stop_event.is_set() and not download_err[0]:
+                    cv.wait(timeout=0.5)
+                if stop_event.is_set():
+                    raise RuntimeError("Restore cancelled by user.")
+                if download_err[0]:
+                    raise RuntimeError(f"Parallel restore download stream failed: {download_err[0]}")
+                part_data = ready_parts.pop(consumer_idx[0])
+                cv.notify_all()
+
+            stdin_stream.write(part_data)
+            consumer_idx[0] += 1
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+        prod_thread.join(timeout=2.0)
+
+def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, decompression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default", sql_db_filter: str = None):
     write_log(log_path, f"INFO  Starting streaming restore from {storage['type']}: {remote_name} (Profile: {speed_profile})")
     
     settings = get_speed_settings(speed_profile)
@@ -642,12 +1831,13 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
     processes = []
     stop_event = ACTIVE_STOP_EVENTS.get(tracker.job_id) if tracker else threading.Event()
     if tracker:
-        ACTIVE_PROCESSES[tracker.job_id] = processes
+        ACTIVE_PROCESSES.setdefault(tracker.job_id, [])
         if tracker.job_id not in ACTIVE_STOP_EVENTS:
             ACTIVE_STOP_EVENTS[tracker.job_id] = stop_event
         if stop_event.is_set():
             raise RuntimeError("Restore cancelled by user.")
     stderr_thread = None
+    filter_thread = None
     
     is_mongo = "mongorestore" in cmd[0]
     creationflags = 0x00004000 if os.name == 'nt' else 0
@@ -663,18 +1853,68 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     creationflags=creationflags
                 )
                 processes.append(p_dec)
+                if tracker:
+                    ACTIVE_PROCESSES[tracker.job_id].append(p_dec)
                 
+                optimize_pipe_fd(p_dec.stdin)
+                optimize_pipe_fd(p_dec.stdout)
+
                 p_restore = subprocess.Popen(
                     cmd,
-                    stdin=p_dec.stdout,
+                    stdin=subprocess.PIPE if sql_db_filter else p_dec.stdout,
                     stdout=err_file,
                     stderr=subprocess.PIPE,  # Pipe stderr to parse progress
                     env=env,
                     creationflags=creationflags
                 )
                 processes.append(p_restore)
-                p_dec.stdout.close()
-                stdin_stream = p_dec.stdin
+                if tracker:
+                    ACTIVE_PROCESSES[tracker.job_id].append(p_restore)
+
+                if sql_db_filter:
+                    optimize_pipe_fd(p_restore.stdin)
+                    def filter_worker(dec_out, rest_in, target_db, stop_ev):
+                        target_clean = target_db.strip().strip('"').lower()
+                        start_tag = f"-- >>> auto_backup_db_start: {target_clean} <<<"
+                        end_tag = f"-- >>> auto_backup_db_end: {target_clean} <<<"
+                        in_target = False
+                        try:
+                            for line in dec_out:
+                                if stop_ev.is_set():
+                                    break
+                                line_str = line.decode("utf-8", errors="replace")
+                                lower_line = line_str.strip().lower()
+                                if start_tag in lower_line:
+                                    in_target = True
+                                    continue
+                                elif in_target:
+                                    if end_tag in lower_line or "-- >>> auto_backup_db_start:" in lower_line:
+                                        break
+                                    if line_str.strip().startswith("\\connect "):
+                                        continue
+                                    rest_in.write(line)
+                        finally:
+                            try:
+                                rest_in.close()
+                            except Exception:
+                                pass
+                            try:
+                                while dec_out.read(4 * 1024 * 1024):
+                                    if stop_ev.is_set():
+                                        break
+                            except Exception:
+                                pass
+
+                    filter_thread = threading.Thread(
+                        target=filter_worker,
+                        args=(p_dec.stdout, p_restore.stdin, sql_db_filter, stop_event)
+                    )
+                    filter_thread.daemon = True
+                    filter_thread.start()
+                    stdin_stream = p_dec.stdin
+                else:
+                    p_dec.stdout.close()
+                    stdin_stream = p_dec.stdin
             else:
                 p_restore = subprocess.Popen(
                     cmd,
@@ -685,6 +1925,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                     creationflags=creationflags
                 )
                 processes.append(p_restore)
+                if tracker:
+                    ACTIVE_PROCESSES[tracker.job_id].append(p_restore)
                 stdin_stream = p_restore.stdin
                 
             # Log stderr and optionally parse progress for Mongo
@@ -737,6 +1979,249 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 progress_writer = ProgressWriter(stdin_stream, dl_tracker, stop_event=stop_event)
                 blob.download_to_file(progress_writer, timeout=3600)
                 stdin_stream.close()
+
+            elif storage["type"] == "s3":
+                concurrency = settings.get("concurrency", 32)
+                part_size = max(8 * 1024 * 1024, settings.get("chunk_size", 16 * 1024 * 1024))
+                max_in_flight = max(16, settings.get("queue_max", 32))
+                s3_client = get_s3_client(storage, max_pool=max(64, concurrency * 2))
+
+                total_size = 0
+                try:
+                    head = s3_client.head_object(Bucket=storage["s3_bucket"], Key=remote_name)
+                    total_size = head.get("ContentLength", 0)
+                except Exception:
+                    pass
+
+                if total_size > part_size:
+                    write_log(log_path, f"INFO  S3 archive size resolved: {round(total_size/(1024*1024), 2)} MB. Activating high-speed parallel Range downloader ({concurrency} workers)...")
+                    def fetch_s3_range(start_b, end_b):
+                        resp = s3_client.get_object(
+                            Bucket=storage["s3_bucket"],
+                            Key=remote_name,
+                            Range=f"bytes={start_b}-{end_b}"
+                        )
+                        return resp["Body"].read()
+
+                    download_parallel_range_stream(
+                        fetch_s3_range,
+                        total_size=total_size,
+                        part_size=part_size,
+                        concurrency=concurrency,
+                        max_in_flight=max_in_flight,
+                        stdin_stream=stdin_stream,
+                        stop_event=stop_event,
+                        dl_tracker=dl_tracker,
+                        log_path=log_path
+                    )
+                    stdin_stream.close()
+                else:
+                    s3_obj = s3_client.get_object(Bucket=storage["s3_bucket"], Key=remote_name)
+                    body_stream = s3_obj["Body"]
+                    chunk_size = part_size
+                    prefetch_q = queue.Queue(maxsize=max_in_flight)
+                    download_err = [None]
+
+                    def s3_dl_worker():
+                        try:
+                            while not stop_event.is_set():
+                                chunk = body_stream.read(chunk_size)
+                                if not chunk:
+                                    break
+                                if dl_tracker:
+                                    dl_tracker.update_bytes(len(chunk))
+                                prefetch_q.put(chunk)
+                        except Exception as ex:
+                            download_err[0] = ex
+                        finally:
+                            prefetch_q.put(None)
+
+                    dl_thread = threading.Thread(target=s3_dl_worker)
+                    dl_thread.daemon = True
+                    dl_thread.start()
+
+                    try:
+                        while True:
+                            if stop_event.is_set():
+                                raise RuntimeError("Restore cancelled by user.")
+                            try:
+                                chunk = prefetch_q.get(timeout=1.0)
+                            except queue.Empty:
+                                if not dl_thread.is_alive():
+                                    break
+                                continue
+                            if chunk is None:
+                                break
+                            stdin_stream.write(chunk)
+                    finally:
+                        dl_thread.join(timeout=3.0)
+                        if download_err[0]:
+                            raise RuntimeError(f"S3 download stream failed: {download_err[0]}")
+                    stdin_stream.close()
+
+            elif storage["type"] == "bunny":
+                import requests
+                from urllib3.util import Retry
+                from requests.adapters import HTTPAdapter
+                
+                write_log(log_path, f"INFO  Resolving BunnyCDN storage endpoint for zone '{storage.get('bunny_storage_zone')}'...")
+                bunny_res = storage.get("_resolved_bunny")
+                if not bunny_res:
+                    bunny_res = verify_and_resolve_bunny(storage, log_path=log_path)
+                    if not bunny_res["success"]:
+                        raise RuntimeError(f"BunnyCDN verification failed: {bunny_res['error']}")
+                    storage["_resolved_bunny"] = bunny_res
+
+                zone = bunny_res["zone"]
+                bunny_key = bunny_res["bunny_key"]
+                rest_host = bunny_res["rest_host"]
+                s3_url = bunny_res["s3_url"]
+                region_code = bunny_res.get("region_code") or "de"
+                s3_usable = bunny_res.get("s3_usable", False)
+                clean_remote = remote_name.lstrip("/")
+
+                part_size = max(8 * 1024 * 1024, settings.get("chunk_size", 16 * 1024 * 1024))
+                concurrency = settings.get("concurrency", 32)
+                max_in_flight = max(16, settings.get("queue_max", 32))
+
+                # Setup persistent clients
+                s3_client = None
+                if s3_usable:
+                    try:
+                        import boto3
+                        from botocore.config import Config
+                        s3_client = boto3.client(
+                            "s3",
+                            endpoint_url=s3_url,
+                            aws_access_key_id=zone,
+                            aws_secret_access_key=bunny_key,
+                            region_name=region_code,
+                            config=Config(
+                                s3={'addressing_style': 'path'},
+                                signature_version="s3v4",
+                                retries={'max_attempts': 3, 'mode': 'standard'},
+                                connect_timeout=15,
+                                read_timeout=300,
+                                max_pool_connections=max(64, concurrency * 2)
+                            )
+                        )
+                    except Exception as s3_init_ex:
+                        write_log(log_path, f"WARN  Bunny S3 client setup failed ({s3_init_ex}). Falling back to REST stream...")
+                        s3_client = None
+
+                session = requests.Session()
+                adapter = HTTPAdapter(pool_connections=max(64, concurrency * 2), pool_maxsize=max(64, concurrency * 2), max_retries=Retry(total=3, backoff_factor=0.3))
+                session.mount("https://", adapter)
+                bunny_url = f"https://{rest_host}/{zone}/{clean_remote}"
+                bunny_headers = {"AccessKey": bunny_key}
+
+                # Query remote archive size to activate parallel range downloads
+                total_size = 0
+                if s3_client:
+                    try:
+                        head = s3_client.head_object(Bucket=zone, Key=clean_remote)
+                        total_size = head.get("ContentLength", 0)
+                    except Exception:
+                        pass
+
+                if total_size == 0:
+                    try:
+                        head_r = session.head(bunny_url, headers=bunny_headers, timeout=10)
+                        if head_r.status_code == 200 and "Content-Length" in head_r.headers:
+                            total_size = int(head_r.headers["Content-Length"])
+                    except Exception:
+                        pass
+
+                if total_size > part_size:
+                    write_log(log_path, f"INFO  BunnyCDN archive size: {round(total_size/(1024*1024), 2)} MB. Activating high-speed parallel Range downloader ({concurrency} workers)...")
+                    if s3_client:
+                        def fetch_bunny_range(start_b, end_b):
+                            resp = s3_client.get_object(Bucket=zone, Key=clean_remote, Range=f"bytes={start_b}-{end_b}")
+                            return resp["Body"].read()
+                    else:
+                        def fetch_bunny_range(start_b, end_b):
+                            h = {"AccessKey": bunny_key, "Range": f"bytes={start_b}-{end_b}"}
+                            r = session.get(bunny_url, headers=h, timeout=(15, 60))
+                            if r.status_code not in (200, 206):
+                                raise RuntimeError(f"Bunny Range download failed (HTTP {r.status_code})")
+                            return r.content
+
+                    download_parallel_range_stream(
+                        fetch_bunny_range,
+                        total_size=total_size,
+                        part_size=part_size,
+                        concurrency=concurrency,
+                        max_in_flight=max_in_flight,
+                        stdin_stream=stdin_stream,
+                        stop_event=stop_event,
+                        dl_tracker=dl_tracker,
+                        log_path=log_path
+                    )
+                    stdin_stream.close()
+                else:
+                    # Single stream fallback with prefetch buffer
+                    chunk_size = part_size
+                    prefetch_q = queue.Queue(maxsize=max_in_flight)
+                    download_err = [None]
+
+                    def bunny_dl_worker():
+                        try:
+                            if s3_client:
+                                try:
+                                    s3_obj = s3_client.get_object(Bucket=zone, Key=clean_remote)
+                                    body_stream = s3_obj["Body"]
+                                    write_log(log_path, f"INFO  Streaming restore download via BunnyCDN S3 API ({s3_url})...")
+                                    while not stop_event.is_set():
+                                        chunk = body_stream.read(chunk_size)
+                                        if not chunk:
+                                            break
+                                        if dl_tracker:
+                                            dl_tracker.update_bytes(len(chunk))
+                                        prefetch_q.put(chunk)
+                                    return
+                                except Exception as s3_dl_ex:
+                                    write_log(log_path, f"WARN  Bunny S3 restore download failed ({s3_dl_ex}). Falling back to REST stream...")
+
+                            write_log(log_path, f"INFO  Streaming restore download via BunnyCDN REST API ({rest_host})...")
+                            with session.get(bunny_url, headers=bunny_headers, stream=True, timeout=(15, 3600)) as resp:
+                                if resp.status_code != 200:
+                                    raise RuntimeError(f"Bunny storage download failed (HTTP {resp.status_code}): {resp.text[:300]}")
+                                for chunk in resp.iter_content(chunk_size=chunk_size):
+                                    if not chunk:
+                                        continue
+                                    if stop_event.is_set():
+                                        break
+                                    if dl_tracker:
+                                        dl_tracker.update_bytes(len(chunk))
+                                    prefetch_q.put(chunk)
+                        except Exception as ex:
+                            download_err[0] = ex
+                        finally:
+                            prefetch_q.put(None)
+
+                    dl_thread = threading.Thread(target=bunny_dl_worker)
+                    dl_thread.daemon = True
+                    dl_thread.start()
+
+                    try:
+                        while True:
+                            if stop_event.is_set():
+                                raise RuntimeError("Restore cancelled by user.")
+                            try:
+                                chunk = prefetch_q.get(timeout=1.0)
+                            except queue.Empty:
+                                if not dl_thread.is_alive():
+                                    break
+                                continue
+                            if chunk is None:
+                                break
+                            stdin_stream.write(chunk)
+                    finally:
+                        dl_thread.join(timeout=3.0)
+                        if download_err[0]:
+                            raise RuntimeError(f"Bunny download stream failed: {download_err[0]}")
+                    stdin_stream.close()
+
             else:
                 raise ValueError(f"Unknown storage type: {storage['type']}")
                 
@@ -745,9 +2230,27 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 try: p.kill()
                 except Exception: pass
             raise RuntimeError(f"Streaming download failed: {e}")
-
-        for p in reversed(processes):
-            p.wait()
+        finally:
+            stop_event.set()
+            if filter_thread:
+                filter_thread.join(timeout=2.0)
+            try:
+                stdin_stream.close()
+            except Exception:
+                pass
+            for p in reversed(processes):
+                try:
+                    p.wait(timeout=5.0)
+                except Exception:
+                    try:
+                        p.kill()
+                        p.wait(timeout=1.0)
+                    except Exception:
+                        pass
+            if tracker and tracker.job_id in ACTIVE_PROCESSES:
+                ACTIVE_PROCESSES[tracker.job_id] = [p for p in ACTIVE_PROCESSES[tracker.job_id] if p not in processes]
+                if not ACTIVE_PROCESSES[tracker.job_id]:
+                    ACTIVE_PROCESSES.pop(tracker.job_id, None)
 
         p_restore = processes[-1]
         if p_restore.returncode != 0:
@@ -793,10 +2296,11 @@ def backup_mongo_indexes(uri: str, dbname: str, collection_name: str, storage: d
 
 def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", is_cluster: bool = False) -> str:
     m = parse_mongo_uri(db)
-    dbname = db.get("database_name") or m["dbname"]
+    dbname = backup_info.get("database_name") or db.get("database_name") or m["dbname"]
     if not dbname and not is_cluster: raise ValueError("Database name is required.")
-    
     collection = backup_info.get("collection", "full")
+    if collection and collection != "full" and (not dbname or dbname == "__all__"):
+        raise ValueError("A specific database must be selected when backing up an individual collection.")
     backup_method = backup_info.get("backup_method", "full")
     incremental_field = backup_info.get("incremental_field", "")
     
@@ -828,6 +2332,10 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
                 res = f"azure://{storage['azure_container']}/{remote_name}"
             elif storage["type"] == "gcs":
                 res = f"gcs://{storage['gcs_bucket']}/{remote_name}"
+            elif storage["type"] == "s3":
+                res = f"s3://{storage['s3_bucket']}/{remote_name}"
+            elif storage["type"] == "bunny":
+                res = f"bunny://{storage['bunny_storage_zone']}/{remote_name}"
             else:
                 res = f"unknown://{remote_name}"
                 
@@ -839,48 +2347,77 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
             raise RuntimeError(f"Failed to backup MongoDB indexes: {e}")
 
     settings = get_speed_settings(speed_profile)
+    archive_mode = backup_info.get("archive_mode", "single")
     if is_cluster:
         import pymongo
-        write_log(log_path, "INFO  Cluster-wide scheduled backup requested. Fetching databases...")
+        write_log(log_path, f"INFO  Cluster-wide backup requested (Format: {archive_mode}). Fetching databases...")
         try:
-            client = pymongo.MongoClient(m["uri"])
+            client = pymongo.MongoClient(m["uri"], serverSelectionTimeoutMS=5000)
             db_names = [d for d in client.list_database_names() if d not in ("local", "config", "admin")]
             client.close()
         except Exception as e:
             raise RuntimeError(f"Failed to fetch databases for cluster backup: {e}")
-            
+
         write_log(log_path, f"INFO  Found {len(db_names)} databases to backup: {', '.join(db_names)}")
-        
+        if tracker:
+            update_backup(tracker.job_id, cluster_databases=db_names)
+        elif backup_info.get("id"):
+            update_backup(backup_info["id"], cluster_databases=db_names)
+
         comp_info = get_compressor_info(speed_profile, log_path)
         ext = comp_info["ext"] if comp_info else "gz"
         compression_cmd = comp_info["cmd"] if comp_info else None
-        
         uri_no_db = m["uri"].replace(f"/{m['dbname']}?", "/?").replace(f"/{m['dbname']}", "/") if m['dbname'] else m["uri"]
-        
-        last_remote_path = ""
-        for idx, db_name in enumerate(db_names):
-            write_log(log_path, f"INFO  [Cluster Backup] Backing up database {idx+1}/{len(db_names)}: {db_name}")
-            file_remote_name = f"{remote_name}{db_name}.archive.{ext}"
-            
-            backup_mongo_indexes(uri_no_db, db_name, "full", storage, file_remote_name + ".indexes.json", log_path)
-            
+
+        if archive_mode == "multiple" or remote_name.endswith("/"):
+            # Database-wise archives: one file per database inside folder
+            folder_remote_name = remote_name if remote_name.endswith("/") else f"{remote_name}/"
+            total_uploaded_bytes = 0
+            for idx, db_name in enumerate(db_names):
+                if tracker and tracker.job_id in ACTIVE_STOP_EVENTS:
+                    ACTIVE_STOP_EVENTS[tracker.job_id] = threading.Event()
+
+                write_log(log_path, f"INFO  [Cluster Backup] Backing up database {idx+1}/{len(db_names)}: {db_name}")
+                file_remote_name = f"{folder_remote_name}{db_name}.archive.{ext}"
+                backup_mongo_indexes(uri_no_db, db_name, "full", storage, file_remote_name + ".indexes.json", log_path)
+
+                cmd = [
+                    "mongodump",
+                    f"--uri={uri_no_db}",
+                    f"--db={db_name}",
+                    "--archive",
+                    f"--numParallelCollections={settings['mongo_parallel']}",
+                    "--readPreference=secondaryPreferred",
+                ]
+                if not compression_cmd:
+                    cmd.append("--gzip")
+
+                env = os.environ.copy()
+                env["GOGC"] = "100"
+                env["GOMAXPROCS"] = str(settings["threads"])
+                stream_backup_to_storage(cmd, env, storage, file_remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
+                total_uploaded_bytes += getattr(stream_backup_to_storage, "last_size_bytes", 0) or 0
+
+            stream_backup_to_storage.last_size_bytes = total_uploaded_bytes
+            return folder_remote_name
+        else:
+            # Single unified archive: all databases bundled into one archive file
+            backup_mongo_indexes(uri_no_db, None, "full", storage, remote_name + ".indexes.json", log_path)
             cmd = [
                 "mongodump",
                 f"--uri={uri_no_db}",
-                f"--db={db_name}",
                 "--archive",
                 f"--numParallelCollections={settings['mongo_parallel']}",
                 "--readPreference=secondaryPreferred",
             ]
             if not compression_cmd:
                 cmd.append("--gzip")
-                
+
             env = os.environ.copy()
             env["GOGC"] = "100"
             env["GOMAXPROCS"] = str(settings["threads"])
-            last_remote_path = stream_backup_to_storage(cmd, env, storage, file_remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
-            
-        return remote_name # return the folder path
+            write_log(log_path, f"INFO  [Cluster Backup] Streaming all databases to unified archive: {remote_name}")
+            return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
 
     cmd = [
         "mongodump",
@@ -930,10 +2467,10 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
 
 # ─── MONGODB RESTORE ─────────────────────────────────────────────────────────
 
-def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", target_dbname: str = None):
+def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", target_dbname: str = None, is_cluster_restore: bool = False, selected_database: str = None):
     m = parse_mongo_uri(db)
     dbname = target_dbname or db.get("database_name") or m["dbname"]
-    if not dbname: raise ValueError("Database name is required for restore.")
+    if not dbname and not is_cluster_restore: raise ValueError("Database name is required for restore.")
 
     use_no_index_restore = False
     indexes_metadata = None
@@ -1031,19 +2568,20 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
             raise RuntimeError(f"Failed to restore MongoDB indexes: {e}")
             
     settings = get_speed_settings(speed_profile)
-    workers = max(10, settings['threads'] * 4)
-    batch_size = 500
+    workers = max(16, settings['threads'] * 4)
+    batch_size = 5000
     write_concern = "{w: 1}"
     if speed_profile == "extreme":
-        workers = 32  # Dialed back from 500 to prevent 18GB memory spike
-        batch_size = 5000  # Safe but fast batch size
+        workers = 48
+        batch_size = 10000
         write_concern = "{w: 1}"
         
+    uri_to_use = (m["uri"].replace(f"/{m['dbname']}?", "/?").replace(f"/{m['dbname']}", "/") if m['dbname'] else m["uri"]) if is_cluster_restore else m["uri"]
     cmd = [
         "mongorestore",
-        f"--uri={m['uri']}",
+        f"--uri={uri_to_use}",
         "--archive",
-        f"--numParallelCollections={min(settings['mongo_parallel'], 4)}",
+        f"--numParallelCollections={min(settings['mongo_parallel'], 16)}",
         f"--numInsertionWorkersPerCollection={workers}",
         f"--batchSize={batch_size}",
         "--bypassDocumentValidation",
@@ -1054,11 +2592,19 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     if indexing_mode == "without_index" or use_no_index_restore:
         cmd.append("--noIndexRestore")
 
-    # Always use wildcard namespace remapping to force restore to dbname
-    cmd += [
-        "--nsFrom=$database$.$collection$",
-        f"--nsTo={dbname}.$collection$",
-    ]
+    # If a specific single database was chosen from a cluster archive
+    if selected_database:
+        cmd += [f"--nsInclude={selected_database}.*"]
+        if dbname and dbname != selected_database and dbname != "__all__":
+            cmd += [
+                f"--nsFrom={selected_database}.$collection$",
+                f"--nsTo={dbname}.$collection$",
+            ]
+    elif not is_cluster_restore and dbname and dbname != "__all__":
+        cmd += [
+            "--nsFrom=$database$.$collection$",
+            f"--nsTo={dbname}.$collection$",
+        ]
     if collection and collection != "full":
         cmd += [f"--nsInclude=*.{collection}"]
 
@@ -1089,49 +2635,291 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         try:
             import pymongo
             import json
+            from concurrent.futures import ThreadPoolExecutor
             all_indexes = json.loads(indexes_metadata)
-            write_log(log_path, f"INFO  Starting sequential index creation for database: {dbname}")
+            write_log(log_path, f"INFO  Starting parallel index creation for database: {dbname}")
             
             client = pymongo.MongoClient(m["uri"])
-            for src_db_name, collections_data in all_indexes.items():
-                mongo_db = client[dbname]
-                for coll, idx_info in collections_data.items():
-                    if collection and collection != "full" and coll != collection:
+            mongo_db = client[dbname]
+
+            def build_col_indexes(coll_name, indexes_spec):
+                for index_name, index_spec in indexes_spec.items():
+                    if index_name == "_id_":
                         continue
-                        
-                    write_log(log_path, f"INFO  Creating indexes for collection {dbname}.{coll} ({len(idx_info)} indexes total)...")
-                    for index_name, index_spec in idx_info.items():
-                        if index_name == "_id_":
+                    try:
+                        keys = index_spec["key"]
+                        key_tuples = [(k[0], k[1]) for k in keys]
+                        options = {}
+                        for opt in ["unique", "sparse", "expireAfterSeconds", "partialFilterExpression", "collation", "weights", "default_language", "language_override", "textIndexVersion"]:
+                            if opt in index_spec:
+                                options[opt] = index_spec[opt]
+                        mongo_db[coll_name].create_index(key_tuples, name=index_name, **options)
+                        write_log(log_path, f"INFO    - Successfully built index: {index_name} on {coll_name}")
+                    except Exception as idx_err:
+                        write_log(log_path, f"WARN    - Failed to build index {index_name} on {coll_name}: {idx_err}")
+
+            with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as idx_exec:
+                futures = []
+                for src_db_name, collections_data in all_indexes.items():
+                    actual_target_db = client[dbname] if (not is_cluster_restore and dbname and dbname != "__all__") else client[src_db_name]
+                    def build_col_indexes_for_db(target_db_inst, coll_n, idx_s):
+                        for index_name, index_spec in idx_s.items():
+                            if index_name == "_id_":
+                                continue
+                            try:
+                                keys = index_spec["key"]
+                                key_tuples = [(k[0], k[1]) for k in keys]
+                                options = {}
+                                for opt in ["unique", "sparse", "expireAfterSeconds", "partialFilterExpression", "collation", "weights", "default_language", "language_override", "textIndexVersion"]:
+                                    if opt in index_spec:
+                                        options[opt] = index_spec[opt]
+                                target_db_inst[coll_n].create_index(key_tuples, name=index_name, **options)
+                                write_log(log_path, f"INFO    - Successfully built index: {index_name} on {target_db_inst.name}.{coll_n}")
+                            except Exception as idx_err:
+                                write_log(log_path, f"WARN    - Failed to build index {index_name} on {target_db_inst.name}.{coll_n}: {idx_err}")
+
+                    for coll, idx_info in collections_data.items():
+                        if collection and collection != "full" and coll != collection:
                             continue
-                        
-                        try:
-                            keys = index_spec["key"]
-                            key_tuples = [(k[0], k[1]) for k in keys]
-                            
-                            options = {}
-                            for opt in ["unique", "sparse", "expireAfterSeconds", "partialFilterExpression", "collation", "weights", "default_language", "language_override", "textIndexVersion"]:
-                                if opt in index_spec:
-                                    options[opt] = index_spec[opt]
-                                    
-                            write_log(log_path, f"INFO    - Building index: {index_name} on {coll}...")
-                            mongo_db[coll].create_index(key_tuples, name=index_name, **options)
-                            write_log(log_path, f"INFO    - Successfully built index: {index_name}")
-                        except Exception as idx_err:
-                            write_log(log_path, f"WARN    - Failed to build index {index_name} on {coll}: {idx_err}")
+                        write_log(log_path, f"INFO  Creating indexes for collection {actual_target_db.name}.{coll} ({len(idx_info)} indexes total)...")
+                        futures.append(idx_exec.submit(build_col_indexes_for_db, actual_target_db, coll, idx_info))
+                for f in futures:
+                    f.result()
                             
             client.close()
-            write_log(log_path, "INFO  Sequential index creation completed successfully.")
+            write_log(log_path, "INFO  Parallel index creation completed successfully.")
         except Exception as e:
-            write_log(log_path, f"WARN  Error during sequential index restoration: {e}")
+            write_log(log_path, f"WARN  Error during index restoration: {e}")
+
+
+_pg_options_support_cache = {}
+
+def check_pg_options_supported(db: dict, test_options: str = "-c statement_timeout=0", dbname: str = None) -> bool:
+    """
+    Check if PGOPTIONS can be passed safely to PostgreSQL.
+    Connection poolers like PgBouncer (commonly on port 6432 or proxies) reject startup parameters
+    in PGOPTIONS with 'FATAL: unsupported startup parameter in options: statement_timeout'.
+    """
+    host = str(db.get("host", "")).strip()
+    port = str(db.get("port", "")).strip()
+    cache_key = f"{host}:{port}"
+    if cache_key in _pg_options_support_cache:
+        return _pg_options_support_cache[cache_key]
+
+    if port == "6432":
+        _pg_options_support_cache[cache_key] = False
+        return False
+
+    target_db = (dbname or db.get("database_name") or "postgres").strip()
+    try:
+        env = pg_env(db)
+        env["PGOPTIONS"] = test_options
+        cmd = [
+            "psql", f"--host={host}", f"--port={port}",
+            f"--username={db.get('username', '')}", "--no-password", f"--dbname={target_db}",
+            "-t", "-A", "-c", "SELECT 1;"
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=4)
+        if res.returncode != 0:
+            err = (res.stderr or "").lower()
+            if "unsupported startup parameter in options" in err or "pgbouncer" in err:
+                _pg_options_support_cache[cache_key] = False
+                return False
+        _pg_options_support_cache[cache_key] = True
+        return True
+    except Exception:
+        _pg_options_support_cache[cache_key] = False
+        return False
 
 
 # ─── POSTGRESQL BACKUP ───────────────────────────────────────────────────────
 
-def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default") -> str:
-    dbname = db.get("database_name", "").strip()
+def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", is_cluster: bool = False) -> str:
+    dbname = (backup_info.get("database_name") or db.get("database_name") or "").strip()
     collection = backup_info.get("collection", "full")
     backup_method = backup_info.get("backup_method", "full")
+    if collection and collection != "full" and (not dbname or dbname == "__all__"):
+        raise ValueError("A specific database must be selected when backing up an individual table.")
     
+    archive_mode = backup_info.get("archive_mode", "single")
+    if is_cluster or dbname == "__all__":
+        write_log(log_path, f"INFO  All Databases requested (Format: {archive_mode}). Enumerating accessible databases...")
+        cmd_list = [
+            "psql", f"--host={db['host']}", f"--port={db['port']}",
+            f"--username={db['username']}", "--no-password", "--dbname=postgres",
+            "-t", "-A", "-c",
+            "SELECT datname FROM pg_database WHERE datallowconn=true AND datistemplate=false ORDER BY datname;"
+        ]
+        res = subprocess.run(cmd_list, capture_output=True, text=True, env=pg_env(db), timeout=10)
+        db_names = []
+        if res.returncode == 0:
+            db_names = [l.strip() for l in res.stdout.strip().split("\n") if l.strip() and l.strip() not in ('rdsadmin', 'azure_maintenance', 'cloudsqladmin')]
+
+        if not db_names:
+            write_log(log_path, "WARN  Could not enumerate databases via psql. Falling back to default database.")
+            db_names = [db.get("database_name") or "postgres"]
+
+        write_log(log_path, f"INFO  Found {len(db_names)} databases: {', '.join(db_names)}")
+        if tracker:
+            update_backup(tracker.job_id, cluster_databases=db_names)
+        elif backup_info.get("id"):
+            update_backup(backup_info["id"], cluster_databases=db_names)
+
+        comp_info = get_compressor_info(speed_profile, log_path)
+        ext = comp_info["ext"] if comp_info else "gz"
+        compression_cmd = comp_info["cmd"] if comp_info else None
+
+        if archive_mode == "multiple" or remote_name.endswith("/"):
+            folder_remote_name = remote_name if remote_name.endswith("/") else f"{remote_name}/"
+            total_uploaded_bytes = 0
+            success_count = 0
+
+            for idx, single_db in enumerate(db_names):
+                if tracker and tracker.job_id in ACTIVE_STOP_EVENTS:
+                    ACTIVE_STOP_EVENTS[tracker.job_id] = threading.Event()
+
+                write_log(log_path, f"INFO  [Instance Backup] Backing up database {idx+1}/{len(db_names)}: {single_db}")
+                file_remote_name = f"{folder_remote_name}{single_db}.archive.{ext}"
+
+                cmd = [
+                    "pg_dump",
+                    f"--host={db['host']}", f"--port={db['port']}",
+                    f"--username={db['username']}", f"--dbname={single_db}",
+                    "--no-password", "--format=custom",
+                    "--compress=0",
+                    "--no-acl", "--no-owner",
+                    "--verbose"
+                ]
+                if indexing_mode == "without_index":
+                    cmd += ["--section=pre-data", "--section=data"]
+                elif indexing_mode == "only_index":
+                    cmd += ["--section=post-data"]
+
+                env = pg_env(db)
+                pg_opts = "-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=512MB"
+                if check_pg_options_supported(db, pg_opts, single_db):
+                    env["PGOPTIONS"] = pg_opts
+
+                try:
+                    stream_backup_to_storage(cmd, env, storage, file_remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
+                    total_uploaded_bytes += getattr(stream_backup_to_storage, "last_size_bytes", 0) or 0
+                    success_count += 1
+                except Exception as e:
+                    write_log(log_path, f"ERROR Failed to backup database {single_db}: {e}")
+
+            if success_count == 0:
+                raise RuntimeError("Failed to backup any databases in PostgreSQL instance.")
+
+            stream_backup_to_storage.last_size_bytes = total_uploaded_bytes
+            write_log(log_path, f"INFO  Successfully completed backup of {success_count}/{len(db_names)} databases.")
+            return folder_remote_name
+        else:
+            write_log(log_path, f"INFO  [Cluster Backup] Streaming all {len(db_names)} databases into unified archive: {remote_name}")
+            creationflags = 0x00004000 if os.name == 'nt' else 0
+
+            def cluster_pg_feeder(target_stdin, stop_event, trk):
+                try:
+                    for idx, single_db in enumerate(db_names):
+                        if stop_event.is_set():
+                            break
+                        write_log(log_path, f"INFO  [Cluster Backup {idx+1}/{len(db_names)}] Dumping database: {single_db}")
+                        
+                        hdr = (
+                            f"\n-- >>> AUTO_BACKUP_DB_START: {single_db} <<<\n"
+                            f"SELECT 'CREATE DATABASE \"{single_db}\"' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '{single_db}')\\gexec\n"
+                            f"\\connect \"{single_db}\"\n"
+                        ).encode("utf-8")
+                        target_stdin.write(hdr)
+                        target_stdin.flush()
+                        
+                        dump_cmd = [
+                            "pg_dump",
+                            f"--host={db['host']}", f"--port={db['port']}",
+                            f"--username={db['username']}", f"--dbname={single_db}",
+                            "--no-password", "--format=plain",
+                            "--clean", "--if-exists",
+                            "--no-acl", "--no-owner",
+                            "--verbose"
+                        ]
+                        if indexing_mode == "without_index":
+                            dump_cmd += ["--section=pre-data", "--section=data"]
+                        elif indexing_mode == "only_index":
+                            dump_cmd += ["--section=post-data"]
+
+                        env_db = pg_env(db)
+                        pg_opts = None
+                        if speed_profile == "extreme":
+                            pg_opts = "-c statement_timeout=0 -c work_mem=256MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
+                        elif speed_profile == "balanced":
+                            pg_opts = "-c statement_timeout=0 -c work_mem=64MB -c maintenance_work_mem=256MB -c max_parallel_workers_per_gather=2 -c effective_io_concurrency=8"
+                        else:
+                            pg_opts = "-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
+
+                        if pg_opts and check_pg_options_supported(db, pg_opts, single_db):
+                            env_db["PGOPTIONS"] = pg_opts
+
+                        p_db = subprocess.Popen(
+                            dump_cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=open(log_path, "a"),
+                            env=env_db,
+                            creationflags=creationflags
+                        )
+                        if trk:
+                            ACTIVE_PROCESSES.setdefault(trk.job_id, []).append(p_db)
+
+                        optimize_pipe_fd(p_db.stdout)
+                        optimize_pipe_fd(target_stdin)
+
+                        buf_size = 4 * 1024 * 1024
+                        byte_acc = 0
+                        last_trk_time = time.time()
+
+                        while True:
+                            if stop_event.is_set():
+                                try: p_db.kill()
+                                except Exception: pass
+                                break
+                            chunk = p_db.stdout.read(buf_size)
+                            if not chunk:
+                                break
+                            target_stdin.write(chunk)
+                            if trk:
+                                byte_acc += len(chunk)
+                                now = time.time()
+                                if byte_acc >= 4 * 1024 * 1024 or (now - last_trk_time) >= 0.5:
+                                    trk.update_bytes(byte_acc)
+                                    byte_acc = 0
+                                    last_trk_time = now
+
+                        if trk and byte_acc > 0:
+                            trk.update_bytes(byte_acc)
+
+                        p_db.wait()
+                        if p_db.returncode != 0:
+                            write_log(log_path, f"WARN  pg_dump for '{single_db}' exited with code {p_db.returncode}")
+
+                        footer = f"\n-- >>> AUTO_BACKUP_DB_END: {single_db} <<<\n".encode("utf-8")
+                        target_stdin.write(footer)
+                        target_stdin.flush()
+                finally:
+                    try:
+                        target_stdin.close()
+                    except Exception:
+                        pass
+
+            return stream_backup_to_storage(
+                cmd=None,
+                env=pg_env(db),
+                storage=storage,
+                remote_name=remote_name,
+                log_path=log_path,
+                compression_cmd=compression_cmd,
+                tracker=tracker,
+                speed_profile=speed_profile,
+                custom_feeder=cluster_pg_feeder
+            )
+
     incremental_tables = None
     if backup_method in ("incremental", "differential"):
         # Find last successful backup for this database
@@ -1194,46 +2982,82 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
         write_log(log_path, "INFO  No fast compressor found in PATH. Using single-threaded native pg_dump compression.")
         
     env = pg_env(db)
+    pg_opts = None
     if speed_profile == "extreme":
-        env["PGOPTIONS"] = f"-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
-    elif speed_profile == "balanced":
-        env["PGOPTIONS"] = f"-c statement_timeout=0 -c work_mem=32MB -c maintenance_work_mem=128MB -c max_parallel_workers_per_gather=2 -c effective_io_concurrency=4"
-    else:
-        env["PGOPTIONS"] = f"-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
+        pg_opts = "-c statement_timeout=0 -c work_mem=256MB -c maintenance_work_mem=1GB -c max_parallel_workers_per_gather=8 -c effective_io_concurrency=64"
+    elif speed_profile == "safe":
+        pg_opts = "-c statement_timeout=0 -c work_mem=16MB -c maintenance_work_mem=64MB -c max_parallel_workers_per_gather=0 -c effective_io_concurrency=1"
+    else:  # default and balanced (tuned for 20GB in 2min backup)
+        pg_opts = "-c statement_timeout=0 -c work_mem=128MB -c maintenance_work_mem=512MB -c max_parallel_workers_per_gather=4 -c effective_io_concurrency=32"
+
+    if pg_opts:
+        if check_pg_options_supported(db, pg_opts, "postgres" if (is_cluster or dbname == "__all__") else dbname):
+            env["PGOPTIONS"] = pg_opts
+        else:
+            write_log(log_path, "INFO  Connection pooler / proxy detected (or startup parameters unsupported). Skipping PGOPTIONS for connection compatibility.")
         
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
 
 
 # ─── POSTGRESQL RESTORE ──────────────────────────────────────────────────────
 
-def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", collection: str = None):
-    dbname = db.get("database_name", "").strip()
-    if new_database:
-        create_cmd = [
-            "psql", f"--host={db['host']}", f"--port={db['port']}",
-            f"--username={db['username']}", "--no-password", "--dbname=postgres",
-            "-c", f'CREATE DATABASE "{dbname}";'
+def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", collection: str = None, is_all: bool = False, selected_database: str = None):
+    dbname = (db.get("database_name") or "").strip()
+    sql_db_filter = None
+    
+    if selected_database:
+        target_name = dbname if dbname and dbname != "__all__" else selected_database
+        if new_database:
+            create_cmd = [
+                "psql", f"--host={db['host']}", f"--port={db['port']}",
+                f"--username={db['username']}", "--no-password", "--dbname=postgres",
+                "-c", f'CREATE DATABASE "{target_name}";'
+            ]
+            subprocess.run(create_cmd, capture_output=True, env=pg_env(db), timeout=30)
+            
+        cmd = [
+            "psql",
+            f"--host={db['host']}", f"--port={db['port']}",
+            f"--username={db['username']}", f"--dbname={target_name}",
+            "--no-password",
+            "-v", "ON_ERROR_STOP=0"
         ]
-        subprocess.run(create_cmd, capture_output=True, env=pg_env(db), timeout=30)
-        
-    cmd = [
-        "pg_restore",
-        f"--host={db['host']}", f"--port={db['port']}",
-        f"--username={db['username']}", f"--dbname={dbname}",
-        "--no-password", "--no-acl", "--no-owner",
-        "--disable-triggers",  # Prevent trigger execution during restore — huge server CPU saver
-        "--verbose"
-    ]
-    if not new_database:
-        cmd += ["--clean", "--if-exists"]
-        
-    if collection and collection != "full":
-        cmd += ["-t", collection]
-        
-    if indexing_mode == "without_index":
-        cmd += ["--section=pre-data", "--section=data"]
-    elif indexing_mode == "only_index":
-        cmd += ["--section=post-data"]
+        sql_db_filter = selected_database
+    elif is_all:
+        cmd = [
+            "psql",
+            f"--host={db['host']}", f"--port={db['port']}",
+            f"--username={db['username']}", "--dbname=postgres",
+            "--no-password",
+            "-v", "ON_ERROR_STOP=0"
+        ]
+    else:
+        if new_database:
+            create_cmd = [
+                "psql", f"--host={db['host']}", f"--port={db['port']}",
+                f"--username={db['username']}", "--no-password", "--dbname=postgres",
+                "-c", f'CREATE DATABASE "{dbname}";'
+            ]
+            subprocess.run(create_cmd, capture_output=True, env=pg_env(db), timeout=30)
+            
+        cmd = [
+            "pg_restore",
+            f"--host={db['host']}", f"--port={db['port']}",
+            f"--username={db['username']}", f"--dbname={dbname}",
+            "--no-password", "--no-acl", "--no-owner",
+            "--disable-triggers",  # Prevent trigger execution during restore — huge server CPU saver
+            "--verbose"
+        ]
+        if not new_database:
+            cmd += ["--clean", "--if-exists"]
+            
+        if collection and collection != "full":
+            cmd += ["-t", collection]
+            
+        if indexing_mode == "without_index":
+            cmd += ["--section=pre-data", "--section=data"]
+        elif indexing_mode == "only_index":
+            cmd += ["--section=post-data"]
         
     settings = get_speed_settings(speed_profile)
     decompression_cmd = None
@@ -1247,20 +3071,28 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
             
     env = pg_env(db)
     
-    # Base safe settings
-    sync_commit = "on"
-    work_mem = "16MB"
-    maint_work_mem = "64MB"
+    # High-performance bulk restore PostgreSQL settings (20GB in <10 min):
+    # sync_commit = off eliminates per-transaction fsync stalls during bulk table ingestion
+    sync_commit = "off"
+    work_mem = "128MB"
+    maint_work_mem = "1GB"
     
     if speed_profile == "extreme":
-        sync_commit = "off"
-        work_mem = "64MB"
-        maint_work_mem = "1GB"
-        cmd += ["--disable-triggers"] # Redundant but safe
+        work_mem = "256MB"
+        maint_work_mem = "2GB"
+    elif speed_profile == "safe":
+        sync_commit = "on"
+        work_mem = "32MB"
+        maint_work_mem = "128MB"
         
-    env["PGOPTIONS"] = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit}"
+    pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit} -c max_parallel_maintenance_workers=4 -c client_min_messages=warning"
+    target_check_db = (dbname if dbname and dbname != "__all__" else (selected_database or "postgres"))
+    if check_pg_options_supported(db, pg_opts, target_check_db):
+        env["PGOPTIONS"] = pg_opts
+    else:
+        write_log(log_path, "INFO  Connection pooler / proxy detected. Skipping PGOPTIONS for restore compatibility.")
         
-    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile)
+    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile, sql_db_filter=sql_db_filter)
 
 # ─── SOLR BACKUP & RESTORE ───────────────────────────────────────────────────
 
@@ -1447,9 +3279,22 @@ def do_backup(backup_id: str):
     write_log(log_path, f"INFO  DB: {db and db['name']} | Collection: {collection} | Storage: {storage and storage['type']}")
     log.info(f"=== BACKUP START | id={backup_id} db={db and db['name']} collection={collection} ===")
 
+    active_remote_name = [None]
+    active_folder = [None]
+
     def fail(msg):
         log.error(f"=== BACKUP FAILED | id={backup_id} | {msg} ===")
         write_log(log_path, f"ERROR {msg}")
+        cancel_job(backup_id)
+        # Clean up any partial remote file / folder that may have been created
+        rn = active_remote_name[0]
+        fld = active_folder[0]
+        if rn and storage:
+            try:
+                delete_remote_backup(storage, rn, folder_name=fld)
+                write_log(log_path, f"INFO  Cleaned up incomplete backup from remote storage: {rn}")
+            except Exception as ex_del:
+                write_log(log_path, f"WARN  Could not auto-clean remote artifact after failure: {ex_del}")
         logs = read_log(log_path)
         update_backup(backup_id,
             status="failed", error=msg, logs=logs,
@@ -1490,16 +3335,30 @@ def do_backup(backup_id: str):
         ext = comp_info["ext"] if comp_info else "gz"
         compression = comp_info["type"] if comp_info else "native"
         
-        safe_db_name = db.get("database_name", "db").strip().replace(" ", "_")
-        if not safe_db_name:
-            safe_db_name = db.get("name", "db").strip().replace(" ", "_")
+        safe_db_name = str(db.get("name") or db.get("database_name") or "db").strip().replace(" ", "_")
         date_str = datetime.utcnow().strftime('%Y-%m-%d_%H-%M-%S')
         
+        target_db_name = backup.get("database_name") or db.get("database_name")
+        archive_mode = backup.get("archive_mode", "single")
+
+        if collection and collection != "full" and (not target_db_name or target_db_name == "__all__"):
+            return fail("A specific database must be selected when backing up an individual collection or table.")
+
         is_cluster = False
-        if db["type"] == "mongodb" and collection == "full" and backup.get("is_scheduled"):
+        if target_db_name == "__all__":
+            is_cluster = True
+            base_name = f"{safe_db_name}_all"
+            if archive_mode == "multiple":
+                remote_name = f"{base_name}_{date_str}/"
+            else:
+                remote_name = f"{base_name}-{date_str}/backup.archive.{ext}"
+        elif db["type"] == "mongodb" and collection == "full" and backup.get("is_scheduled") and not target_db_name:
             is_cluster = True
             base_name = "Mongdbbackup"
-            remote_name = f"{base_name}_{date_str}/"
+            if archive_mode == "multiple":
+                remote_name = f"{base_name}_{date_str}/"
+            else:
+                remote_name = f"{base_name}-{date_str}/backup.archive.{ext}"
         elif collection and collection != "full":
             base_name = collection.strip().replace(" ", "_")
             remote_name = f"{base_name}-{date_str}/backup.archive.{ext}"
@@ -1507,11 +3366,56 @@ def do_backup(backup_id: str):
             base_name = safe_db_name
             remote_name = f"{base_name}-{date_str}/backup.archive.{ext}"
 
+        # Prepend folder name if specified on backup or default on storage
+        folder = (backup.get("folder_name") or storage.get("folder_name") or "").strip().strip("/")
+        while "//" in folder:
+            folder = folder.replace("//", "/")
+        if folder:
+            remote_name = f"{folder}/{remote_name}"
+
+        active_remote_name[0] = remote_name
+        active_folder[0] = folder
+        update_backup(backup_id, remote_name=remote_name, folder_name=folder, compression=compression)
+
         # Initialize progress tracker
         total_size = 0
         if db["type"] == "postgresql":
-            total_size = get_pg_db_size(db, db.get("database_name", ""))
-            write_log(log_path, f"INFO  Estimated database size: {round(total_size / (1024*1024), 2)} MB")
+            if target_db_name != "__all__":
+                total_size = get_pg_db_size(db, target_db_name or db.get("database_name", ""))
+                write_log(log_path, f"INFO  Estimated database size: {round(total_size / (1024*1024), 2)} MB")
+            else:
+                try:
+                    cmd_sz = [
+                        "psql", f"--host={db['host']}", f"--port={db['port']}",
+                        f"--username={db['username']}", "--no-password", "--dbname=postgres",
+                        "-t", "-A", "-c", "SELECT sum(pg_database_size(datname)) FROM pg_database WHERE datistemplate=false;"
+                    ]
+                    res_sz = subprocess.run(cmd_sz, capture_output=True, text=True, env=pg_env(db), timeout=5)
+                    if res_sz.returncode == 0 and res_sz.stdout.strip().isdigit():
+                        total_size = int(res_sz.stdout.strip())
+                        write_log(log_path, f"INFO  Estimated total cluster size: {round(total_size / (1024*1024), 2)} MB")
+                except Exception:
+                    pass
+        elif db["type"] == "mongodb":
+            try:
+                import pymongo
+                m = parse_mongo_uri(db)
+                client = pymongo.MongoClient(m["uri"], serverSelectionTimeoutMS=3000)
+                if is_cluster or target_db_name == "__all__":
+                    db_names = [d for d in client.list_database_names() if d not in ("local", "config", "admin")]
+                    total_size = sum(client[d].command("dbStats").get("dataSize", 0) for d in db_names)
+                    write_log(log_path, f"INFO  Estimated total MongoDB cluster data size ({len(db_names)} databases): {round(total_size / (1024*1024), 2)} MB")
+                else:
+                    target_mongo_db = target_db_name or m["dbname"] or db.get("database_name")
+                    if target_mongo_db:
+                        total_size = client[target_mongo_db].command("dbStats").get("dataSize", 0)
+                        write_log(log_path, f"INFO  Estimated MongoDB data size: {round(total_size / (1024*1024), 2)} MB")
+                client.close()
+            except Exception as e:
+                write_log(log_path, f"WARN  Could not estimate MongoDB total size: {e}")
+
+        if total_size > 0:
+            update_backup(backup_id, total_mb=round(total_size / (1024 * 1024), 2))
 
         tracker = ProgressTracker(backup_id, is_restore=False, total_size=total_size, log_path=log_path)
         indexing_mode = backup.get("indexing_mode", "with_index")
@@ -1522,7 +3426,7 @@ def do_backup(backup_id: str):
             m = parse_mongo_uri(db)
             source_dbname = m["dbname"]
         elif db["type"] == "postgresql":
-            remote_path = run_pg_backup(db, backup, storage, remote_name, log_path, indexing_mode=indexing_mode, tracker=tracker, speed_profile=speed_profile)
+            remote_path = run_pg_backup(db, backup, storage, remote_name, log_path, indexing_mode=indexing_mode, tracker=tracker, speed_profile=speed_profile, is_cluster=is_cluster)
         elif db["type"] == "solr":
             remote_path = run_solr_backup(db, backup, storage, remote_name, log_path, indexing_mode=indexing_mode, tracker=tracker, speed_profile=speed_profile)
         else:
@@ -1530,7 +3434,12 @@ def do_backup(backup_id: str):
 
         # Fetch actual uploaded size from storage (set by stream_backup_to_storage)
         raw_bytes = getattr(stream_backup_to_storage, "last_size_bytes", 0) or 0
+        if raw_bytes == 0:
+            return fail(f"Backup verification failed: Uploaded backup on storage '{storage.get('name')}' is 0 bytes or was not saved.")
         size_mb = round(raw_bytes / (1024 * 1024), 2)
+
+        if is_cluster:
+            update_backup(backup_id, archive_mode=archive_mode, is_cluster=True)
 
         duration = int((datetime.utcnow() - start).total_seconds())
         write_log(log_path, f"=== BACKUP COMPLETE | size={size_mb}MB | duration={duration}s ===")
@@ -1548,6 +3457,21 @@ def do_backup(backup_id: str):
             completed_at=datetime.utcnow().isoformat() + "Z",
             duration_seconds=duration
         )
+
+        # Check schedule retention policy if this was a scheduled backup
+        sch_id = backup.get("schedule_id")
+        if sch_id:
+            try:
+                if os.path.exists("data/schedules.json"):
+                    schedules = read_json("data/schedules.json")
+                    sch = next((s for s in schedules if s["id"] == sch_id), None)
+                    if sch and sch.get("retention_count"):
+                        ret_cnt = int(sch["retention_count"])
+                        if ret_cnt > 0:
+                            write_log(log_path, f"INFO  Applying schedule retention policy (keeping last {ret_cnt} backups)...")
+                            prune_schedule_backups(sch_id, ret_cnt)
+            except Exception as e:
+                write_log(log_path, f"WARN  Could not run retention pruning: {e}")
         if backup.get("send_notifications", True):
             send_notification(
                 title="Backup Successful ✅",
@@ -1564,6 +3488,7 @@ def do_backup(backup_id: str):
     except Exception as e:
         fail(str(e))
     finally:
+        cancel_job(backup_id)
         shutil.rmtree(tmp_dir, ignore_errors=True)
         # Keep log file for a bit, cleanup old ones
         _cleanup_old_logs()
@@ -1596,6 +3521,7 @@ def do_restore(restore_id: str):
     def fail(msg):
         log.error(f"=== RESTORE FAILED | id={restore_id} | {msg} ===")
         write_log(log_path, f"ERROR {msg}")
+        cancel_job(restore_id)
         logs = read_log(log_path)
         update_restore(restore_id,
             status="failed", error=msg, logs=logs,
@@ -1686,39 +3612,112 @@ def do_restore(restore_id: str):
             log.info(f"Restoring to database: {explicit_dbname}")
             target_db = {**target_db, "database_name": explicit_dbname}
 
+        # Resolve remote object size if total_size is 0 for exact progress calculation
+        if total_size <= 0 and not remote_name.endswith("/"):
+            total_size = get_storage_object_size(storage, remote_name)
+            if total_size > 0:
+                write_log(log_path, f"INFO  Remote backup archive size: {round(total_size / (1024*1024), 2)} MB")
+
+        if total_size > 0:
+            update_restore(restore_id, total_mb=round(total_size / (1024 * 1024), 2))
+
         # Initialize progress tracker
         tracker = ProgressTracker(restore_id, is_restore=True, total_size=total_size, log_path=log_path)
         indexing_mode = restore.get("indexing_mode", "with_index")
 
+        selected_database = (restore.get("selected_database") or "").strip()
+        if selected_database.lower() in ("__all__", "all", ""):
+            selected_database = None
+
+        if selected_database:
+            write_log(log_path, f"INFO  Selective restore: targeting single database '{selected_database}' from backup.")
+
+        is_folder = remote_name.endswith("/") or not any(remote_name.endswith(ext) for ext in [".zst", ".gz", ".tar.gz", ".sql", ".dump", ".archive"])
+        if is_folder and not remote_name.endswith("/"):
+            remote_name = remote_name + "/"
+
         if target_db["type"] == "mongodb":
-            if remote_name.endswith("/") or remote_name.startswith("Mongdbbackup"):
-                write_log(log_path, "INFO  Cluster restore detected. Discovering databases...")
-                objects = []
-                if storage["type"] == "azure":
-                    from azure.storage.blob import BlobServiceClient
-                    conn_str = f"DefaultEndpointsProtocol=https;AccountName={storage['azure_account_name']};AccountKey={storage['azure_account_key']};EndpointSuffix=core.windows.net"
-                    client = BlobServiceClient.from_connection_string(conn_str)
-                    container = client.get_container_client(storage["azure_container"])
-                    objects = [b.name for b in container.list_blobs(name_starts_with=remote_name) if ".archive." in b.name]
-                elif storage["type"] == "gcs":
-                    import json
-                    from google.cloud import storage as gcs
-                    from google.oauth2 import service_account
-                    creds_dict = json.loads(storage["gcs_credentials_json"])
-                    creds = service_account.Credentials.from_service_account_info(creds_dict)
-                    client = gcs.Client(credentials=creds)
-                    bucket = client.bucket(storage["gcs_bucket"])
-                    objects = [b.name for b in bucket.list_blobs(prefix=remote_name) if ".archive." in b.name]
-                
-                write_log(log_path, f"INFO  Found {len(objects)} databases to restore.")
-                for obj in objects:
-                    db_name = obj.split("/")[-1].split(".archive.")[0]
-                    write_log(log_path, f"INFO  [Cluster Restore] Restoring database: {db_name}")
-                    run_mongo_restore(target_db, "full", storage, obj, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=db_name, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=db_name)
+            if is_folder:
+                write_log(log_path, f"INFO  MongoDB folder restore detected: {remote_name}")
+                objects = [b for b in list_storage_objects(storage, remote_name) if ".archive." in b]
+                if not objects:
+                    return fail(f"No database archives found in folder: {remote_name}")
+
+                if selected_database:
+                    matched_obj = next((obj for obj in objects if obj.split("/")[-1].split(".archive.")[0].lower() == selected_database.lower()), None)
+                    if not matched_obj:
+                        avail = [obj.split("/")[-1].split(".archive.")[0] for obj in objects]
+                        return fail(f"Database '{selected_database}' not found in backup folder. Available databases: {', '.join(avail)}")
+
+                    write_log(log_path, f"INFO  [Single DB Restore] Restoring database '{selected_database}' from backup: {matched_obj}")
+                    obj_compression = "zstd" if ".zst" in matched_obj else ("gzip" if ".gz" in matched_obj else compression)
+                    target_db_name = target_db.get("database_name") or selected_database
+                    run_mongo_restore(target_db, "full", storage, matched_obj, log_path, drop_existing=not restore.get("new_database", False), compression=obj_compression, source_dbname=selected_database, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db_name, is_cluster_restore=False)
+                else:
+                    write_log(log_path, f"INFO  Found {len(objects)} databases to restore.")
+                    for obj in objects:
+                        db_name = obj.split("/")[-1].split(".archive.")[0]
+                        write_log(log_path, f"INFO  [Cluster Restore] Restoring database: {db_name}")
+                        obj_compression = "zstd" if ".zst" in obj else ("gzip" if ".gz" in obj else compression)
+                        if tracker and tracker.job_id in ACTIVE_STOP_EVENTS:
+                            ACTIVE_STOP_EVENTS[tracker.job_id] = threading.Event()
+                        run_mongo_restore(target_db, "full", storage, obj, log_path, drop_existing=not restore.get("new_database", False), compression=obj_compression, source_dbname=db_name, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=db_name)
             else:
-                run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db.get("database_name"))
+                is_cluster_archive = ("_all-" in remote_name or "Mongdbbackup-" in remote_name or "_cluster-" in remote_name or target_db.get("database_name") == "__all__")
+                if selected_database:
+                    write_log(log_path, f"INFO  [Single DB Restore] Extracting database '{selected_database}' from unified archive: {remote_name}")
+                    target_db_name = target_db.get("database_name") or selected_database
+                    run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=selected_database, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db_name, is_cluster_restore=False, selected_database=selected_database)
+                else:
+                    run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db.get("database_name"), is_cluster_restore=is_cluster_archive)
         elif target_db["type"] == "postgresql":
-            run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection)
+            if is_folder:
+                write_log(log_path, f"INFO  PostgreSQL folder restore detected: {remote_name}")
+                objects = [b for b in list_storage_objects(storage, remote_name) if ".archive." in b]
+
+                if not objects:
+                    return fail(f"No database archives found in instance backup folder: {remote_name}")
+
+                if selected_database:
+                    matched_obj = next((obj for obj in objects if obj.split("/")[-1].split(".archive.")[0].lower() == selected_database.lower()), None)
+                    if not matched_obj:
+                        avail = [obj.split("/")[-1].split(".archive.")[0] for obj in objects]
+                        return fail(f"Database '{selected_database}' not found in backup folder. Available databases: {', '.join(avail)}")
+
+                    write_log(log_path, f"INFO  [Single DB Restore] Restoring database '{selected_database}' from backup folder: {matched_obj}")
+                    obj_compression = "zstd" if ".zst" in matched_obj else ("gzip" if ".gz" in matched_obj else compression)
+                    target_db_name = target_db.get("database_name") or selected_database
+                    restore_db = {**target_db, "database_name": target_db_name}
+                    run_pg_restore(restore_db, storage, matched_obj, log_path, new_database=restore.get("new_database", False), compression=obj_compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=False)
+                else:
+                    write_log(log_path, f"INFO  Found {len(objects)} database archives to restore.")
+                    for idx_obj, obj in enumerate(objects):
+                        db_file = obj.split("/")[-1]
+                        db_name = db_file.split(".archive.")[0]
+                        write_log(log_path, f"INFO  [Instance Restore] Restoring database {idx_obj+1}/{len(objects)}: {db_name}")
+
+                        obj_compression = compression
+                        if ".zst" in obj:
+                            obj_compression = "zstd"
+                        elif ".gz" in obj:
+                            obj_compression = "gzip"
+
+                        if tracker and tracker.job_id in ACTIVE_STOP_EVENTS:
+                            ACTIVE_STOP_EVENTS[tracker.job_id] = threading.Event()
+
+                        restore_db = {**target_db, "database_name": db_name}
+                        run_pg_restore(restore_db, storage, obj, log_path, new_database=restore.get("new_database", False), compression=obj_compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=False)
+
+                    write_log(log_path, f"INFO  Instance restore completed: {len(objects)} databases restored.")
+            else:
+                is_all = ("_all-" in remote_name or target_db.get("database_name") == "__all__")
+                if selected_database:
+                    write_log(log_path, f"INFO  [Single DB Restore from Unified Archive] Restoring database '{selected_database}' from {remote_name}")
+                    target_db_name = target_db.get("database_name") or selected_database
+                    restore_db = {**target_db, "database_name": target_db_name}
+                    run_pg_restore(restore_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=False, selected_database=selected_database)
+                else:
+                    run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=is_all)
         elif target_db["type"] == "solr":
             run_solr_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
         else:
@@ -1750,6 +3749,7 @@ def do_restore(restore_id: str):
     except Exception as e:
         fail(str(e))
     finally:
+        cancel_job(restore_id)
         shutil.rmtree(tmp_dir, ignore_errors=True)
         _cleanup_old_logs()
 
