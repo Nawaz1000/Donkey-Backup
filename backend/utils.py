@@ -67,6 +67,39 @@ def get_decrypted_storage(storage: dict) -> dict:
             s[field] = decrypt_secret(s[field])
     return s
 
+def _get_fernet() -> Fernet:
+    key_bytes = hashlib.sha256(SECRET_KEY.encode()).digest()
+    fernet_key = base64.urlsafe_b64encode(key_bytes)
+    return Fernet(fernet_key)
+
+def encrypt_secret(val: str) -> str:
+    """Encrypt sensitive credentials at rest using Fernet (AES-128-CBC + HMAC)."""
+    if not val:
+        return val
+    val_str = str(val)
+    if val_str.startswith("enc:"):
+        return val_str
+    try:
+        f = _get_fernet()
+        encrypted = f.encrypt(val_str.encode("utf-8")).decode("utf-8")
+        return f"enc:{encrypted}"
+    except Exception:
+        return val_str
+
+def decrypt_secret(val: str) -> str:
+    """Decrypt sensitive credentials. Transparently handles legacy plaintext values."""
+    if not val:
+        return val
+    val_str = str(val)
+    if not val_str.startswith("enc:"):
+        return val_str  # Legacy plaintext, return as-is
+    try:
+        f = _get_fernet()
+        raw_token = val_str[4:]
+        return f.decrypt(raw_token.encode("utf-8")).decode("utf-8")
+    except Exception:
+        return val_str
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
