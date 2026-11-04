@@ -1109,21 +1109,30 @@ class ProgressTracker:
 
 
 class ProgressWriter:
-    def __init__(self, dest_stream, tracker: ProgressTracker = None, stop_event=None):
+    def __init__(self, dest_stream, tracker: ProgressTracker = None, stop_event=None, filter_done_event=None):
         self.dest_stream = dest_stream
         self.tracker = tracker
         self.stop_event = stop_event
+        self.filter_done_event = filter_done_event
         
     def write(self, b):
+        if self.filter_done_event and self.filter_done_event.is_set():
+            return 0
         if self.stop_event and self.stop_event.is_set():
             raise RuntimeError("Restore cancelled by user.")
-        self.dest_stream.write(b)
+        try:
+            self.dest_stream.write(b)
+        except (BrokenPipeError, OSError):
+            return 0
         if self.tracker:
             self.tracker.update_bytes(len(b))
         return len(b)
         
     def flush(self):
-        self.dest_stream.flush()
+        try:
+            self.dest_stream.flush()
+        except Exception:
+            pass
 
 
 def pipe_and_count(src, dest, tracker: ProgressTracker = None):
@@ -1738,7 +1747,7 @@ def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: s
 
 
 
-def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: int, concurrency: int, max_in_flight: int, stdin_stream, stop_event: threading.Event, dl_tracker: ProgressTracker = None, log_path: str = None):
+def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: int, concurrency: int, max_in_flight: int, stdin_stream, stop_event: threading.Event, dl_tracker: ProgressTracker = None, log_path: str = None, filter_done_event: threading.Event = None):
     """
     Downloads remote archives using massively parallel HTTP/S3 Range requests across multiple TCP streams.
     Dispatches concurrent chunk downloads and writes parts in strictly ascending order to stdin_stream
@@ -1756,10 +1765,13 @@ def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: i
     if log_path:
         write_log(log_path, f"INFO  Starting parallel multi-stream restore download ({num_parts} parts, {round(part_size/(1024*1024))}MB each, {concurrency} parallel TCP workers, max in-flight: {max_in_flight})...")
 
+    def is_interrupted():
+        return stop_event.is_set() or (filter_done_event and filter_done_event.is_set()) or bool(download_err[0])
+
     def fetch_with_retry(start_b: int, end_b: int, max_retries: int = 3):
         last_ex = None
         for attempt in range(max_retries):
-            if stop_event.is_set() or download_err[0]:
+            if is_interrupted():
                 return None
             try:
                 return fetch_range_fn(start_b, end_b)
@@ -1770,10 +1782,10 @@ def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: i
 
     def worker_task(part_idx: int, start_byte: int, end_byte: int):
         try:
-            if stop_event.is_set() or download_err[0]:
+            if is_interrupted():
                 return
             data = fetch_with_retry(start_byte, end_byte)
-            if stop_event.is_set() or data is None:
+            if is_interrupted() or data is None:
                 return
             with cv:
                 ready_parts[part_idx] = data
@@ -1789,12 +1801,12 @@ def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: i
     def producer_fn():
         try:
             for part_idx in range(num_parts):
-                if stop_event.is_set() or download_err[0]:
+                if is_interrupted():
                     break
                 with cv:
-                    while (part_idx - consumer_idx[0]) >= max_in_flight and not stop_event.is_set() and not download_err[0]:
+                    while (part_idx - consumer_idx[0]) >= max_in_flight and not is_interrupted():
                         cv.wait(timeout=0.1)
-                if stop_event.is_set() or download_err[0]:
+                if is_interrupted():
                     break
                 start_byte = part_idx * part_size
                 end_byte = min(total_size - 1, start_byte + part_size - 1)
@@ -1811,9 +1823,13 @@ def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: i
 
     try:
         while consumer_idx[0] < num_parts and not stop_event.is_set():
+            if filter_done_event and filter_done_event.is_set():
+                break
             with cv:
-                while consumer_idx[0] not in ready_parts and not stop_event.is_set() and not download_err[0]:
+                while consumer_idx[0] not in ready_parts and not stop_event.is_set() and not (filter_done_event and filter_done_event.is_set()) and not download_err[0]:
                     cv.wait(timeout=0.5)
+                if filter_done_event and filter_done_event.is_set():
+                    break
                 if stop_event.is_set():
                     raise RuntimeError("Restore cancelled by user.")
                 if download_err[0]:
@@ -1822,20 +1838,24 @@ def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: i
                 consumer_idx[0] += 1
                 cv.notify_all()
 
-            stdin_stream.write(part_data)
-            if dl_tracker:
-                dl_tracker.update_bytes(len(part_data))
+            try:
+                stdin_stream.write(part_data)
+                if dl_tracker:
+                    dl_tracker.update_bytes(len(part_data))
+            except (BrokenPipeError, OSError):
+                break
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
         prod_thread.join(timeout=2.0)
 
-def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, decompression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default", sql_db_filter: str = None):
+def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, decompression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default", sql_db_filter: str = None, indexing_mode: str = "with_index", changes_only: bool = False):
     write_log(log_path, f"INFO  Starting streaming restore from {storage['type']}: {remote_name} (Profile: {speed_profile})")
     
     settings = get_speed_settings(speed_profile)
     
     processes = []
     stop_event = ACTIVE_STOP_EVENTS.get(tracker.job_id) if tracker else threading.Event()
+    filter_done_event = threading.Event()
     if tracker:
         ACTIVE_PROCESSES.setdefault(tracker.job_id, [])
         if tracker.job_id not in ACTIVE_STOP_EVENTS:
@@ -1879,7 +1899,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
 
                 if sql_db_filter:
                     optimize_pipe_fd(p_restore.stdin)
-                    def filter_worker(dec_out, rest_in, target_db, stop_ev):
+                    def filter_worker(dec_out, rest_in, target_db, stop_ev, f_done_ev, idx_mode, chgs_only):
                         target_clean = target_db.strip().strip('"').lower().encode("utf-8")
                         start_tag = b"-- >>> auto_backup_db_start: " + target_clean + b" <<<"
                         end_tag = b"-- >>> auto_backup_db_end: " + target_clean + b" <<<"
@@ -1888,21 +1908,71 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                         preamble = (
                             b"SET synchronous_commit = 'off';\n"
                             b"DO $$ BEGIN SET session_replication_role = 'replica'; EXCEPTION WHEN OTHERS THEN NULL; END $$;\n"
-                            b"SET work_mem = '256MB';\n"
-                            b"SET maintenance_work_mem = '2GB';\n"
-                            b"SET max_parallel_maintenance_workers = 4;\n"
+                            b"SET work_mem = '512MB';\n"
+                            b"SET maintenance_work_mem = '4GB';\n"
+                            b"SET max_parallel_maintenance_workers = 8;\n"
                         )
                         try:
                             rest_in.write(preamble)
+                            rest_in.flush()
                         except Exception:
                             pass
 
-                        CHUNK_SZ = 2 * 1024 * 1024
+                        CHUNK_SZ = 4 * 1024 * 1024
                         in_target = False
                         remainder = b""
+                        in_copy = False
+
+                        def filter_lines(data_bytes):
+                            nonlocal in_copy
+                            if not chgs_only and idx_mode == "with_index":
+                                return data_bytes
+                            
+                            res = bytearray()
+                            lines = data_bytes.split(b"\n")
+                            for line in lines:
+                                l_str = line.strip()
+                                l_low = l_str.lower()
+                                
+                                if in_copy:
+                                    if l_str == b"\\." or l_str.startswith(b"\\."):
+                                        in_copy = False
+                                        if idx_mode != "only_index":
+                                            res.extend(line + b"\n")
+                                    else:
+                                        if idx_mode != "only_index":
+                                            res.extend(line + b"\n")
+                                else:
+                                    if l_low.startswith(b"copy ") and b"from stdin" in l_low:
+                                        in_copy = True
+                                        if idx_mode != "only_index":
+                                            res.extend(line + b"\n")
+                                        continue
+                                    
+                                    if l_low.startswith(b"\\connect ") or l_low.startswith(b"select 'create database") or l_low.startswith(b"create database "):
+                                        continue
+                                    
+                                    if chgs_only:
+                                        if (l_low.startswith(b"drop table") or 
+                                            l_low.startswith(b"drop view") or 
+                                            l_low.startswith(b"drop materialized view") or 
+                                            l_low.startswith(b"drop sequence") or 
+                                            l_low.startswith(b"drop type") or 
+                                            l_low.startswith(b"drop schema") or
+                                            l_low.startswith(b"drop database")):
+                                            continue
+                                            
+                                    if idx_mode == "without_index":
+                                        if (l_low.startswith(b"create index") or 
+                                            l_low.startswith(b"create unique index") or 
+                                            (l_low.startswith(b"alter table") and b"add constraint" in l_low and b"foreign key" in l_low)):
+                                            continue
+                                            
+                                    res.extend(line + b"\n")
+                            return bytes(res)
 
                         try:
-                            while not stop_ev.is_set():
+                            while not stop_ev.is_set() and not f_done_ev.is_set():
                                 data = dec_out.read(CHUNK_SZ)
                                 if not data:
                                     break
@@ -1914,6 +1984,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                                     idx = buf_lower.find(start_tag)
                                     if idx != -1:
                                         in_target = True
+                                        write_log(log_path, f"INFO  [Single DB Restore] Found database '{target_db}' in backup stream. Beginning extraction...")
                                         after_tag = buf[idx:]
                                         nl_pos = after_tag.find(b"\n")
                                         if nl_pos != -1:
@@ -1921,7 +1992,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                                             lines = content.split(b"\n", 3)
                                             filtered_chunk = bytearray()
                                             for l in lines:
-                                                if l.strip().startswith(b"\\connect ") or l.strip().startswith(b"SELECT 'CREATE DATABASE"):
+                                                if l.strip().startswith(b"\\connect ") or l.strip().startswith(b"SELECT 'CREATE DATABASE") or l.strip().startswith(b"CREATE DATABASE"):
                                                     continue
                                                 filtered_chunk.extend(l + b"\n")
                                             rest_in.write(filtered_chunk)
@@ -1941,17 +2012,23 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
 
                                     if stop_idx != -1:
                                         if stop_idx > 0:
-                                            rest_in.write(buf[:stop_idx])
+                                            chunk_to_send = filter_lines(buf[:stop_idx])
+                                            rest_in.write(chunk_to_send)
+                                        f_done_ev.set()
+                                        stop_ev.set()
+                                        write_log(log_path, f"INFO  [Single DB Restore] Database '{target_db}' dump fully extracted from stream.")
                                         break
                                     else:
                                         if len(buf) > 512:
-                                            rest_in.write(buf[:-512])
+                                            chunk_to_send = filter_lines(buf[:-512])
+                                            rest_in.write(chunk_to_send)
                                             remainder = buf[-512:]
                                         else:
-                                            rest_in.write(buf)
+                                            chunk_to_send = filter_lines(buf)
+                                            rest_in.write(chunk_to_send)
 
-                            if in_target and remainder:
-                                rest_in.write(remainder)
+                            if in_target and remainder and not f_done_ev.is_set():
+                                rest_in.write(filter_lines(remainder))
 
                             postamble = (
                                 b"\nDO $$ BEGIN SET session_replication_role = 'origin'; EXCEPTION WHEN OTHERS THEN NULL; END $$;\n"
@@ -1967,16 +2044,10 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                                 rest_in.close()
                             except Exception:
                                 pass
-                            try:
-                                while dec_out.read(4 * 1024 * 1024):
-                                    if stop_ev.is_set():
-                                        break
-                            except Exception:
-                                pass
 
                     filter_thread = threading.Thread(
                         target=filter_worker,
-                        args=(p_dec.stdout, p_restore.stdin, sql_db_filter, stop_event)
+                        args=(p_dec.stdout, p_restore.stdin, sql_db_filter, stop_event, filter_done_event, indexing_mode, changes_only)
                     )
                     filter_thread.daemon = True
                     filter_thread.start()
@@ -2027,9 +2098,14 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 container = client.get_container_client(storage["azure_container"])
                 stream = container.download_blob(remote_name, max_concurrency=settings["concurrency"], read_timeout=3600)
                 for chunk in stream.chunks():
+                    if filter_done_event.is_set():
+                        break
                     if stop_event.is_set():
                         raise RuntimeError("Restore cancelled by user.")
-                    stdin_stream.write(chunk)
+                    try:
+                        stdin_stream.write(chunk)
+                    except (BrokenPipeError, OSError):
+                        break
                     if dl_tracker:
                         dl_tracker.update_bytes(len(chunk))
                 stdin_stream.close()
@@ -2045,7 +2121,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 blob = bucket.blob(remote_name)
                 blob.chunk_size = settings["chunk_size"]
                 
-                progress_writer = ProgressWriter(stdin_stream, dl_tracker, stop_event=stop_event)
+                progress_writer = ProgressWriter(stdin_stream, dl_tracker, stop_event=stop_event, filter_done_event=filter_done_event)
                 blob.download_to_file(progress_writer, timeout=3600)
                 stdin_stream.close()
 
@@ -2084,7 +2160,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                         stdin_stream=stdin_stream,
                         stop_event=stop_event,
                         dl_tracker=dl_tracker,
-                        log_path=log_path
+                        log_path=log_path,
+                        filter_done_event=filter_done_event
                     )
                     stdin_stream.close()
                 else:
@@ -2096,7 +2173,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
 
                     def s3_dl_worker():
                         try:
-                            while not stop_event.is_set():
+                            while not stop_event.is_set() and not filter_done_event.is_set():
                                 chunk = body_stream.read(chunk_size)
                                 if not chunk:
                                     break
@@ -2114,17 +2191,22 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
 
                     try:
                         while True:
+                            if filter_done_event.is_set():
+                                break
                             if stop_event.is_set():
                                 raise RuntimeError("Restore cancelled by user.")
                             try:
-                                chunk = prefetch_q.get(timeout=1.0)
+                                chunk = prefetch_q.get(timeout=0.5)
                             except queue.Empty:
                                 if not dl_thread.is_alive():
                                     break
                                 continue
                             if chunk is None:
                                 break
-                            stdin_stream.write(chunk)
+                            try:
+                                stdin_stream.write(chunk)
+                            except (BrokenPipeError, OSError):
+                                break
                     finally:
                         dl_thread.join(timeout=3.0)
                         if download_err[0]:
@@ -2230,7 +2312,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                                 s3_obj = s3_client.get_object(Bucket=zone, Key=clean_remote)
                                 body_stream = s3_obj["Body"]
                                 write_log(log_path, f"INFO  Streaming restore download via BunnyCDN S3 API ({s3_url})...")
-                                while not stop_event.is_set():
+                                while not stop_event.is_set() and not filter_done_event.is_set():
                                     chunk = body_stream.read(chunk_size)
                                     if not chunk:
                                         break
@@ -2248,7 +2330,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                             for chunk in resp.iter_content(chunk_size=chunk_size):
                                 if not chunk:
                                     continue
-                                if stop_event.is_set():
+                                if stop_event.is_set() or filter_done_event.is_set():
                                     break
                                 if dl_tracker:
                                     dl_tracker.update_bytes(len(chunk))
@@ -2264,17 +2346,23 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
 
                 try:
                     while True:
+                        if filter_done_event.is_set():
+                            write_log(log_path, f"INFO  [Single DB Restore] Target database '{sql_db_filter}' fully extracted from stream. Cleanly stopping download.")
+                            break
                         if stop_event.is_set():
                             raise RuntimeError("Restore cancelled by user.")
                         try:
-                            chunk = prefetch_q.get(timeout=1.0)
+                            chunk = prefetch_q.get(timeout=0.5)
                         except queue.Empty:
                             if not dl_thread.is_alive():
                                 break
                             continue
                         if chunk is None:
                             break
-                        stdin_stream.write(chunk)
+                        try:
+                            stdin_stream.write(chunk)
+                        except (BrokenPipeError, OSError):
+                            break
                 finally:
                     dl_thread.join(timeout=3.0)
                     if download_err[0]:
@@ -2285,21 +2373,22 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 raise ValueError(f"Unknown storage type: {storage['type']}")
                 
         except Exception as e:
-            for p in processes:
-                try: p.kill()
-                except Exception: pass
-            raise RuntimeError(f"Streaming download failed: {e}")
+            if not filter_done_event.is_set():
+                for p in processes:
+                    try: p.kill()
+                    except Exception: pass
+                raise RuntimeError(f"Streaming download failed: {e}")
         finally:
             stop_event.set()
             if filter_thread:
-                filter_thread.join(timeout=2.0)
+                filter_thread.join(timeout=3.0)
             try:
                 stdin_stream.close()
             except Exception:
                 pass
             for p in reversed(processes):
                 try:
-                    p.wait(timeout=5.0)
+                    p.wait(timeout=3.0)
                 except Exception:
                     try:
                         p.kill()
@@ -2318,6 +2407,11 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
             else:
                 write_log(log_path, f"WARN  Restore completed with warnings (exit code 1). This is often harmless in pg_restore.")
             
+        if filter_done_event.is_set() and tracker:
+            tracker.bytes_processed = tracker.total_size
+            tracker.update_pct(100)
+            ACTIVE_TRACKERS.pop(tracker.job_id, None)
+
         write_log(log_path, f"INFO  Streaming restore successful.")
 
 
@@ -2526,7 +2620,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
 
 # ─── MONGODB RESTORE ─────────────────────────────────────────────────────────
 
-def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", target_dbname: str = None, is_cluster_restore: bool = False, selected_database: str = None):
+def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", target_dbname: str = None, is_cluster_restore: bool = False, selected_database: str = None, changes_only: bool = False):
     m = parse_mongo_uri(db)
     dbname = target_dbname or db.get("database_name") or m["dbname"]
     if not dbname and not is_cluster_restore: raise ValueError("Database name is required for restore.")
@@ -2667,7 +2761,11 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     if collection and collection != "full":
         cmd += [f"--nsInclude=*.{collection}"]
 
-    if drop_existing:
+    if changes_only:
+        drop_existing = False
+        cmd.append("--mode=upsert")
+        write_log(log_path, "INFO  Smart Sync / Diff Mode: applying changes with --mode=upsert (existing data preserved).")
+    elif drop_existing:
         cmd.append("--drop")
 
     settings = get_speed_settings(speed_profile)
@@ -2688,7 +2786,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     env = os.environ.copy()
     env["GOGC"] = "100"
     env["GOMAXPROCS"] = str(settings["threads"])
-    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile)
+    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile, indexing_mode=indexing_mode, changes_only=changes_only)
 
     if use_no_index_restore and indexes_metadata:
         try:
@@ -3066,7 +3164,7 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
 
 # ─── POSTGRESQL RESTORE ──────────────────────────────────────────────────────
 
-def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", collection: str = None, is_all: bool = False, selected_database: str = None):
+def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", collection: str = None, is_all: bool = False, selected_database: str = None, changes_only: bool = False):
     dbname = (db.get("database_name") or "").strip()
     sql_db_filter = None
     
@@ -3114,7 +3212,11 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
             "--verbose"
         ]
         if not new_database:
-            cmd += ["--clean", "--if-exists"]
+            if changes_only:
+                cmd += ["--data-only", "--no-data-for-failed-tables"]
+                write_log(log_path, "INFO  Smart Sync / Diff Mode: applying changes with --data-only --no-data-for-failed-tables (tables and schema preserved).")
+            else:
+                cmd += ["--clean", "--if-exists"]
             
         if collection and collection != "full":
             cmd += ["-t", collection]
@@ -3139,25 +3241,28 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
     # High-performance bulk restore PostgreSQL settings (20GB in <10 min):
     # sync_commit = off eliminates per-transaction fsync stalls during bulk table ingestion
     sync_commit = "off"
-    work_mem = "128MB"
-    maint_work_mem = "1GB"
+    work_mem = "256MB"
+    maint_work_mem = "2GB"
+    parallel_maint_workers = 4
     
     if speed_profile == "extreme":
-        work_mem = "256MB"
-        maint_work_mem = "2GB"
+        work_mem = "512MB"
+        maint_work_mem = "4GB"
+        parallel_maint_workers = 8
     elif speed_profile == "safe":
         sync_commit = "on"
         work_mem = "32MB"
         maint_work_mem = "128MB"
+        parallel_maint_workers = 1
         
-    pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit} -c max_parallel_maintenance_workers=4 -c client_min_messages=warning"
+    pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit} -c max_parallel_maintenance_workers={parallel_maint_workers} -c client_min_messages=warning"
     target_check_db = (dbname if dbname and dbname != "__all__" else (selected_database or "postgres"))
     if check_pg_options_supported(db, pg_opts, target_check_db):
         env["PGOPTIONS"] = pg_opts
     else:
         write_log(log_path, "INFO  Connection pooler / proxy detected. Skipping PGOPTIONS for restore compatibility.")
         
-    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile, sql_db_filter=sql_db_filter)
+    stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile, sql_db_filter=sql_db_filter, indexing_mode=indexing_mode, changes_only=changes_only)
 
 # ─── SOLR BACKUP & RESTORE ───────────────────────────────────────────────────
 
@@ -3701,6 +3806,9 @@ def do_restore(restore_id: str):
         # Initialize progress tracker
         tracker = ProgressTracker(restore_id, is_restore=True, total_size=total_size, log_path=log_path)
         indexing_mode = restore.get("indexing_mode", "with_index")
+        changes_only = bool(restore.get("changes_only", False))
+        if changes_only:
+            write_log(log_path, "INFO  Smart Sync / Changes Only (Diff Mode) enabled: preserving existing tables and applying only diffs.")
 
         selected_database = (restore.get("selected_database") or "").strip()
         if selected_database.lower() in ("__all__", "all", ""):
@@ -3729,7 +3837,7 @@ def do_restore(restore_id: str):
                     write_log(log_path, f"INFO  [Single DB Restore] Restoring database '{selected_database}' from backup: {matched_obj}")
                     obj_compression = "zstd" if ".zst" in matched_obj else ("gzip" if ".gz" in matched_obj else compression)
                     target_db_name = target_db.get("database_name") or selected_database
-                    run_mongo_restore(target_db, "full", storage, matched_obj, log_path, drop_existing=not restore.get("new_database", False), compression=obj_compression, source_dbname=selected_database, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db_name, is_cluster_restore=False)
+                    run_mongo_restore(target_db, "full", storage, matched_obj, log_path, drop_existing=not restore.get("new_database", False), compression=obj_compression, source_dbname=selected_database, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db_name, is_cluster_restore=False, changes_only=changes_only)
                 else:
                     write_log(log_path, f"INFO  Found {len(objects)} databases to restore.")
                     for obj in objects:
@@ -3738,15 +3846,15 @@ def do_restore(restore_id: str):
                         obj_compression = "zstd" if ".zst" in obj else ("gzip" if ".gz" in obj else compression)
                         if tracker and tracker.job_id in ACTIVE_STOP_EVENTS:
                             ACTIVE_STOP_EVENTS[tracker.job_id] = threading.Event()
-                        run_mongo_restore(target_db, "full", storage, obj, log_path, drop_existing=not restore.get("new_database", False), compression=obj_compression, source_dbname=db_name, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=db_name)
+                        run_mongo_restore(target_db, "full", storage, obj, log_path, drop_existing=not restore.get("new_database", False), compression=obj_compression, source_dbname=db_name, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=db_name, changes_only=changes_only)
             else:
                 is_cluster_archive = ("_all-" in remote_name or "Mongdbbackup-" in remote_name or "_cluster-" in remote_name or target_db.get("database_name") == "__all__")
                 if selected_database:
                     write_log(log_path, f"INFO  [Single DB Restore] Extracting database '{selected_database}' from unified archive: {remote_name}")
                     target_db_name = target_db.get("database_name") or selected_database
-                    run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=selected_database, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db_name, is_cluster_restore=False, selected_database=selected_database)
+                    run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=selected_database, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db_name, is_cluster_restore=False, selected_database=selected_database, changes_only=changes_only)
                 else:
-                    run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db.get("database_name"), is_cluster_restore=is_cluster_archive)
+                    run_mongo_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), target_dbname=target_db.get("database_name"), is_cluster_restore=is_cluster_archive, changes_only=changes_only)
         elif target_db["type"] == "postgresql":
             if is_folder:
                 write_log(log_path, f"INFO  PostgreSQL folder restore detected: {remote_name}")
@@ -3765,7 +3873,7 @@ def do_restore(restore_id: str):
                     obj_compression = "zstd" if ".zst" in matched_obj else ("gzip" if ".gz" in matched_obj else compression)
                     target_db_name = target_db.get("database_name") or selected_database
                     restore_db = {**target_db, "database_name": target_db_name}
-                    run_pg_restore(restore_db, storage, matched_obj, log_path, new_database=restore.get("new_database", False), compression=obj_compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=False)
+                    run_pg_restore(restore_db, storage, matched_obj, log_path, new_database=restore.get("new_database", False), compression=obj_compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=False, changes_only=changes_only)
                 else:
                     write_log(log_path, f"INFO  Found {len(objects)} database archives to restore.")
                     for idx_obj, obj in enumerate(objects):
@@ -3783,7 +3891,7 @@ def do_restore(restore_id: str):
                             ACTIVE_STOP_EVENTS[tracker.job_id] = threading.Event()
 
                         restore_db = {**target_db, "database_name": db_name}
-                        run_pg_restore(restore_db, storage, obj, log_path, new_database=restore.get("new_database", False), compression=obj_compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=False)
+                        run_pg_restore(restore_db, storage, obj, log_path, new_database=restore.get("new_database", False), compression=obj_compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=False, changes_only=changes_only)
 
                     write_log(log_path, f"INFO  Instance restore completed: {len(objects)} databases restored.")
             else:
@@ -3792,9 +3900,9 @@ def do_restore(restore_id: str):
                     write_log(log_path, f"INFO  [Single DB Restore from Unified Archive] Restoring database '{selected_database}' from {remote_name}")
                     target_db_name = target_db.get("database_name") or selected_database
                     restore_db = {**target_db, "database_name": target_db_name}
-                    run_pg_restore(restore_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=False, selected_database=selected_database)
+                    run_pg_restore(restore_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=False, selected_database=selected_database, changes_only=changes_only)
                 else:
-                    run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=is_all)
+                    run_pg_restore(target_db, storage, remote_name, log_path, new_database=restore.get("new_database", False), compression=compression, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"), collection=collection, is_all=is_all, changes_only=changes_only)
         elif target_db["type"] == "solr":
             run_solr_restore(target_db, collection, storage, remote_name, log_path, drop_existing=not restore.get("new_database", False), compression=compression, source_dbname=source_dbname, indexing_mode=indexing_mode, tracker=tracker, speed_profile=restore.get("speed_profile", "default"))
         else:

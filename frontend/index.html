@@ -2154,7 +2154,7 @@
                   </div>
                   <div class="form-group mb-6" id="inline-rs-single-db-group" style="display:none">
                     <label>Database to Restore from Backup</label>
-                    <input type="text" id="inline-rs-selected-db" placeholder="e.g. CBT_PROD"
+                    <input type="text" id="inline-rs-selected-db" placeholder="e.g. CBT_PROD" oninput="onInlineSelectedDbInput()"
                       style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;" />
                     <div style="font-size:11px;color:var(--muted);margin-top:4px">
                       Enter the specific database name inside the backup that you want to restore.
@@ -2191,7 +2191,7 @@
                     </select>
                     <div class="info-banner warn" style="margin-top:12px; margin-bottom:0;">
                       <i data-lucide="alert-triangle"></i>
-                      <span>Existing data will be overwritten</span>
+                      <span>Existing data will be overwritten unless Smart Sync is enabled</span>
                     </div>
                   </div>
 
@@ -2203,6 +2203,40 @@
                     <div class="info-banner" style="margin-top:12px; margin-bottom:0;">
                       <i data-lucide="check-circle-2"></i>
                       <span>A fresh database will be created — no existing data will be affected</span>
+                    </div>
+                  </div>
+
+                  <!-- Indexing Mode -->
+                  <div class="form-group mb-6">
+                    <label>Indexing Mode</label>
+                    <select id="inline-rs-indexing-mode"
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      <option value="with_index" selected>Include Indexes (Default)</option>
+                      <option value="without_index">⚡ Exclude Indexes (Data Only - Ultra Fast)</option>
+                      <option value="only_index">📐 Only Indexes (Schema / Post-Data Only)</option>
+                    </select>
+                  </div>
+
+                  <!-- Speed Profile -->
+                  <div class="form-group mb-6">
+                    <label>Speed & Resource Profile</label>
+                    <select id="inline-rs-speed-profile"
+                      style="background-color:var(--surface-solid); border:1px solid var(--border); padding:14px 16px; font-weight:500;">
+                      <option value="extreme" selected>🚀 Extreme (Ultra Turbo: 8 workers, 4GB RAM)</option>
+                      <option value="default">Default</option>
+                      <option value="balanced">Balanced (4 workers, 256MB RAM)</option>
+                      <option value="safe">Safe (2 workers, 128MB RAM)</option>
+                    </select>
+                  </div>
+
+                  <!-- Smart Sync (Changes Only / Diff Mode) -->
+                  <div class="form-group mb-6" id="inline-rs-changes-only-group">
+                    <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-weight:600; font-size:13px; color:var(--text);">
+                      <input type="checkbox" id="inline-rs-changes-only" style="width:18px; height:18px; accent-color:var(--accent); cursor:pointer;" />
+                      <span>⚡ Smart Sync / Changes Only (Diff Mode)</span>
+                    </label>
+                    <div style="font-size:12px; color:var(--text2); margin-top:6px; margin-left:28px; line-height:1.4;">
+                      Target database has existing data? Enable this to skip table drops and merge incoming records without wiping existing data.
                     </div>
                   </div>
 
@@ -2978,6 +3012,17 @@
         </select>
       </div>
 
+      <!-- Smart Sync (Changes Only / Diff Mode) -->
+      <div class="form-group" id="rs-changes-only-group">
+        <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-weight:600; font-size:13px; color:var(--text);">
+          <input type="checkbox" id="rs-changes-only" style="width:18px; height:18px; accent-color:var(--accent); cursor:pointer;" />
+          <span>⚡ Smart Sync / Changes Only (Diff Mode)</span>
+        </label>
+        <div style="font-size:12px; color:var(--text2); margin-top:6px; margin-left:28px; line-height:1.4;">
+          Target database has existing data? Enable this to skip table drops and merge incoming records without wiping existing data.
+        </div>
+      </div>
+
       <div id="rs-existing-fields" class="form-group">
         <label>Target Database Name <span style="color:var(--muted);font-size:11px">(fetched from server)</span></label>
         <select id="rs-target-dbname" onchange="onRestoreTargetDbnameChange()">
@@ -3320,6 +3365,20 @@
       if (grp) grp.style.display = (isSingle && isVisible) ? 'block' : 'none';
     }
 
+    function onInlineSelectedDbInput() {
+      const val = (v('inline-rs-selected-db') || '').trim();
+      const targetDbnameEl = document.getElementById('inline-rs-dbname');
+      const isNew = document.getElementById('inline-rs-new-fields') && document.getElementById('inline-rs-new-fields').style.display !== 'none';
+      if (val && !isNew && targetDbnameEl) {
+        for (let i = 0; i < targetDbnameEl.options.length; i++) {
+          if (targetDbnameEl.options[i].value.toLowerCase() === val.toLowerCase()) {
+            targetDbnameEl.selectedIndex = i;
+            break;
+          }
+        }
+      }
+    }
+
     async function runInlineRestore() {
       const backupId = v('inline-rs-backup');
       const targetDbId = v('inline-rs-target');
@@ -3333,10 +3392,15 @@
 
       const isSingleInstance = v('inline-rs-instance-scope') === 'single';
       const selectedDb = isSingleInstance ? (v('inline-rs-selected-db') || '').trim() : null;
+      const isChangesOnly = !!(document.getElementById('inline-rs-changes-only') && document.getElementById('inline-rs-changes-only').checked);
+      const indexingMode = v('inline-rs-indexing-mode') || 'with_index';
+      const speedProfile = v('inline-rs-speed-profile') || 'extreme';
 
       const msg = isNew
         ? `Create new database "<b>${targetDbname}</b>" and restore into it?`
-        : `Restore to "<b>${targetDbname}</b>"?<br><br><span style="color:var(--danger)">\u26A0 Existing data will be overwritten.</span>`;
+        : (isChangesOnly
+            ? `Restore into "<b>${targetDbname}</b>" using Smart Sync (Diff Mode)?<br><br><span style="color:var(--accent)">\u2714 Existing tables will be preserved and changes will be merged.</span>`
+            : `Restore to "<b>${targetDbname}</b>"?<br><br><span style="color:var(--danger)">\u26A0 Existing data will be overwritten.</span>`);
 
       appConfirm('Confirm Restore', msg, async () => {
         try {
@@ -3347,8 +3411,9 @@
             new_database_name: isNew ? targetDbname : null,
             target_database_name: targetDbname,
             collection: (v('inline-rs-scope') === 'collection') ? v('inline-rs-collection') : 'full',
-            indexing_mode: 'with_index',
-            speed_profile: 'extreme'
+            indexing_mode: indexingMode,
+            speed_profile: speedProfile,
+            changes_only: isChangesOnly
           };
           if (selectedDb) {
             payload.selected_database = selectedDb;
@@ -5440,14 +5505,16 @@
         } catch (e) { }
 
         try {
+          const isChangesOnly = !!(document.getElementById('rs-changes-only') && document.getElementById('rs-changes-only').checked);
           let payload = {
             target_database_id: targetDbId,
             new_database: isNew,
             new_database_name: isNew ? targetDbname : null,
             target_database_name: targetDbname,
             collection: (v('rs-scope') === 'collection') ? v('rs-collection') : 'full',
-            indexing_mode: v('rs-indexing-mode'),
-            speed_profile: v('rs-speed-profile') || 'extreme'
+            indexing_mode: v('rs-indexing-mode') || 'with_index',
+            speed_profile: v('rs-speed-profile') || 'extreme',
+            changes_only: isChangesOnly
           };
 
           const instanceScopeGroup = document.getElementById('rs-instance-scope-group');
@@ -5473,8 +5540,12 @@
         } catch (e) { toast(e.message, 'error'); }
       };
 
+      const isChangesOnly = !!(document.getElementById('rs-changes-only') && document.getElementById('rs-changes-only').checked);
       if (!isNew) {
-        appConfirm('Confirm Restore', `Restore to "<b>${targetDbname}</b>"?<br><br><span style="color:var(--danger)">\u26A0 Existing data will be overwritten.</span>`, doRestore);
+        const msg = isChangesOnly
+          ? `Restore into "<b>${targetDbname}</b>" using Smart Sync (Diff Mode)?<br><br><span style="color:var(--accent)">\u2714 Existing tables will be preserved and changes will be merged.</span>`
+          : `Restore to "<b>${targetDbname}</b>"?<br><br><span style="color:var(--danger)">\u26A0 Existing data will be overwritten.</span>`;
+        appConfirm('Confirm Restore', msg, doRestore);
       } else {
         appConfirm('Confirm Restore', `Create new database "<b>${targetDbname}</b>" and restore into it?`, doRestore);
       }
