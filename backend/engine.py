@@ -2218,95 +2218,68 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 if dl_tracker and dl_tracker.total_size <= 0 and total_size > 0:
                     dl_tracker.total_size = total_size
 
-                if total_size > part_size:
-                    write_log(log_path, f"INFO  BunnyCDN archive size: {round(total_size/(1024*1024), 2)} MB. Activating high-speed parallel Range downloader ({concurrency} workers)...")
-                    if s3_client:
-                        def fetch_bunny_range(start_b, end_b):
-                            resp = s3_client.get_object(Bucket=zone, Key=clean_remote, Range=f"bytes={start_b}-{end_b}")
-                            return resp["Body"].read()
-                    else:
-                        def fetch_bunny_range(start_b, end_b):
-                            h = {"AccessKey": bunny_key, "Range": f"bytes={start_b}-{end_b}"}
-                            r = session.get(bunny_url, headers=h, timeout=(15, 60))
-                            if r.status_code not in (200, 206):
-                                raise RuntimeError(f"Bunny Range download failed (HTTP {r.status_code})")
-                            return r.content
+                # Single persistent high-throughput stream with lookahead prefetch buffer
+                chunk_size = 8 * 1024 * 1024
+                prefetch_q = queue.Queue(maxsize=max_in_flight)
+                download_err = [None]
 
-                    download_parallel_range_stream(
-                        fetch_bunny_range,
-                        total_size=total_size,
-                        part_size=part_size,
-                        concurrency=concurrency,
-                        max_in_flight=max_in_flight,
-                        stdin_stream=stdin_stream,
-                        stop_event=stop_event,
-                        dl_tracker=dl_tracker,
-                        log_path=log_path
-                    )
-                    stdin_stream.close()
-                else:
-                    # Single stream fallback with prefetch buffer
-                    chunk_size = part_size
-                    prefetch_q = queue.Queue(maxsize=max_in_flight)
-                    download_err = [None]
-
-                    def bunny_dl_worker():
-                        try:
-                            if s3_client:
-                                try:
-                                    s3_obj = s3_client.get_object(Bucket=zone, Key=clean_remote)
-                                    body_stream = s3_obj["Body"]
-                                    write_log(log_path, f"INFO  Streaming restore download via BunnyCDN S3 API ({s3_url})...")
-                                    while not stop_event.is_set():
-                                        chunk = body_stream.read(chunk_size)
-                                        if not chunk:
-                                            break
-                                        if dl_tracker:
-                                            dl_tracker.update_bytes(len(chunk))
-                                        prefetch_q.put(chunk)
-                                    return
-                                except Exception as s3_dl_ex:
-                                    write_log(log_path, f"WARN  Bunny S3 restore download failed ({s3_dl_ex}). Falling back to REST stream...")
-
-                            write_log(log_path, f"INFO  Streaming restore download via BunnyCDN REST API ({rest_host})...")
-                            with session.get(bunny_url, headers=bunny_headers, stream=True, timeout=(15, 3600)) as resp:
-                                if resp.status_code != 200:
-                                    raise RuntimeError(f"Bunny storage download failed (HTTP {resp.status_code}): {resp.text[:300]}")
-                                for chunk in resp.iter_content(chunk_size=chunk_size):
+                def bunny_dl_worker():
+                    try:
+                        if s3_client:
+                            try:
+                                s3_obj = s3_client.get_object(Bucket=zone, Key=clean_remote)
+                                body_stream = s3_obj["Body"]
+                                write_log(log_path, f"INFO  Streaming restore download via BunnyCDN S3 API ({s3_url})...")
+                                while not stop_event.is_set():
+                                    chunk = body_stream.read(chunk_size)
                                     if not chunk:
-                                        continue
-                                    if stop_event.is_set():
                                         break
                                     if dl_tracker:
                                         dl_tracker.update_bytes(len(chunk))
                                     prefetch_q.put(chunk)
-                        except Exception as ex:
-                            download_err[0] = ex
-                        finally:
-                            prefetch_q.put(None)
+                                return
+                            except Exception as s3_dl_ex:
+                                write_log(log_path, f"WARN  Bunny S3 restore download failed ({s3_dl_ex}). Falling back to REST stream...")
 
-                    dl_thread = threading.Thread(target=bunny_dl_worker)
-                    dl_thread.daemon = True
-                    dl_thread.start()
-
-                    try:
-                        while True:
-                            if stop_event.is_set():
-                                raise RuntimeError("Restore cancelled by user.")
-                            try:
-                                chunk = prefetch_q.get(timeout=1.0)
-                            except queue.Empty:
-                                if not dl_thread.is_alive():
+                        write_log(log_path, f"INFO  Streaming restore download via BunnyCDN REST API ({rest_host})...")
+                        with session.get(bunny_url, headers=bunny_headers, stream=True, timeout=(15, 3600)) as resp:
+                            if resp.status_code != 200:
+                                raise RuntimeError(f"Bunny storage download failed (HTTP {resp.status_code}): {resp.text[:300]}")
+                            for chunk in resp.iter_content(chunk_size=chunk_size):
+                                if not chunk:
+                                    continue
+                                if stop_event.is_set():
                                     break
-                                continue
-                            if chunk is None:
-                                break
-                            stdin_stream.write(chunk)
+                                if dl_tracker:
+                                    dl_tracker.update_bytes(len(chunk))
+                                prefetch_q.put(chunk)
+                    except Exception as ex:
+                        download_err[0] = ex
                     finally:
-                        dl_thread.join(timeout=3.0)
-                        if download_err[0]:
-                            raise RuntimeError(f"Bunny download stream failed: {download_err[0]}")
-                    stdin_stream.close()
+                        prefetch_q.put(None)
+
+                dl_thread = threading.Thread(target=bunny_dl_worker)
+                dl_thread.daemon = True
+                dl_thread.start()
+
+                try:
+                    while True:
+                        if stop_event.is_set():
+                            raise RuntimeError("Restore cancelled by user.")
+                        try:
+                            chunk = prefetch_q.get(timeout=1.0)
+                        except queue.Empty:
+                            if not dl_thread.is_alive():
+                                break
+                            continue
+                        if chunk is None:
+                            break
+                        stdin_stream.write(chunk)
+                finally:
+                    dl_thread.join(timeout=3.0)
+                    if download_err[0]:
+                        raise RuntimeError(f"Bunny download stream failed: {download_err[0]}")
+                stdin_stream.close()
 
             else:
                 raise ValueError(f"Unknown storage type: {storage['type']}")
