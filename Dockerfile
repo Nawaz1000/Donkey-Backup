@@ -46,6 +46,9 @@ RUN printf 'server {\n\
         root /usr/share/nginx/html;\n\
         index index.html;\n\
         try_files $uri $uri/ /index.html;\n\
+        add_header Cache-Control "no-cache, no-store, must-revalidate";\n\
+        add_header Pragma "no-cache";\n\
+        add_header Expires "0";\n\
     }\n\
     location /api/ {\n\
         proxy_pass http://127.0.0.1:8000;\n\

@@ -1885,9 +1885,10 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 optimize_pipe_fd(p_dec.stdin)
                 optimize_pipe_fd(p_dec.stdout)
 
+                needs_filter = bool(sql_db_filter or changes_only or (indexing_mode != "with_index"))
                 p_restore = subprocess.Popen(
                     cmd,
-                    stdin=subprocess.PIPE if sql_db_filter else p_dec.stdout,
+                    stdin=subprocess.PIPE if needs_filter else p_dec.stdout,
                     stdout=err_file,
                     stderr=subprocess.PIPE,  # Pipe stderr to parse progress
                     env=env,
@@ -1897,15 +1898,39 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 if tracker:
                     ACTIVE_PROCESSES[tracker.job_id].append(p_restore)
 
-                if sql_db_filter:
+                if needs_filter:
                     optimize_pipe_fd(p_restore.stdin)
                     def filter_worker(dec_out, rest_in, target_db, stop_ev, f_done_ev, idx_mode, chgs_only):
-                        target_clean = target_db.strip().strip('"').lower().encode("utf-8")
-                        start_tag = b"-- >>> auto_backup_db_start: " + target_clean + b" <<<"
-                        end_tag = b"-- >>> auto_backup_db_end: " + target_clean + b" <<<"
-                        start_prefix = b"-- >>> auto_backup_db_start:"
+                        target_clean = target_db.strip().strip('"').lower().encode("utf-8") if target_db else None
+
+                        start_candidates = []
+                        if target_clean:
+                            start_candidates = [
+                                b"-- >>> auto_backup_db_start: " + target_clean,
+                                b"\\connect " + target_clean,
+                                b'\\connect "' + target_clean,
+                                b"\\connect - " + target_clean,
+                                b'\\connect - "' + target_clean,
+                                b"create database " + target_clean,
+                                b'create database "' + target_clean,
+                                b"-- database: " + target_clean,
+                                b'-- database: "' + target_clean,
+                            ]
+
+                        stop_other_markers = [
+                            b"-- >>> auto_backup_db_start:",
+                            b"\n\\connect ",
+                            b"\r\n\\connect ",
+                            b"\ncreate database ",
+                            b"\r\ncreate database ",
+                            b"\n-- database: ",
+                            b"\r\n-- database: "
+                        ]
 
                         preamble = (
+                            b"SET statement_timeout = 0;\n"
+                            b"SET lock_timeout = 0;\n"
+                            b"SET client_min_messages = warning;\n"
                             b"SET synchronous_commit = 'off';\n"
                             b"DO $$ BEGIN SET session_replication_role = 'replica'; EXCEPTION WHEN OTHERS THEN NULL; END $$;\n"
                             b"SET work_mem = '512MB';\n"
@@ -1919,56 +1944,51 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                             pass
 
                         CHUNK_SZ = 4 * 1024 * 1024
-                        in_target = False
-                        remainder = b""
+                        in_target = (target_clean is None)
                         in_copy = False
+                        remainder = b""
 
-                        def filter_lines(data_bytes):
-                            nonlocal in_copy
-                            if not chgs_only and idx_mode == "with_index":
-                                return data_bytes
-                            
+                        def process_ddl_chunk(chunk_bytes):
+                            if not chgs_only and idx_mode == "with_index" and not target_clean:
+                                return chunk_bytes
                             res = bytearray()
-                            lines = data_bytes.split(b"\n")
+                            lines = chunk_bytes.split(b"\n")
                             for line in lines:
                                 l_str = line.strip()
                                 l_low = l_str.lower()
+                                if not l_str:
+                                    res.extend(b"\n")
+                                    continue
                                 
-                                if in_copy:
-                                    if l_str == b"\\." or l_str.startswith(b"\\."):
-                                        in_copy = False
-                                        if idx_mode != "only_index":
-                                            res.extend(line + b"\n")
-                                    else:
-                                        if idx_mode != "only_index":
-                                            res.extend(line + b"\n")
-                                else:
-                                    if l_low.startswith(b"copy ") and b"from stdin" in l_low:
-                                        in_copy = True
-                                        if idx_mode != "only_index":
-                                            res.extend(line + b"\n")
+                                # Strip connection switches and database creation when restoring a single database
+                                if target_clean:
+                                    if (l_low.startswith(b"\\connect ") or 
+                                        l_low.startswith(b"select 'create database") or 
+                                        l_low.startswith(b"create database ") or
+                                        l_low.startswith(b"-- database: ")):
                                         continue
-                                    
-                                    if l_low.startswith(b"\\connect ") or l_low.startswith(b"select 'create database") or l_low.startswith(b"create database "):
+                                        
+                                if chgs_only:
+                                    if (l_low.startswith(b"drop table") or 
+                                        l_low.startswith(b"drop view") or 
+                                        l_low.startswith(b"drop materialized view") or 
+                                        l_low.startswith(b"drop sequence") or 
+                                        l_low.startswith(b"drop type") or 
+                                        l_low.startswith(b"drop schema") or
+                                        l_low.startswith(b"drop database")):
                                         continue
-                                    
-                                    if chgs_only:
-                                        if (l_low.startswith(b"drop table") or 
-                                            l_low.startswith(b"drop view") or 
-                                            l_low.startswith(b"drop materialized view") or 
-                                            l_low.startswith(b"drop sequence") or 
-                                            l_low.startswith(b"drop type") or 
-                                            l_low.startswith(b"drop schema") or
-                                            l_low.startswith(b"drop database")):
-                                            continue
-                                            
-                                    if idx_mode == "without_index":
-                                        if (l_low.startswith(b"create index") or 
-                                            l_low.startswith(b"create unique index") or 
-                                            (l_low.startswith(b"alter table") and b"add constraint" in l_low and b"foreign key" in l_low)):
-                                            continue
-                                            
-                                    res.extend(line + b"\n")
+                                    if l_low.startswith(b"create table "):
+                                        line = b"CREATE TABLE IF NOT EXISTS " + line[13:]
+                                    elif l_low.startswith(b"create sequence "):
+                                        line = b"CREATE SEQUENCE IF NOT EXISTS " + line[16:]
+                                        
+                                if idx_mode == "without_index":
+                                    if (l_low.startswith(b"create index") or 
+                                        l_low.startswith(b"create unique index") or 
+                                        (l_low.startswith(b"alter table") and b"foreign key" in l_low and b"add constraint" in l_low)):
+                                        continue
+                                        
+                                res.extend(line + b"\n")
                             return bytes(res)
 
                         try:
@@ -1978,57 +1998,115 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                                     break
                                 buf = remainder + data
                                 remainder = b""
-                                buf_lower = buf.lower()
 
+                                # If targeting a single DB and not yet inside target DB
                                 if not in_target:
-                                    idx = buf_lower.find(start_tag)
-                                    if idx != -1:
+                                    buf_lower = buf.lower()
+                                    start_idx = -1
+                                    for c in start_candidates:
+                                        p = buf_lower.find(c)
+                                        if p != -1:
+                                            end_p = p + len(c)
+                                            if end_p >= len(buf_lower) or buf_lower[end_p:end_p+1] in (b" ", b'"', b"\n", b"\r", b";", b"<"):
+                                                if start_idx == -1 or p < start_idx:
+                                                    start_idx = p
+                                    
+                                    if start_idx != -1:
                                         in_target = True
-                                        write_log(log_path, f"INFO  [Single DB Restore] Found database '{target_db}' in backup stream. Beginning extraction...")
-                                        after_tag = buf[idx:]
+                                        write_log(log_path, f"INFO  [Single DB Restore] Found database '{target_db}' in backup stream. Beginning high-speed extraction...")
+                                        after_tag = buf[start_idx:]
                                         nl_pos = after_tag.find(b"\n")
                                         if nl_pos != -1:
-                                            content = after_tag[nl_pos + 1:]
-                                            lines = content.split(b"\n", 3)
-                                            filtered_chunk = bytearray()
-                                            for l in lines:
-                                                if l.strip().startswith(b"\\connect ") or l.strip().startswith(b"SELECT 'CREATE DATABASE") or l.strip().startswith(b"CREATE DATABASE"):
-                                                    continue
-                                                filtered_chunk.extend(l + b"\n")
-                                            rest_in.write(filtered_chunk)
-                                        continue
+                                            buf = after_tag[nl_pos + 1:]
+                                        else:
+                                            buf = b""
                                     else:
-                                        remainder = buf[-512:] if len(buf) > 512 else buf
-                                else:
-                                    idx_end = buf_lower.find(end_tag)
-                                    idx_next = buf_lower.find(start_prefix)
-                                    stop_idx = -1
-                                    if idx_end != -1 and idx_next != -1:
-                                        stop_idx = min(idx_end, idx_next)
-                                    elif idx_end != -1:
-                                        stop_idx = idx_end
-                                    elif idx_next != -1:
-                                        stop_idx = idx_next
+                                        remainder = buf[-1024:] if len(buf) > 1024 else buf
+                                        continue
 
+                                # Check if target single database has finished
+                                if target_clean:
+                                    buf_lower = buf.lower()
+                                    stop_idx = -1
+                                    
+                                    custom_end = b"-- >>> auto_backup_db_end: " + target_clean
+                                    p_end = buf_lower.find(custom_end)
+                                    if p_end != -1:
+                                        stop_idx = p_end
+                                        
+                                    for m in stop_other_markers:
+                                        p = buf_lower.find(m)
+                                        if p != -1:
+                                            sample = buf_lower[p:p+120]
+                                            if target_clean not in sample:
+                                                if stop_idx == -1 or p < stop_idx:
+                                                    stop_idx = p
+                                                    
                                     if stop_idx != -1:
                                         if stop_idx > 0:
-                                            chunk_to_send = filter_lines(buf[:stop_idx])
-                                            rest_in.write(chunk_to_send)
+                                            rest_in.write(process_ddl_chunk(buf[:stop_idx]))
                                         f_done_ev.set()
                                         stop_ev.set()
                                         write_log(log_path, f"INFO  [Single DB Restore] Database '{target_db}' dump fully extracted from stream.")
                                         break
-                                    else:
-                                        if len(buf) > 512:
-                                            chunk_to_send = filter_lines(buf[:-512])
-                                            rest_in.write(chunk_to_send)
-                                            remainder = buf[-512:]
+
+                                # Stream buf with zero-copy/zero-split bypass for COPY data blocks
+                                while buf:
+                                    if in_copy:
+                                        pos = buf.find(b"\n\\.\n")
+                                        add_len = 4
+                                        if pos == -1:
+                                            pos = buf.find(b"\n\\.\r\n")
+                                            add_len = 5
+                                        if pos == -1:
+                                            pos = buf.find(b"\r\n\\.\r\n")
+                                            add_len = 6
+                                            
+                                        if pos != -1:
+                                            rest_in.write(buf[:pos + add_len])
+                                            buf = buf[pos + add_len:]
+                                            in_copy = False
                                         else:
-                                            chunk_to_send = filter_lines(buf)
-                                            rest_in.write(chunk_to_send)
+                                            if len(buf) > 8:
+                                                rest_in.write(buf[:-8])
+                                                remainder = buf[-8:]
+                                                buf = b""
+                                            else:
+                                                remainder = buf
+                                                buf = b""
+                                    else:
+                                        buf_lower = buf.lower()
+                                        c_idx = buf_lower.find(b"copy ")
+                                        if c_idx != -1:
+                                            nl_after_copy = buf.find(b"\n", c_idx)
+                                            if nl_after_copy != -1:
+                                                header_line = buf_lower[c_idx:nl_after_copy]
+                                                if b"from stdin" in header_line:
+                                                    if c_idx > 0:
+                                                        rest_in.write(process_ddl_chunk(buf[:c_idx]))
+                                                    rest_in.write(buf[c_idx:nl_after_copy + 1])
+                                                    buf = buf[nl_after_copy + 1:]
+                                                    in_copy = True
+                                                    continue
+                                                    
+                                        if len(buf) > 1024:
+                                            nl = buf.rfind(b"\n", 0, -1024)
+                                            if nl != -1:
+                                                rest_in.write(process_ddl_chunk(buf[:nl + 1]))
+                                                remainder = buf[nl + 1:]
+                                                buf = b""
+                                            else:
+                                                remainder = buf
+                                                buf = b""
+                                        else:
+                                            remainder = buf
+                                            buf = b""
 
                             if in_target and remainder and not f_done_ev.is_set():
-                                rest_in.write(filter_lines(remainder))
+                                if in_copy:
+                                    rest_in.write(remainder)
+                                else:
+                                    rest_in.write(process_ddl_chunk(remainder))
 
                             postamble = (
                                 b"\nDO $$ BEGIN SET session_replication_role = 'origin'; EXCEPTION WHEN OTHERS THEN NULL; END $$;\n"
@@ -2365,7 +2443,7 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                             break
                 finally:
                     dl_thread.join(timeout=3.0)
-                    if download_err[0]:
+                    if download_err[0] and not filter_done_event.is_set():
                         raise RuntimeError(f"Bunny download stream failed: {download_err[0]}")
                 stdin_stream.close()
 
@@ -2380,6 +2458,13 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 raise RuntimeError(f"Streaming download failed: {e}")
         finally:
             stop_event.set()
+            if filter_done_event.is_set():
+                # Terminate the decompressor immediately since single DB extraction is done
+                if len(processes) > 1:
+                    try:
+                        processes[0].terminate()
+                    except Exception:
+                        pass
             if filter_thread:
                 filter_thread.join(timeout=3.0)
             try:
@@ -2388,7 +2473,9 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 pass
             for p in reversed(processes):
                 try:
-                    p.wait(timeout=3.0)
+                    # Give restore process time to flush/commit remaining transactions
+                    wait_timeout = 30.0 if p == processes[-1] else 3.0
+                    p.wait(timeout=wait_timeout)
                 except Exception:
                     try:
                         p.kill()
@@ -3813,6 +3900,12 @@ def do_restore(restore_id: str):
         selected_database = (restore.get("selected_database") or "").strip()
         if selected_database.lower() in ("__all__", "all", ""):
             selected_database = None
+
+        target_dbname = (target_db.get("database_name") or "").strip()
+        is_cluster_backup = ("_all-" in remote_name or "_cluster-" in remote_name or "Mongdbbackup-" in remote_name or (backup and backup.get("is_cluster", False)) or is_folder)
+        if not selected_database and is_cluster_backup and target_dbname and target_dbname.lower() not in ("__all__", "all", "postgres"):
+            selected_database = target_dbname
+            write_log(log_path, f"INFO  [Auto-Detected Single DB Target] Cluster backup archive detected and target is '{selected_database}'. Restoring ONLY '{selected_database}'.")
 
         if selected_database:
             write_log(log_path, f"INFO  Selective restore: targeting single database '{selected_database}' from backup.")

@@ -4,6 +4,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>BackupVault — Enterprise Database Backup</title>
   <link rel="icon" type="image/png" href="favicon.png" />
   <meta name="description"
@@ -3391,16 +3394,27 @@
       if (!targetDbname) { toast(isNew ? 'Enter a new database name' : 'Select a target database name', 'error'); return; }
 
       const isSingleInstance = v('inline-rs-instance-scope') === 'single';
-      const selectedDb = isSingleInstance ? (v('inline-rs-selected-db') || '').trim() : null;
+      let selectedDb = isSingleInstance ? (v('inline-rs-selected-db') || '').trim() : null;
+
+      const selBackup = document.getElementById('inline-rs-backup');
+      const optBackup = selBackup && selBackup.selectedIndex >= 0 ? selBackup.options[selBackup.selectedIndex] : null;
+      const isCluster = optBackup ? (optBackup.dataset.isCluster === 'true' || optBackup.dataset.dbname === '__all__' || optBackup.dataset.archiveMode === 'multiple' || optBackup.text.includes('All Databases') || (optBackup.dataset.dbs && optBackup.dataset.dbs.length > 0)) : false;
+
+      if (!selectedDb && isCluster && targetDbname && targetDbname !== '__all__' && targetDbname !== 'postgres') {
+        selectedDb = targetDbname;
+      }
       const isChangesOnly = !!(document.getElementById('inline-rs-changes-only') && document.getElementById('inline-rs-changes-only').checked);
       const indexingMode = v('inline-rs-indexing-mode') || 'with_index';
       const speedProfile = v('inline-rs-speed-profile') || 'extreme';
 
+      const modeBadge = indexingMode === 'without_index' ? '<span style="color:#10b981;font-weight:700;">⚡ Without Indexes (Ultra Fast)</span>' : 'Standard Full Index';
+      const syncBadge = isChangesOnly ? '<br><span style="color:#10b981;font-weight:700;">⚡ Smart Sync / Diff Mode: Existing tables preserved</span>' : '';
+
       const msg = isNew
-        ? `Create new database "<b>${targetDbname}</b>" and restore into it?`
+        ? `Create new database "<b>${targetDbname}</b>" and restore${selectedDb ? ` "<b>${selectedDb}</b>"` : ''} into it?<br><br>Mode: ${modeBadge}${syncBadge}`
         : (isChangesOnly
-            ? `Restore into "<b>${targetDbname}</b>" using Smart Sync (Diff Mode)?<br><br><span style="color:var(--accent)">\u2714 Existing tables will be preserved and changes will be merged.</span>`
-            : `Restore to "<b>${targetDbname}</b>"?<br><br><span style="color:var(--danger)">\u26A0 Existing data will be overwritten.</span>`);
+            ? `Restore${selectedDb ? ` database "<b>${selectedDb}</b>"` : ''} into "<b>${targetDbname}</b>" using Smart Sync (Diff Mode)?<br><br><span style="color:var(--accent)">\u2714 Existing tables and data preserved. Incoming records will be merged.</span><br><br>Mode: ${modeBadge}`
+            : `Restore${selectedDb ? ` single database "<b>${selectedDb}</b>"` : ''} to "<b>${targetDbname}</b>"?<br><br><span style="color:var(--danger)">\u26A0 Existing data in "${targetDbname}" will be overwritten.</span><br><br>Mode: ${modeBadge}`);
 
       appConfirm('Confirm Restore', msg, async () => {
         try {
@@ -5417,6 +5431,21 @@
       const isNew = document.getElementById('inline-rs-new-fields') && document.getElementById('inline-rs-new-fields').style.display !== 'none';
       const dbname = isNew ? v('inline-rs-new-dbname').trim() : v('inline-rs-dbname');
       if (!dbId || !dbname) return;
+
+      const backupSel = document.getElementById('inline-rs-backup');
+      if (backupSel && backupSel.selectedIndex >= 0) {
+        const opt = backupSel.options[backupSel.selectedIndex];
+        const isCluster = opt ? (opt.dataset.isCluster === 'true' || opt.dataset.dbname === '__all__' || opt.dataset.archiveMode === 'multiple' || opt.text.includes('All Databases') || (opt.dataset.dbs && opt.dataset.dbs.length > 0)) : false;
+        if (isCluster && dbname && dbname !== '__all__' && dbname !== 'postgres') {
+          const scopeEl = document.getElementById('inline-rs-instance-scope');
+          const selDbEl = document.getElementById('inline-rs-selected-db');
+          if (scopeEl && selDbEl) {
+            scopeEl.value = 'single';
+            selDbEl.value = dbname;
+            onInlineRestoreInstanceScopeChange();
+          }
+        }
+      }
       const collEl = document.getElementById('inline-rs-collection');
       if (!collEl) return;
       collEl.innerHTML = '<option>Loading collections...</option>';
@@ -5520,7 +5549,10 @@
           const instanceScopeGroup = document.getElementById('rs-instance-scope-group');
           const isInstanceBackup = instanceScopeGroup && instanceScopeGroup.style.display !== 'none';
           const isSingleSelected = isInstanceBackup && v('rs-instance-scope') === 'single';
-          const selectedDb = isSingleSelected ? (v('rs-selected-db') || '').trim() : null;
+          let selectedDb = isSingleSelected ? (v('rs-selected-db') || '').trim() : null;
+          if (!selectedDb && isInstanceBackup && targetDbname && targetDbname !== '__all__' && targetDbname !== 'postgres') {
+            selectedDb = targetDbname;
+          }
           if (selectedDb) {
             payload.selected_database = selectedDb;
           }
