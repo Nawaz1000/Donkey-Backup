@@ -92,6 +92,10 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
         "speed_profile": req.speed_profile,
         "archive_mode": req.archive_mode or "single",
         "status": "running",
+        "progress_percentage": 0,
+        "processed_mb": 0.0,
+        "speed_mbps": 0.0,
+        "total_mb": 0.0,
         "size_mb": None,
         "remote_path": None,
         "remote_name": None,
@@ -113,17 +117,30 @@ def get_backup_logs(backup_id: str, user=Depends(get_current_user)):
     backup = next((b for b in backups if b["id"] == backup_id and b["database_id"] in user_db_ids), None)
     if not backup:
         raise HTTPException(404, "Backup not found")
-    from engine import get_log_path, read_log
+    from engine import get_log_path, read_log, ACTIVE_TRACKERS
     live_logs = read_log(get_log_path(backup_id))
     logs = live_logs or backup.get("logs", "")
+
+    trk = ACTIVE_TRACKERS.get(backup_id)
+    if trk:
+        pct = trk.last_pct if trk.last_pct >= 0 else backup.get("progress_percentage", 0)
+        proc_mb = round(trk.bytes_processed / (1024 * 1024), 2)
+        spd = trk.speed_mbps
+        tot_mb = round(trk.total_size / (1024 * 1024), 2) if trk.total_size > 0 else backup.get("total_mb", 0)
+    else:
+        pct = backup.get("progress_percentage", 0)
+        proc_mb = backup.get("processed_mb", 0)
+        spd = backup.get("speed_mbps", 0)
+        tot_mb = backup.get("total_mb", 0)
+
     return {
         "logs": logs,
         "status": backup["status"],
         "error": backup.get("error"),
-        "progress_percentage": backup.get("progress_percentage", 0),
-        "processed_mb": backup.get("processed_mb", 0),
-        "speed_mbps": backup.get("speed_mbps", 0),
-        "total_mb": backup.get("total_mb", 0)
+        "progress_percentage": pct,
+        "processed_mb": proc_mb,
+        "speed_mbps": spd,
+        "total_mb": tot_mb
     }
 
 @router.delete("/{backup_id}")
@@ -242,17 +259,30 @@ def get_restore_logs(restore_id: str, user=Depends(get_current_user)):
     restore = next((r for r in restores if r["id"] == restore_id and r["target_database_id"] in user_db_ids), None)
     if not restore:
         raise HTTPException(404, "Restore not found")
-    from engine import get_log_path, read_log
+    from engine import get_log_path, read_log, ACTIVE_TRACKERS
     live_logs = read_log(get_log_path(f"restore_{restore_id}"))
     logs = live_logs or restore.get("logs", "")
+
+    trk = ACTIVE_TRACKERS.get(restore_id)
+    if trk:
+        pct = trk.last_pct if trk.last_pct >= 0 else restore.get("progress_percentage", 0)
+        proc_mb = round(trk.bytes_processed / (1024 * 1024), 2)
+        spd = trk.speed_mbps
+        tot_mb = round(trk.total_size / (1024 * 1024), 2) if trk.total_size > 0 else restore.get("total_mb", 0)
+    else:
+        pct = restore.get("progress_percentage", 0)
+        proc_mb = restore.get("processed_mb", 0)
+        spd = restore.get("speed_mbps", 0)
+        tot_mb = restore.get("total_mb", 0)
+
     return {
         "logs": logs,
         "status": restore["status"],
         "error": restore.get("error"),
-        "progress_percentage": restore.get("progress_percentage", 0),
-        "processed_mb": restore.get("processed_mb", 0),
-        "speed_mbps": restore.get("speed_mbps", 0),
-        "total_mb": restore.get("total_mb", 0)
+        "progress_percentage": pct,
+        "processed_mb": proc_mb,
+        "speed_mbps": spd,
+        "total_mb": tot_mb
     }
 
 @router.post("/restore")
@@ -299,6 +329,10 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
         "indexing_mode": req.indexing_mode,
         "speed_profile": req.speed_profile,
         "status": "running",
+        "progress_percentage": 0,
+        "processed_mb": 0.0,
+        "speed_mbps": 0.0,
+        "total_mb": 0.0,
         "error": None,
         "started_at": datetime.utcnow().isoformat() + "Z",
         "completed_at": None,

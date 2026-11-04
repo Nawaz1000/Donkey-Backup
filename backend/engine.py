@@ -28,9 +28,11 @@ log = logging.getLogger("backupvault")
 
 ACTIVE_PROCESSES = {}
 ACTIVE_STOP_EVENTS = {}
+ACTIVE_TRACKERS = {}
 
 def cancel_job(job_id: str) -> bool:
     found = False
+    ACTIVE_TRACKERS.pop(job_id, None)
     if job_id in ACTIVE_STOP_EVENTS:
         try:
             ACTIVE_STOP_EVENTS[job_id].set()
@@ -1046,9 +1048,10 @@ class ProgressTracker:
         self.last_pct = -1
         self.last_update_time = 0
         self.start_time = time.time()
-        self.transfer_start_time = None
+        self.transfer_start_time = time.time()
         self.speed_mbps = 0.0
         self.rate_window = deque()  # stores (timestamp, cumulative_bytes)
+        ACTIVE_TRACKERS[self.job_id] = self
 
     def update_bytes(self, num_bytes: int):
         now = time.time()
@@ -1064,13 +1067,13 @@ class ProgressTracker:
             self.rate_window.popleft()
 
         window_dt = now - self.rate_window[0][0]
-        if window_dt >= 0.2:
+        if window_dt >= 0.1:
             window_bytes = self.bytes_processed - self.rate_window[0][1]
-            raw_instant_speed = (window_bytes / (1024 * 1024)) / window_dt
+            raw_instant_speed = (window_bytes / (1024 * 1024)) / max(0.01, window_dt)
             if self.speed_mbps <= 0.0:
                 self.speed_mbps = round(raw_instant_speed, 1)
             else:
-                self.speed_mbps = round(0.75 * raw_instant_speed + 0.25 * self.speed_mbps, 1)
+                self.speed_mbps = round(0.7 * raw_instant_speed + 0.3 * self.speed_mbps, 1)
         else:
             elapsed = max(0.1, now - self.transfer_start_time)
             self.speed_mbps = round((self.bytes_processed / (1024 * 1024)) / elapsed, 1)
@@ -1881,49 +1884,77 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                         start_tag = b"-- >>> auto_backup_db_start: " + target_clean + b" <<<"
                         end_tag = b"-- >>> auto_backup_db_end: " + target_clean + b" <<<"
                         start_prefix = b"-- >>> auto_backup_db_start:"
-                        in_target = False
 
-                        # Flash speed restore session preamble (bypasses per-row constraint evaluation and fsync stalls)
                         preamble = (
                             b"SET synchronous_commit = 'off';\n"
-                            b"SET session_replication_role = 'replica';\n"
+                            b"DO $$ BEGIN SET session_replication_role = 'replica'; EXCEPTION WHEN OTHERS THEN NULL; END $$;\n"
                             b"SET work_mem = '256MB';\n"
-                            b"SET maintenance_work_mem = '1GB';\n"
+                            b"SET maintenance_work_mem = '2GB';\n"
+                            b"SET max_parallel_maintenance_workers = 4;\n"
                         )
                         try:
                             rest_in.write(preamble)
                         except Exception:
                             pass
 
-                        write_buf = bytearray()
-                        buf_flush_threshold = 4 * 1024 * 1024  # 4MB high-throughput buffer
+                        CHUNK_SZ = 2 * 1024 * 1024
+                        in_target = False
+                        remainder = b""
 
                         try:
-                            for line in dec_out:
-                                if stop_ev.is_set():
+                            while not stop_ev.is_set():
+                                data = dec_out.read(CHUNK_SZ)
+                                if not data:
                                     break
-                                if not in_target:
-                                    if line.startswith(b"--") and start_tag in line.lower():
-                                        in_target = True
-                                    continue
-                                else:
-                                    if line.startswith(b"--"):
-                                        lower_line = line.lower()
-                                        if end_tag in lower_line or start_prefix in lower_line:
-                                            break
-                                    if line.startswith(b"\\connect "):
-                                        continue
-                                    write_buf.extend(line)
-                                    if len(write_buf) >= buf_flush_threshold:
-                                        rest_in.write(write_buf)
-                                        write_buf.clear()
+                                buf = remainder + data
+                                remainder = b""
+                                buf_lower = buf.lower()
 
-                            if write_buf:
-                                rest_in.write(write_buf)
-                                write_buf.clear()
+                                if not in_target:
+                                    idx = buf_lower.find(start_tag)
+                                    if idx != -1:
+                                        in_target = True
+                                        after_tag = buf[idx:]
+                                        nl_pos = after_tag.find(b"\n")
+                                        if nl_pos != -1:
+                                            content = after_tag[nl_pos + 1:]
+                                            lines = content.split(b"\n", 3)
+                                            filtered_chunk = bytearray()
+                                            for l in lines:
+                                                if l.strip().startswith(b"\\connect ") or l.strip().startswith(b"SELECT 'CREATE DATABASE"):
+                                                    continue
+                                                filtered_chunk.extend(l + b"\n")
+                                            rest_in.write(filtered_chunk)
+                                        continue
+                                    else:
+                                        remainder = buf[-512:] if len(buf) > 512 else buf
+                                else:
+                                    idx_end = buf_lower.find(end_tag)
+                                    idx_next = buf_lower.find(start_prefix)
+                                    stop_idx = -1
+                                    if idx_end != -1 and idx_next != -1:
+                                        stop_idx = min(idx_end, idx_next)
+                                    elif idx_end != -1:
+                                        stop_idx = idx_end
+                                    elif idx_next != -1:
+                                        stop_idx = idx_next
+
+                                    if stop_idx != -1:
+                                        if stop_idx > 0:
+                                            rest_in.write(buf[:stop_idx])
+                                        break
+                                    else:
+                                        if len(buf) > 512:
+                                            rest_in.write(buf[:-512])
+                                            remainder = buf[-512:]
+                                        else:
+                                            rest_in.write(buf)
+
+                            if in_target and remainder:
+                                rest_in.write(remainder)
 
                             postamble = (
-                                b"\nSET session_replication_role = 'origin';\n"
+                                b"\nDO $$ BEGIN SET session_replication_role = 'origin'; EXCEPTION WHEN OTHERS THEN NULL; END $$;\n"
                                 b"SET synchronous_commit = 'on';\n"
                             )
                             try:
@@ -2024,12 +2055,15 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 max_in_flight = max(16, settings.get("queue_max", 32))
                 s3_client = get_s3_client(storage, max_pool=max(64, concurrency * 2))
 
-                total_size = 0
-                try:
-                    head = s3_client.head_object(Bucket=storage["s3_bucket"], Key=remote_name)
-                    total_size = head.get("ContentLength", 0)
-                except Exception:
-                    pass
+                total_size = (dl_tracker.total_size if dl_tracker and dl_tracker.total_size > 0 else 0)
+                if total_size <= 0:
+                    try:
+                        head = s3_client.head_object(Bucket=storage["s3_bucket"], Key=remote_name)
+                        total_size = head.get("ContentLength", 0)
+                    except Exception:
+                        pass
+                if dl_tracker and dl_tracker.total_size <= 0 and total_size > 0:
+                    dl_tracker.total_size = total_size
 
                 if total_size > part_size:
                     write_log(log_path, f"INFO  S3 archive size resolved: {round(total_size/(1024*1024), 2)} MB. Activating high-speed parallel Range downloader ({concurrency} workers)...")
@@ -2154,21 +2188,35 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 bunny_headers = {"AccessKey": bunny_key}
 
                 # Query remote archive size to activate parallel range downloads
-                total_size = 0
-                if s3_client:
+                total_size = (dl_tracker.total_size if dl_tracker and dl_tracker.total_size > 0 else 0)
+                if total_size <= 0 and s3_client:
                     try:
                         head = s3_client.head_object(Bucket=zone, Key=clean_remote)
                         total_size = head.get("ContentLength", 0)
                     except Exception:
                         pass
 
-                if total_size == 0:
+                if total_size <= 0:
                     try:
                         head_r = session.head(bunny_url, headers=bunny_headers, timeout=10)
                         if head_r.status_code == 200 and "Content-Length" in head_r.headers:
                             total_size = int(head_r.headers["Content-Length"])
                     except Exception:
                         pass
+
+                # If still 0, query via Range 0-0 to extract Content-Range
+                if total_size <= 0:
+                    try:
+                        r_range = session.get(bunny_url, headers={**bunny_headers, "Range": "bytes=0-0"}, timeout=10)
+                        if "Content-Range" in r_range.headers:
+                            cr = r_range.headers["Content-Range"]
+                            if "/" in cr:
+                                total_size = int(cr.split("/")[-1])
+                    except Exception:
+                        pass
+
+                if dl_tracker and dl_tracker.total_size <= 0 and total_size > 0:
+                    dl_tracker.total_size = total_size
 
                 if total_size > part_size:
                     write_log(log_path, f"INFO  BunnyCDN archive size: {round(total_size/(1024*1024), 2)} MB. Activating high-speed parallel Range downloader ({concurrency} workers)...")
@@ -2759,10 +2807,8 @@ def check_pg_options_supported(db: dict, test_options: str = "-c statement_timeo
         ]
         res = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=4)
         if res.returncode != 0:
-            err = (res.stderr or "").lower()
-            if "unsupported startup parameter in options" in err or "pgbouncer" in err:
-                _pg_options_support_cache[cache_key] = False
-                return False
+            _pg_options_support_cache[cache_key] = False
+            return False
         _pg_options_support_cache[cache_key] = True
         return True
     except Exception:
@@ -2867,7 +2913,7 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
                             f"SELECT 'CREATE DATABASE \"{single_db}\"' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '{single_db}')\\gexec\n"
                             f"\\connect \"{single_db}\"\n"
                             f"SET synchronous_commit = 'off';\n"
-                            f"SET session_replication_role = 'replica';\n"
+                            f"DO $$ BEGIN SET session_replication_role = 'replica'; EXCEPTION WHEN OTHERS THEN NULL; END $$;\n"
                             f"SET work_mem = '256MB';\n"
                             f"SET maintenance_work_mem = '1GB';\n"
                         ).encode("utf-8")
@@ -2942,7 +2988,7 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
                             write_log(log_path, f"WARN  pg_dump for '{single_db}' exited with code {p_db.returncode}")
 
                         footer = (
-                            f"\nSET session_replication_role = 'origin';\n"
+                            f"\nDO $$ BEGIN SET session_replication_role = 'origin'; EXCEPTION WHEN OTHERS THEN NULL; END $$;\n"
                             f"SET synchronous_commit = 'on';\n"
                             f"-- >>> AUTO_BACKUP_DB_END: {single_db} <<<\n\n"
                         ).encode("utf-8")
@@ -3131,7 +3177,7 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
         work_mem = "32MB"
         maint_work_mem = "128MB"
         
-    pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit} -c session_replication_role=replica -c max_parallel_maintenance_workers=4 -c client_min_messages=warning"
+    pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit} -c max_parallel_maintenance_workers=4 -c client_min_messages=warning"
     target_check_db = (dbname if dbname and dbname != "__all__" else (selected_database or "postgres"))
     if check_pg_options_supported(db, pg_opts, target_check_db):
         env["PGOPTIONS"] = pg_opts
@@ -3538,6 +3584,7 @@ def do_backup(backup_id: str):
     except Exception as e:
         fail(str(e))
     finally:
+        ACTIVE_TRACKERS.pop(backup_id, None)
         cancel_job(backup_id)
         shutil.rmtree(tmp_dir, ignore_errors=True)
         # Keep log file for a bit, cleanup old ones
@@ -3618,6 +3665,13 @@ def do_restore(restore_id: str):
             if restore.get("collection") and restore.get("collection") != "full":
                 collection = restore["collection"]
             compression = backup.get("compression")
+            if not compression:
+                if ".zst" in remote_name:
+                    compression = "zstd"
+                elif ".gz" in remote_name:
+                    compression = "gzip"
+                else:
+                    compression = "native"
             source_db_connection = next((d for d in dbs if d["id"] == backup.get("database_id")), None)
             fallback_source_dbname = source_db_connection["database_name"] if source_db_connection else None
             source_dbname = backup.get("source_dbname") or fallback_source_dbname
@@ -3799,6 +3853,7 @@ def do_restore(restore_id: str):
     except Exception as e:
         fail(str(e))
     finally:
+        ACTIVE_TRACKERS.pop(restore_id, None)
         cancel_job(restore_id)
         shutil.rmtree(tmp_dir, ignore_errors=True)
         _cleanup_old_logs()

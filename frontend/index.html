@@ -4759,7 +4759,7 @@
                 const speed = mb / elapsedSec; // MB/s
                 speedEl.textContent = speed > 1024 ? (speed / 1024).toFixed(1) + ' GB/s' : speed.toFixed(1) + ' MB/s';
               } else {
-                speedEl.textContent = '—';
+                speedEl.textContent = 'Calculating...';
               }
             }
 
@@ -4778,8 +4778,10 @@
                 tablesEl.textContent = `${restoredTables} / ${totalTables}`;
               } else if (restoredTables > 0) {
                 tablesEl.textContent = `${restoredTables} completed`;
+              } else if (actualPct > 0) {
+                tablesEl.textContent = `${actualPct}% ${isRestore ? 'restored' : 'completed'}`;
               } else {
-                tablesEl.textContent = '—';
+                tablesEl.textContent = 'Streaming...';
               }
             }
 
