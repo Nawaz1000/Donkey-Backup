@@ -15,7 +15,7 @@ import tempfile
 import uuid
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, quote, urlparse
-from utils import read_json, write_json, send_notification, parse_mongo_uri
+from utils import read_json, write_json, send_notification, parse_mongo_uri, encrypt_secret, decrypt_secret, get_decrypted_db, get_decrypted_storage
 
 BACKUP_TMP = "/tmp/backupvault"
 os.makedirs(BACKUP_TMP, exist_ok=True)
@@ -279,6 +279,7 @@ def verify_and_resolve_bunny(storage: dict, log_path: str = None) -> dict:
     Validates Bunny credentials, auto-detects the storage zone's region endpoint
     across all known BunnyCDN regions, and verifies S3 multipart compatibility.
     """
+    storage = get_decrypted_storage(storage)
     import requests
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -437,6 +438,7 @@ def verify_and_resolve_bunny(storage: dict, log_path: str = None) -> dict:
 
 
 def get_s3_client(storage: dict, max_pool: int = 64):
+    storage = get_decrypted_storage(storage)
     import boto3
     from botocore.config import Config
     
@@ -756,6 +758,7 @@ def delete_remote_backup(storage: dict, remote_name: str, folder_name: str = Non
     """
     if not remote_name or not storage:
         return
+    storage = get_decrypted_storage(storage)
 
     stype = storage.get("type")
     clean_rn = remote_name.strip("/")
@@ -1332,11 +1335,11 @@ def get_speed_settings(profile: str):
     if profile == "safe":
         return {"threads": 2, "chunk_size": 8 * 1024 * 1024, "queue_max": 16, "concurrency": 8, "mongo_parallel": 4}
     elif profile == "balanced":
-        return {"threads": max(4, cores), "chunk_size": 16 * 1024 * 1024, "queue_max": 32, "concurrency": 24, "mongo_parallel": 8}
+        return {"threads": max(4, cores), "chunk_size": 16 * 1024 * 1024, "queue_max": 48, "concurrency": 24, "mongo_parallel": 8}
     elif profile == "extreme":
-        return {"threads": max(4, cores), "chunk_size": 16 * 1024 * 1024, "queue_max": 48, "concurrency": 32, "mongo_parallel": 16}
+        return {"threads": max(4, cores), "chunk_size": 16 * 1024 * 1024, "queue_max": 64, "concurrency": 32, "mongo_parallel": 16}
     else: # default (tuned for flash speed)
-        return {"threads": max(4, cores), "chunk_size": 16 * 1024 * 1024, "queue_max": 48, "concurrency": 32, "mongo_parallel": 16}
+        return {"threads": max(4, cores), "chunk_size": 16 * 1024 * 1024, "queue_max": 64, "concurrency": 32, "mongo_parallel": 16}
 
 def get_compressor_info(profile: str = "default", log_path: str = None) -> dict:
     settings = get_speed_settings(profile)
@@ -1771,8 +1774,6 @@ def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: i
                 return
             with cv:
                 ready_parts[part_idx] = data
-                if dl_tracker:
-                    dl_tracker.update_bytes(len(data))
                 cv.notify_all()
         except Exception as ex:
             with cv:
@@ -1789,7 +1790,7 @@ def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: i
                     break
                 with cv:
                     while (part_idx - consumer_idx[0]) >= max_in_flight and not stop_event.is_set() and not download_err[0]:
-                        cv.wait(timeout=0.2)
+                        cv.wait(timeout=0.1)
                 if stop_event.is_set() or download_err[0]:
                     break
                 start_byte = part_idx * part_size
@@ -1815,10 +1816,12 @@ def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: i
                 if download_err[0]:
                     raise RuntimeError(f"Parallel restore download stream failed: {download_err[0]}")
                 part_data = ready_parts.pop(consumer_idx[0])
+                consumer_idx[0] += 1
                 cv.notify_all()
 
             stdin_stream.write(part_data)
-            consumer_idx[0] += 1
+            if dl_tracker:
+                dl_tracker.update_bytes(len(part_data))
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
         prod_thread.join(timeout=2.0)
@@ -1874,25 +1877,60 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 if sql_db_filter:
                     optimize_pipe_fd(p_restore.stdin)
                     def filter_worker(dec_out, rest_in, target_db, stop_ev):
-                        target_clean = target_db.strip().strip('"').lower()
-                        start_tag = f"-- >>> auto_backup_db_start: {target_clean} <<<"
-                        end_tag = f"-- >>> auto_backup_db_end: {target_clean} <<<"
+                        target_clean = target_db.strip().strip('"').lower().encode("utf-8")
+                        start_tag = b"-- >>> auto_backup_db_start: " + target_clean + b" <<<"
+                        end_tag = b"-- >>> auto_backup_db_end: " + target_clean + b" <<<"
+                        start_prefix = b"-- >>> auto_backup_db_start:"
                         in_target = False
+
+                        # Flash speed restore session preamble (bypasses per-row constraint evaluation and fsync stalls)
+                        preamble = (
+                            b"SET synchronous_commit = 'off';\n"
+                            b"SET session_replication_role = 'replica';\n"
+                            b"SET work_mem = '256MB';\n"
+                            b"SET maintenance_work_mem = '1GB';\n"
+                        )
+                        try:
+                            rest_in.write(preamble)
+                        except Exception:
+                            pass
+
+                        write_buf = bytearray()
+                        buf_flush_threshold = 4 * 1024 * 1024  # 4MB high-throughput buffer
+
                         try:
                             for line in dec_out:
                                 if stop_ev.is_set():
                                     break
-                                line_str = line.decode("utf-8", errors="replace")
-                                lower_line = line_str.strip().lower()
-                                if start_tag in lower_line:
-                                    in_target = True
+                                if not in_target:
+                                    if line.startswith(b"--") and start_tag in line.lower():
+                                        in_target = True
                                     continue
-                                elif in_target:
-                                    if end_tag in lower_line or "-- >>> auto_backup_db_start:" in lower_line:
-                                        break
-                                    if line_str.strip().startswith("\\connect "):
+                                else:
+                                    if line.startswith(b"--"):
+                                        lower_line = line.lower()
+                                        if end_tag in lower_line or start_prefix in lower_line:
+                                            break
+                                    if line.startswith(b"\\connect "):
                                         continue
-                                    rest_in.write(line)
+                                    write_buf.extend(line)
+                                    if len(write_buf) >= buf_flush_threshold:
+                                        rest_in.write(write_buf)
+                                        write_buf.clear()
+
+                            if write_buf:
+                                rest_in.write(write_buf)
+                                write_buf.clear()
+
+                            postamble = (
+                                b"\nSET session_replication_role = 'origin';\n"
+                                b"SET synchronous_commit = 'on';\n"
+                            )
+                            try:
+                                rest_in.write(postamble)
+                                rest_in.flush()
+                            except Exception:
+                                pass
                         finally:
                             try:
                                 rest_in.close()
@@ -2828,6 +2866,10 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
                             f"\n-- >>> AUTO_BACKUP_DB_START: {single_db} <<<\n"
                             f"SELECT 'CREATE DATABASE \"{single_db}\"' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '{single_db}')\\gexec\n"
                             f"\\connect \"{single_db}\"\n"
+                            f"SET synchronous_commit = 'off';\n"
+                            f"SET session_replication_role = 'replica';\n"
+                            f"SET work_mem = '256MB';\n"
+                            f"SET maintenance_work_mem = '1GB';\n"
                         ).encode("utf-8")
                         target_stdin.write(hdr)
                         target_stdin.flush()
@@ -2899,7 +2941,11 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
                         if p_db.returncode != 0:
                             write_log(log_path, f"WARN  pg_dump for '{single_db}' exited with code {p_db.returncode}")
 
-                        footer = f"\n-- >>> AUTO_BACKUP_DB_END: {single_db} <<<\n".encode("utf-8")
+                        footer = (
+                            f"\nSET session_replication_role = 'origin';\n"
+                            f"SET synchronous_commit = 'on';\n"
+                            f"-- >>> AUTO_BACKUP_DB_END: {single_db} <<<\n\n"
+                        ).encode("utf-8")
                         target_stdin.write(footer)
                         target_stdin.flush()
                 finally:
@@ -3085,7 +3131,7 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
         work_mem = "32MB"
         maint_work_mem = "128MB"
         
-    pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit} -c max_parallel_maintenance_workers=4 -c client_min_messages=warning"
+    pg_opts = f"-c statement_timeout=0 -c work_mem={work_mem} -c maintenance_work_mem={maint_work_mem} -c synchronous_commit={sync_commit} -c session_replication_role=replica -c max_parallel_maintenance_workers=4 -c client_min_messages=warning"
     target_check_db = (dbname if dbname and dbname != "__all__" else (selected_database or "postgres"))
     if check_pg_options_supported(db, pg_opts, target_check_db):
         env["PGOPTIONS"] = pg_opts
@@ -3274,6 +3320,10 @@ def do_backup(backup_id: str):
     storages = read_json("data/storages.json")
     db = next((d for d in dbs if d["id"] == backup["database_id"]), None)
     storage = next((s for s in storages if s["id"] == backup["storage_id"]), None)
+    if db:
+        db = get_decrypted_db(db)
+    if storage:
+        storage = get_decrypted_storage(storage)
     collection = backup.get("collection", "full")
 
     write_log(log_path, f"INFO  DB: {db and db['name']} | Collection: {collection} | Storage: {storage and storage['type']}")

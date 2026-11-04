@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, Literal
 import uuid
 from datetime import datetime
-from utils import get_current_user, read_json, write_json, parse_mongo_uri
+from utils import get_current_user, read_json, write_json, parse_mongo_uri, encrypt_secret, decrypt_secret, get_decrypted_db
 
 router = APIRouter()
 
@@ -125,10 +125,10 @@ def add_database(req: DatabaseCreate, user=Depends(get_current_user)):
         "host": req.host,
         "port": req.port,
         "username": req.username,
-        "password": req.password,
+        "password": encrypt_secret(req.password) if req.password else "",
         "database_name": req.database_name,
         "description": req.description,
-        "mongo_uri": req.mongo_uri or "",
+        "mongo_uri": encrypt_secret(req.mongo_uri or "") if req.mongo_uri else "",
 
         "created_at": datetime.utcnow().isoformat() + "Z",
         "status": "active",
@@ -210,6 +210,7 @@ def list_db_names(db_id: str, user=Depends(get_current_user)):
     db = next((d for d in dbs if d["id"] == db_id and d["user_id"] == user["sub"]), None)
     if not db:
         raise HTTPException(404, "Database not found")
+    db = get_decrypted_db(db)
 
     if db["type"] == "mongodb":
         try:
@@ -306,6 +307,7 @@ def list_collections(db_id: str, database: str = "", user=Depends(get_current_us
     db = next((d for d in dbs if d["id"] == db_id and d["user_id"] == user["sub"]), None)
     if not db:
         raise HTTPException(404, "Database not found")
+    db = get_decrypted_db(db)
 
     target_db = database or db.get("database_name", "")
 
@@ -375,6 +377,7 @@ def test_connection(db_id: str, user=Depends(get_current_user)):
     db = next((d for d in dbs if d["id"] == db_id and d["user_id"] == user["sub"]), None)
     if not db:
         raise HTTPException(404, "Database not found")
+    db = get_decrypted_db(db)
 
     if db["type"] == "mongodb":
         try:
@@ -470,7 +473,12 @@ def update_database(db_id: str, req: dict, user=Depends(get_current_user)):
         if d["id"] == db_id and d["user_id"] == user["sub"]:
             for k, v in req.items():
                 if k not in ["id", "user_id", "type"]:
-                    d[k] = v
+                    if k == "password":
+                        d[k] = encrypt_secret(v) if v else ""
+                    elif k == "mongo_uri":
+                        d[k] = encrypt_secret(v) if v else ""
+                    else:
+                        d[k] = v
             break
     write_json("data/databases.json", dbs)
     return {"message": "Updated"}

@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, Literal
 import uuid
 from datetime import datetime
-from utils import get_current_user, read_json, write_json
+from utils import get_current_user, read_json, write_json, encrypt_secret, decrypt_secret, get_decrypted_storage
 
 router = APIRouter()
 
@@ -59,21 +59,21 @@ def add_storage(req: StorageCreate, user=Depends(get_current_user)):
         "folder_name": folder,
         # Azure
         "azure_account_name": req.azure_account_name,
-        "azure_account_key": req.azure_account_key,
+        "azure_account_key": encrypt_secret(req.azure_account_key) if req.azure_account_key else None,
         "azure_container": req.azure_container,
         # GCS
         "gcs_bucket": req.gcs_bucket,
-        "gcs_credentials_json": req.gcs_credentials_json,
+        "gcs_credentials_json": encrypt_secret(req.gcs_credentials_json) if req.gcs_credentials_json else None,
         # S3
         "s3_bucket": req.s3_bucket,
         "s3_access_key": req.s3_access_key,
-        "s3_secret_key": req.s3_secret_key,
+        "s3_secret_key": encrypt_secret(req.s3_secret_key) if req.s3_secret_key else None,
         "s3_region": req.s3_region,
         "s3_endpoint_url": req.s3_endpoint_url,
         # BunnyCDN
         "bunny_storage_zone": (req.bunny_storage_zone or "").strip(),
         "bunny_access_key": (req.bunny_storage_zone or "").strip(),
-        "bunny_password": (req.bunny_password or (req.bunny_access_key if req.bunny_access_key != req.bunny_storage_zone else "") or "").strip(),
+        "bunny_password": (encrypt_secret((req.bunny_password or (req.bunny_access_key if req.bunny_access_key != req.bunny_storage_zone else "") or "").strip()) if (req.bunny_password or (req.bunny_access_key if req.bunny_access_key != req.bunny_storage_zone else "")) else ""),
         "bunny_region_url": (req.bunny_region_url or "").strip(),
         "bunny_region": req.bunny_region or "de",
         "created_at": datetime.utcnow().isoformat() + "Z",
@@ -114,17 +114,17 @@ def update_storage(storage_id: str, req: StorageCreate, user=Depends(get_current
             # Azure
             s["azure_account_name"] = req.azure_account_name
             if req.azure_account_key and req.azure_account_key != "********":
-                s["azure_account_key"] = req.azure_account_key
+                s["azure_account_key"] = encrypt_secret(req.azure_account_key)
             s["azure_container"] = req.azure_container
             # GCS
             s["gcs_bucket"] = req.gcs_bucket
             if req.gcs_credentials_json and req.gcs_credentials_json != "********":
-                s["gcs_credentials_json"] = req.gcs_credentials_json
+                s["gcs_credentials_json"] = encrypt_secret(req.gcs_credentials_json)
             # S3
             s["s3_bucket"] = req.s3_bucket
             s["s3_access_key"] = req.s3_access_key
             if req.s3_secret_key and req.s3_secret_key != "********":
-                s["s3_secret_key"] = req.s3_secret_key
+                s["s3_secret_key"] = encrypt_secret(req.s3_secret_key)
             s["s3_region"] = req.s3_region
             s["s3_endpoint_url"] = req.s3_endpoint_url
             # BunnyCDN
@@ -136,9 +136,9 @@ def update_storage(storage_id: str, req: StorageCreate, user=Depends(get_current
                 new_pwd = req.bunny_password.strip()
                 if new_pwd.lower() == s.get("bunny_storage_zone", "").lower():
                     raise HTTPException(400, f"Storage Zone Password cannot be the Storage Zone Name ('{s.get('bunny_storage_zone')}').")
-                s["bunny_password"] = new_pwd
+                s["bunny_password"] = encrypt_secret(new_pwd)
             elif req.bunny_access_key and req.bunny_access_key != "********" and req.bunny_access_key != s.get("bunny_storage_zone"):
-                s["bunny_password"] = req.bunny_access_key.strip()
+                s["bunny_password"] = encrypt_secret(req.bunny_access_key.strip())
 
             if req.bunny_region_url is not None:
                 s["bunny_region_url"] = req.bunny_region_url.strip()
@@ -150,6 +150,7 @@ def update_storage(storage_id: str, req: StorageCreate, user=Depends(get_current
     raise HTTPException(404, "Storage not found")
 
 def perform_test_storage(storage: dict) -> dict:
+    storage = get_decrypted_storage(storage)
     stype = storage.get("type")
     try:
         if stype == "azure":
@@ -229,6 +230,7 @@ def list_storage_files(storage_id: str, user=Depends(get_current_user)):
     storage = next((s for s in storages if s["id"] == storage_id and s["user_id"] == user["sub"]), None)
     if not storage:
         raise HTTPException(404, "Storage not found")
+    storage = get_decrypted_storage(storage)
         
     files = []
     def is_backup_file(fn: str) -> bool:

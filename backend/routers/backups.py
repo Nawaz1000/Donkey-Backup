@@ -4,7 +4,7 @@ from typing import Optional, Literal
 import uuid
 import os
 from datetime import datetime
-from utils import get_current_user, read_json, write_json
+from utils import get_current_user, read_json, write_json, get_decrypted_storage
 from engine import do_backup, do_restore, cancel_job
 
 router = APIRouter()
@@ -156,6 +156,7 @@ def delete_backup(backup_id: str, delete_from_remote: bool = True, user=Depends(
                 storages = read_json("data/storages.json")
                 storage = next((s for s in storages if s["id"] == backup["storage_id"]), None)
                 if storage:
+                    storage = get_decrypted_storage(storage)
                     from engine import delete_remote_backup
                     delete_remote_backup(storage, remote_name, folder_name=backup.get("folder_name"))
             except Exception as e:

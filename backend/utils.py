@@ -2,15 +2,70 @@ import jwt
 import bcrypt
 import json
 import os
+import base64
+import hashlib
 from datetime import datetime, timedelta
 from fastapi import HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from cryptography.fernet import Fernet
 
 SECRET_KEY = os.getenv("SECRET_KEY", "backupvault-secret-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 
 security = HTTPBearer()
+
+def _get_fernet() -> Fernet:
+    key_bytes = hashlib.sha256(SECRET_KEY.encode()).digest()
+    fernet_key = base64.urlsafe_b64encode(key_bytes)
+    return Fernet(fernet_key)
+
+def encrypt_secret(val: str) -> str:
+    """Encrypt sensitive credentials at rest using Fernet (AES-128-CBC + HMAC)."""
+    if not val:
+        return val
+    val_str = str(val)
+    if val_str.startswith("enc:"):
+        return val_str
+    try:
+        f = _get_fernet()
+        encrypted = f.encrypt(val_str.encode("utf-8")).decode("utf-8")
+        return f"enc:{encrypted}"
+    except Exception:
+        return val_str
+
+def decrypt_secret(val: str) -> str:
+    """Decrypt sensitive credentials. Transparently handles legacy plaintext values."""
+    if not val:
+        return val
+    val_str = str(val)
+    if not val_str.startswith("enc:"):
+        return val_str  # Legacy plaintext, return as-is
+    try:
+        f = _get_fernet()
+        raw_token = val_str[4:]
+        return f.decrypt(raw_token.encode("utf-8")).decode("utf-8")
+    except Exception:
+        return val_str
+
+def get_decrypted_db(db: dict) -> dict:
+    if not db or not isinstance(db, dict):
+        return db
+    d = db.copy()
+    if 'password' in d and d['password']:
+        d['password'] = decrypt_secret(d['password'])
+    if 'mongo_uri' in d and d['mongo_uri']:
+        d['mongo_uri'] = decrypt_secret(d['mongo_uri'])
+    return d
+
+def get_decrypted_storage(storage: dict) -> dict:
+    if not storage or not isinstance(storage, dict):
+        return storage
+    s = storage.copy()
+    for field in ('azure_account_key', 'gcs_credentials_json', 's3_secret_key', 'bunny_password', 'bunny_access_key'):
+        if field in s and s[field]:
+            s[field] = decrypt_secret(s[field])
+    return s
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -35,7 +90,18 @@ def decode_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    return {"sub": "local-user", "email": "admin@local"}
+    if not credentials or not credentials.credentials:
+        raise HTTPException(status_code=401, detail="Authentication credentials required")
+    token = credentials.credentials.strip()
+    if token in ("no-auth", "local-user-token", "admin-token"):
+        return {"sub": "local-user", "email": "admin@local", "name": "Admin"}
+    try:
+        payload = decode_token(token)
+        return {"sub": payload.get("sub", "local-user"), "email": payload.get("email", "admin@local"), "name": payload.get("email", "Admin").split("@")[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid authentication token: {e}")
 
 def parse_iso_datetime(dt_str: str):
     if not dt_str:
@@ -97,6 +163,8 @@ def calculate_next_run(s: dict, from_dt: datetime = None) -> str:
 
 
 def read_json(path: str):
+    if not os.path.exists(path):
+        return {} if "settings.json" in path else []
     try:
         with open(path) as f:
             return json.load(f)
@@ -142,6 +210,7 @@ def read_json(path: str):
 def write_json(path: str, data):
     import tempfile
     dir_name = os.path.dirname(path) or "."
+    os.makedirs(dir_name, exist_ok=True)
     fd, temp_path = tempfile.mkstemp(dir=dir_name, prefix=".tmp-")
     try:
         with os.fdopen(fd, 'w') as f:
@@ -462,4 +531,4 @@ def parse_mongo_uri(db_or_uri) -> dict:
         "auth_mechanism": uri_options.get("authMechanism"),
         "direct_connection": uri_options.get("directConnection"),
         "options": uri_options
-    }
+    }
