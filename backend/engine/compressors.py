@@ -51,3 +51,4 @@ def get_compressor_info(profile: str = "default", log_path: str = None) -> dict:
             "type": "gzip"
         }
     return None
+

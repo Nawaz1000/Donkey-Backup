@@ -80,3 +80,4 @@ __all__ = [
     # Tasks
     "do_backup", "do_restore", "run_mongo_sync", "run_pg_sync", "do_sync"
 ]
+

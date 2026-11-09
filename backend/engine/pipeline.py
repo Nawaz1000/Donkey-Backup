@@ -1246,3 +1246,4 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
             ACTIVE_TRACKERS.pop(tracker.job_id, None)
 
         write_log(log_path, f"INFO  Streaming restore successful.")
+

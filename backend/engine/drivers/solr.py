@@ -150,3 +150,4 @@ def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str,
     
     stream_restore_from_storage(cmd, {}, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile)
     write_log(log_path, "INFO  Solr restore streamed successfully via HTTP API.")
+

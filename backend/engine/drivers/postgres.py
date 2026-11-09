@@ -489,3 +489,4 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
         write_log(log_path, "INFO  Connection pooler / proxy detected. Skipping PGOPTIONS for restore compatibility.")
         
     stream_restore_from_storage(cmd, env, storage, remote_name, log_path, decompression_cmd=decompression_cmd, tracker=tracker, speed_profile=speed_profile, sql_db_filter=sql_db_filter, indexing_mode=indexing_mode, changes_only=changes_only)
+
