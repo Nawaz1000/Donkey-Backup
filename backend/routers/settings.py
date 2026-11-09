@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 import os
 from utils import get_current_user, read_json, write_json
+from database import db_manager
 
 router = APIRouter()
 
@@ -11,17 +12,39 @@ class SettingsUpdate(BaseModel):
     teams_webhook: Optional[str] = ""
     telegram_webhook: Optional[str] = ""
 
+class ApiKeyCreate(BaseModel):
+    name: Optional[str] = "Automation Key"
+
 @router.get("/")
 def get_settings(user=Depends(get_current_user)):
-    if not os.path.exists("data/settings.json"):
-        return {}
-    return read_json("data/settings.json")
+    return read_json("data/settings.json") or {}
 
 @router.post("/")
 def update_settings(req: SettingsUpdate, user=Depends(get_current_user)):
     data = req.dict()
     write_json("data/settings.json", data)
     return {"message": "Settings updated successfully"}
+
+# ─── API KEYS FOR AUTOMATION (Terraform, Python scripts, CI/CD) ────────────
+
+@router.get("/api-keys")
+def list_api_keys(user=Depends(get_current_user)):
+    return db_manager.list_api_keys(user["sub"])
+
+@router.post("/api-keys")
+def create_api_key(req: ApiKeyCreate, user=Depends(get_current_user)):
+    raw_key, prefix = db_manager.create_api_key(user["sub"], req.name or "Automation Key")
+    return {
+        "api_key": raw_key,
+        "prefix": prefix,
+        "name": req.name or "Automation Key",
+        "message": "Copy your API key now. It will not be shown again."
+    }
+
+@router.delete("/api-keys/{prefix}")
+def delete_api_key(prefix: str, user=Depends(get_current_user)):
+    db_manager.delete_api_key(user["sub"], prefix)
+    return {"message": "API key revoked successfully"}
 
 @router.post("/test")
 def test_notifications(req: SettingsUpdate, user=Depends(get_current_user)):

@@ -5,7 +5,8 @@ import os
 import base64
 import hashlib
 from datetime import datetime, timedelta
-from fastapi import HTTPException, Depends, status
+from typing import Optional
+from fastapi import HTTPException, Depends, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from cryptography.fernet import Fernet
 
@@ -122,10 +123,37 @@ def decode_token(token: str) -> dict:
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if not credentials or not credentials.credentials:
+from database import db_manager, COLLECTION_MAP
+
+def get_current_user(request: Request = None, credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))):
+    # 1. Check X-API-Key header (for automated scripts, Terraform, CI/CD)
+    if request:
+        api_key = request.headers.get("X-API-Key") or request.headers.get("x-api-key")
+        if api_key:
+            user = db_manager.verify_api_key(api_key.strip())
+            if user:
+                return {"sub": user["id"], "email": user["email"], "name": user.get("name") or user["email"].split("@")[0]}
+            raise HTTPException(status_code=401, detail="Invalid API Key")
+
+    # 2. Check Authorization Bearer header
+    token = None
+    if credentials and credentials.credentials:
+        token = credentials.credentials.strip()
+    elif request and "authorization" in request.headers:
+        auth_hdr = request.headers["authorization"]
+        if auth_hdr.lower().startswith("bearer "):
+            token = auth_hdr[7:].strip()
+
+    if not token:
         raise HTTPException(status_code=401, detail="Authentication credentials required")
-    token = credentials.credentials.strip()
+
+    # Check if API key passed via Bearer header
+    if token.startswith("bv_live_"):
+        user = db_manager.verify_api_key(token)
+        if user:
+            return {"sub": user["id"], "email": user["email"], "name": user.get("name") or user["email"].split("@")[0]}
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+
     if token in ("no-auth", "local-user-token", "admin-token"):
         return {"sub": "local-user", "email": "admin@local", "name": "Admin"}
     try:
@@ -196,6 +224,12 @@ def calculate_next_run(s: dict, from_dt: datetime = None) -> str:
 
 
 def read_json(path: str):
+    clean_key = path.lower().split("/")[-1].replace("\\", "/")
+    if clean_key in COLLECTION_MAP or path.startswith("data/"):
+        coll_name = clean_key.replace(".json", "")
+        if coll_name in COLLECTION_MAP:
+            return db_manager.read_collection(coll_name)
+
     if not os.path.exists(path):
         return {} if "settings.json" in path else []
     try:
@@ -241,6 +275,13 @@ def read_json(path: str):
         raise jde
 
 def write_json(path: str, data):
+    clean_key = path.lower().split("/")[-1].replace("\\", "/")
+    if clean_key in COLLECTION_MAP or path.startswith("data/"):
+        coll_name = clean_key.replace(".json", "")
+        if coll_name in COLLECTION_MAP:
+            db_manager.write_collection(coll_name, data)
+            return
+
     import tempfile
     dir_name = os.path.dirname(path) or "."
     os.makedirs(dir_name, exist_ok=True)
