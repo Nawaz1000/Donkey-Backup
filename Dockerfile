@@ -1,4 +1,4 @@
-# ─── Stage 1: Python backend dependencies ───────────────────────────────────
+## ─── Stage 1: Python backend dependencies ───────────────────────────────────
 FROM python:3.11-slim AS backend
 
 WORKDIR /app
