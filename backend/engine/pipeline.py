@@ -36,6 +36,8 @@ except ImportError:
         get_s3_client, get_bunny_host, get_bunny_key, resolve_bunny_hosts, verify_and_resolve_bunny
     )
 
+from utils import get_decrypted_storage
+
 
 class QueueReader(io.RawIOBase):
     def __init__(self, q: queue.Queue, stop_event: threading.Event):
@@ -142,6 +144,7 @@ def reader_thread_fn(stream, q: queue.Queue, stop_event: threading.Event, chunk_
 
 
 def stream_backup_to_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, compression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default", custom_feeder: callable = None) -> str:
+    storage = get_decrypted_storage(storage)
     write_log(log_path, f"INFO  Starting streaming backup to {storage['type']}: {remote_name} (Profile: {speed_profile})")
 
     # Storage pre-flight validation to catch authentication/region issues before starting dump
@@ -601,6 +604,7 @@ def download_parallel_range_stream(fetch_range_fn, total_size: int, part_size: i
 
 
 def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name: str, log_path: str, decompression_cmd: list = None, tracker: ProgressTracker = None, speed_profile: str = "default", sql_db_filter: str = None, indexing_mode: str = "with_index", changes_only: bool = False):
+    storage = get_decrypted_storage(storage)
     write_log(log_path, f"INFO  Starting streaming restore from {storage['type']}: {remote_name} (Profile: {speed_profile})")
     
     settings = get_speed_settings(speed_profile)

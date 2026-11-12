@@ -309,6 +309,8 @@ def do_restore(restore_id: str):
     storages = read_json("data/storages.json")
 
     target_db = next((d for d in dbs if d["id"] == restore["target_database_id"]), None)
+    if target_db:
+        target_db = get_decrypted_db(target_db)
 
     log.info(f"=== RESTORE START | id={restore_id} target={target_db and target_db['name']} ===")
 
@@ -353,6 +355,8 @@ def do_restore(restore_id: str):
             if not backup:
                 return fail("Backup not found")
             storage = next((s for s in storages if s["id"] == backup["storage_id"]), None)
+            if storage:
+                storage = get_decrypted_storage(storage)
             if not storage:
                 return fail("Storage not found")
             remote_name = backup.get("remote_name")
@@ -375,6 +379,8 @@ def do_restore(restore_id: str):
             total_size = int(backup.get("size_mb", 0) * 1024 * 1024)
         elif restore.get("storage_id") and restore.get("remote_name"):
             storage = next((s for s in storages if s["id"] == restore["storage_id"]), None)
+            if storage:
+                storage = get_decrypted_storage(storage)
             if not storage:
                 return fail("Storage not found")
             remote_name = restore["remote_name"]
@@ -676,6 +682,10 @@ def do_sync(sync_id: str):
     dbs = read_json("data/databases.json")
     src_db = next((d for d in dbs if d["id"] == sync_job["source_database_id"]), None)
     tgt_db = next((d for d in dbs if d["id"] == sync_job["target_database_id"]), None)
+    if src_db:
+        src_db = get_decrypted_db(src_db)
+    if tgt_db:
+        tgt_db = get_decrypted_db(tgt_db)
 
     def fail(msg):
         log.error(f"=== SYNC FAILED | id={sync_id} | {msg} ===")

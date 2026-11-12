@@ -19,7 +19,7 @@ try:
 except ImportError:
     fcntl = None
 
-from utils import read_json, write_json
+from utils import read_json, write_json, decrypt_secret
 
 log = logging.getLogger("backupvault")
 
@@ -161,9 +161,9 @@ def mongo_cmd_args(m: dict) -> list:
         f"--authenticationDatabase={m['auth_source']}",
     ]
     if m.get("username"):
-        args += [f"--username={m['username']}"]
+        args += [f"--username={decrypt_secret(m['username'])}"]
     if m.get("password"):
-        args += [f"--password={m['password']}"]
+        args += [f"--password={decrypt_secret(m['password'])}"]
     if m.get("auth_mechanism"):
         args += [f"--authenticationMechanism={m['auth_mechanism']}"]
     return args
@@ -171,7 +171,8 @@ def mongo_cmd_args(m: dict) -> list:
 
 def pg_env(db: dict) -> dict:
     env = os.environ.copy()
-    env["PGPASSWORD"] = db.get("password", "")
+    raw_pwd = db.get("password", "")
+    env["PGPASSWORD"] = decrypt_secret(raw_pwd) if raw_pwd else ""
     return env
 
 

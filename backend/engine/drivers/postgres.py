@@ -26,7 +26,7 @@ except ImportError:
     from engine.compressors import get_compressor_info, get_speed_settings
     from engine.pipeline import stream_backup_to_storage, stream_restore_from_storage
 
-from utils import read_json
+from utils import read_json, get_decrypted_db, get_decrypted_storage
 
 _pg_options_support_cache = {}
 
@@ -37,6 +37,7 @@ def check_pg_options_supported(db: dict, test_options: str = "-c statement_timeo
     Connection poolers like PgBouncer (commonly on port 6432 or proxies) reject startup parameters
     in PGOPTIONS with 'FATAL: unsupported startup parameter in options: statement_timeout'.
     """
+    db = get_decrypted_db(db)
     host = str(db.get("host", "")).strip()
     port = str(db.get("port", "")).strip()
     cache_key = f"{host}:{port}"
@@ -69,6 +70,7 @@ def check_pg_options_supported(db: dict, test_options: str = "-c statement_timeo
 
 def get_pg_db_size(db: dict, dbname: str) -> int:
     try:
+        db = get_decrypted_db(db)
         cmd = [
             "psql", f"--host={db['host']}", f"--port={db['port']}",
             f"--username={db['username']}", "--no-password", "--dbname=postgres",
@@ -88,6 +90,7 @@ def get_pg_modified_tables(db: dict, dbname: str, since_timestamp: str, log_path
     """Query pg_stat_user_tables to find tables modified since the last backup.
     Returns a list of 'schema.table' strings, or None if detection fails."""
     try:
+        db = get_decrypted_db(db)
         query = (
             "SELECT schemaname || '.' || relname FROM pg_stat_user_tables "
             "WHERE (n_tup_ins + n_tup_upd + n_tup_del) > 0 "
@@ -113,6 +116,8 @@ def get_pg_modified_tables(db: dict, dbname: str, since_timestamp: str, log_path
 
 
 def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", is_cluster: bool = False) -> str:
+    db = get_decrypted_db(db)
+    storage = get_decrypted_storage(storage)
     dbname = (backup_info.get("database_name") or db.get("database_name") or "").strip()
     collection = backup_info.get("collection", "full")
     backup_method = backup_info.get("backup_method", "full")
@@ -383,6 +388,8 @@ def run_pg_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, 
 
 
 def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new_database: bool = False, compression: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", collection: str = None, is_all: bool = False, selected_database: str = None, changes_only: bool = False, jobs: int = None):
+    db = get_decrypted_db(db)
+    storage = get_decrypted_storage(storage)
     dbname = (db.get("database_name") or "").strip()
     sql_db_filter = None
     
@@ -454,7 +461,7 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
         
     decompression_cmd = None
     if compression == "zstd":
-        decompression_cmd = ["zstd", "-d", "-c", f"--threads={settings['threads']}"]
+        decompression_cmd = ["zstd", "-d", "-c", "-q"]
     elif compression in ("pigz", "gzip"):
         if shutil.which("pigz"):
             decompression_cmd = ["pigz", "-d", "-c", "-p", str(settings['threads'])]

@@ -27,13 +27,15 @@ except ImportError:
     from engine.storage import upload_metadata_file, download_metadata_file
     from engine.pipeline import stream_backup_to_storage, stream_restore_from_storage
 
-from utils import read_json, parse_mongo_uri
+from utils import read_json, parse_mongo_uri, get_decrypted_db, get_decrypted_storage, decrypt_secret
 
 
 def backup_mongo_indexes(uri: str, dbname: str, collection_name: str, storage: dict, remote_indexes_name: str, log_path: str):
     import pymongo
     import json
     try:
+        uri = decrypt_secret(uri)
+        storage = get_decrypted_storage(storage)
         write_log(log_path, f"INFO  Fetching index definitions from database: {dbname or 'all'}")
         client = pymongo.MongoClient(uri)
         db_names = [dbname] if dbname else [d for d in client.list_database_names() if d not in ("local", "config", "admin")]
@@ -61,6 +63,8 @@ def backup_mongo_indexes(uri: str, dbname: str, collection_name: str, storage: d
 
 
 def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", is_cluster: bool = False) -> str:
+    db = get_decrypted_db(db)
+    storage = get_decrypted_storage(storage)
     m = parse_mongo_uri(db)
     dbname = backup_info.get("database_name") or db.get("database_name") or m["dbname"]
     if not dbname and not is_cluster:
@@ -230,6 +234,8 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
 
 
 def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = True, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default", target_dbname: str = None, is_cluster_restore: bool = False, selected_database: str = None, changes_only: bool = False):
+    db = get_decrypted_db(db)
+    storage = get_decrypted_storage(storage)
     m = parse_mongo_uri(db)
     dbname = target_dbname or db.get("database_name") or m["dbname"]
     if not dbname and not is_cluster_restore:
@@ -377,7 +383,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
     decompression_threads = settings["threads"]
     decompression_cmd = None
     if compression == "zstd":
-        decompression_cmd = ["zstd", "-d", "-c", f"--threads={decompression_threads}"]
+        decompression_cmd = ["zstd", "-d", "-c", "-q"]
     elif compression in ("pigz", "gzip"):
         if shutil.which("pigz"):
             decompression_cmd = ["pigz", "-d", "-c", "-p", str(decompression_threads)]

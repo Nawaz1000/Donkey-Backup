@@ -53,53 +53,19 @@ def get_decrypted_db(db: dict) -> dict:
     if not db or not isinstance(db, dict):
         return db
     d = db.copy()
-    if 'password' in d and d['password']:
-        d['password'] = decrypt_secret(d['password'])
-    if 'mongo_uri' in d and d['mongo_uri']:
-        d['mongo_uri'] = decrypt_secret(d['mongo_uri'])
+    for field in ('password', 'mongo_uri', 'host', 'username'):
+        if field in d and d[field]:
+            d[field] = decrypt_secret(d[field])
     return d
 
 def get_decrypted_storage(storage: dict) -> dict:
     if not storage or not isinstance(storage, dict):
         return storage
     s = storage.copy()
-    for field in ('azure_account_key', 'gcs_credentials_json', 's3_secret_key', 'bunny_password', 'bunny_access_key'):
+    for field in ('azure_account_key', 'gcs_credentials_json', 's3_secret_key', 'bunny_password', 'bunny_access_key', 's3_access_key'):
         if field in s and s[field]:
             s[field] = decrypt_secret(s[field])
     return s
-
-def _get_fernet() -> Fernet:
-    key_bytes = hashlib.sha256(SECRET_KEY.encode()).digest()
-    fernet_key = base64.urlsafe_b64encode(key_bytes)
-    return Fernet(fernet_key)
-
-def encrypt_secret(val: str) -> str:
-    """Encrypt sensitive credentials at rest using Fernet (AES-128-CBC + HMAC)."""
-    if not val:
-        return val
-    val_str = str(val)
-    if val_str.startswith("enc:"):
-        return val_str
-    try:
-        f = _get_fernet()
-        encrypted = f.encrypt(val_str.encode("utf-8")).decode("utf-8")
-        return f"enc:{encrypted}"
-    except Exception:
-        return val_str
-
-def decrypt_secret(val: str) -> str:
-    """Decrypt sensitive credentials. Transparently handles legacy plaintext values."""
-    if not val:
-        return val
-    val_str = str(val)
-    if not val_str.startswith("enc:"):
-        return val_str  # Legacy plaintext, return as-is
-    try:
-        f = _get_fernet()
-        raw_token = val_str[4:]
-        return f.decrypt(raw_token.encode("utf-8")).decode("utf-8")
-    except Exception:
-        return val_str
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -464,11 +430,13 @@ def parse_mongo_uri(db_or_uri) -> dict:
     from urllib.parse import unquote, quote
 
     if isinstance(db_or_uri, str):
-        raw_uri = db_or_uri
+        raw_uri = decrypt_secret(db_or_uri)
         db_name_default = ""
     else:
-        raw_uri = db_or_uri.get("mongo_uri") or ""
-        db_name_default = db_or_uri.get("database_name", "").strip()
+        dec_db = get_decrypted_db(db_or_uri) if isinstance(db_or_uri, dict) else {}
+        raw_uri = decrypt_secret(dec_db.get("mongo_uri") or "")
+        db_name_default = dec_db.get("database_name", "").strip()
+        db_or_uri = dec_db
 
     # Defaults
     scheme = "mongodb"
@@ -519,14 +487,14 @@ def parse_mongo_uri(db_or_uri) -> dict:
     else:
         # Construct from individual fields if not a string
         if isinstance(db_or_uri, dict):
-            host = db_or_uri.get("host", "").strip() or "localhost"
+            host = decrypt_secret(db_or_uri.get("host", "").strip()) or "localhost"
             port = db_or_uri.get("port")
             if port is not None:
                 hosts = f"{host}:{port}"
             else:
                 hosts = host
-            user = db_or_uri.get("username", "").strip()
-            pwd = db_or_uri.get("password", "").strip()
+            user = decrypt_secret(db_or_uri.get("username", "").strip())
+            pwd = decrypt_secret(db_or_uri.get("password", "").strip())
             if user and pwd:
                 userinfo = f"{user}:{pwd}"
             elif user:
@@ -546,11 +514,11 @@ def parse_mongo_uri(db_or_uri) -> dict:
         safe_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
         if ":" in userinfo:
             u, p = userinfo.split(":", 1)
-            username_unquoted = unquote(u)
-            password_unquoted = unquote(p)
+            username_unquoted = decrypt_secret(unquote(u))
+            password_unquoted = decrypt_secret(unquote(p))
             quoted_userinfo = f"{quote(username_unquoted, safe=safe_chars)}:{quote(password_unquoted, safe=safe_chars)}@"
         else:
-            username_unquoted = unquote(userinfo)
+            username_unquoted = decrypt_secret(unquote(userinfo))
             quoted_userinfo = f"{quote(username_unquoted, safe=safe_chars)}@"
 
     # Map option keys to standard casing

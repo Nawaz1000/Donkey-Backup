@@ -20,6 +20,8 @@ except ImportError:
     from engine.compressors import get_compressor_info
     from engine.pipeline import stream_backup_to_storage, stream_restore_from_storage
 
+from utils import get_decrypted_db, get_decrypted_storage
+
 
 def get_solr_base_url(host: str, port: int) -> str:
     host = host.strip()
@@ -41,6 +43,8 @@ def _get_solr_helper_path() -> str:
 
 
 def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log_path: str, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default") -> str:
+    db = get_decrypted_db(db)
+    storage = get_decrypted_storage(storage)
     solr_host = db["host"]
     solr_port = db["port"]
     
@@ -94,6 +98,8 @@ def run_solr_backup(db: dict, backup: dict, storage: dict, remote_name: str, log
 
 
 def run_solr_restore(db: dict, collection: str, storage: dict, remote_name: str, log_path: str, drop_existing: bool = False, compression: str = None, source_dbname: str = None, indexing_mode: str = "with_index", tracker: ProgressTracker = None, speed_profile: str = "default"):
+    db = get_decrypted_db(db)
+    storage = get_decrypted_storage(storage)
     solr_host = db["host"]
     solr_port = db["port"]
     

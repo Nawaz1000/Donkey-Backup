@@ -68,6 +68,7 @@ def get_bunny_key(storage: dict) -> str:
     """
     if not isinstance(storage, dict):
         return ""
+    storage = get_decrypted_storage(storage)
     if "_resolved_bunny" in storage and storage["_resolved_bunny"].get("bunny_key"):
         return storage["_resolved_bunny"]["bunny_key"]
 
@@ -290,6 +291,7 @@ def get_s3_client(storage: dict, max_pool: int = 64):
 
 def list_storage_objects(storage: dict, prefix: str) -> list:
     """List object keys matching prefix in the given storage."""
+    storage = get_decrypted_storage(storage)
     stype = storage["type"]
     prefix = prefix or ""
     if stype == "azure":
@@ -387,6 +389,7 @@ def get_storage_object_size(storage: dict, remote_name: str) -> int:
     """Returns the size of a remote object in bytes, or 0 if unknown/error."""
     if not remote_name or not storage:
         return 0
+    storage = get_decrypted_storage(storage)
     clean_remote = remote_name.lstrip("/")
     stype = storage.get("type")
     try:
@@ -445,6 +448,7 @@ def get_storage_object_size(storage: dict, remote_name: str) -> int:
 
 
 def upload_metadata_file(storage: dict, remote_name: str, data_str: str):
+    storage = get_decrypted_storage(storage)
     stype = storage["type"]
     if stype == "azure":
         from azure.storage.blob import BlobServiceClient
@@ -511,6 +515,7 @@ def upload_metadata_file(storage: dict, remote_name: str, data_str: str):
 
 def download_metadata_file(storage: dict, remote_name: str) -> str:
     try:
+        storage = get_decrypted_storage(storage)
         stype = storage["type"]
         if stype == "azure":
             from azure.storage.blob import BlobServiceClient
