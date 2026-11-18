@@ -17,7 +17,8 @@ def get_headers(url: str, api_key: str = None, email: str = None, password: str 
     elif email and password:
         login_res = requests.post(f"{url.rstrip('/')}/api/auth/login", json={"email": email, "password": password})
         login_res.raise_for_status()
-        token = login_res.json()["access_token"]
+        d = login_res.json()
+        token = d.get("token") or d.get("access_token")
         return {"Authorization": f"Bearer {token}"}
     else:
         raise ValueError("Must provide either --api-key or both --email and --password")
