@@ -248,7 +248,7 @@ class DatabaseManager:
         """Generates a secure API key with prefix 'bv_live_' and stores its hash."""
         raw_key = f"bv_live_{secrets.token_urlsafe(32)}"
         key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
-        prefix = raw_key[:12] + "..."
+        prefix = raw_key[:16]
         now = datetime.utcnow().isoformat() + "Z"
 
         conn = self.get_conn()

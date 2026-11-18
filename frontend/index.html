@@ -2281,8 +2281,9 @@
 
         <!-- SETTINGS -->
         <div class="page" id="page-settings">
-          <div style="display:flex; justify-content:center; align-items:center; min-height:80vh">
-            <div class="card" style="width:100%; max-width:600px; margin: 0 auto;">
+          <div style="display:flex; flex-direction:column; gap:24px; max-width:800px; margin: 0 auto; padding: 24px 0;">
+            <!-- Notification Webhooks Card -->
+            <div class="card">
               <div class="card-header">
                 <div class="card-title"><i data-lucide="bell"></i> Notification Webhooks</div>
               </div>
@@ -2304,6 +2305,58 @@
                   <button class="btn btn-secondary" id="btn-test-webhooks" onclick="testWebhooks()">Test
                     Webhooks</button>
                   <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- API Keys & Automation Card -->
+            <div class="card">
+              <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+                <div class="card-title"><i data-lucide="key"></i> Automation API Keys (Terraform & Scripts)</div>
+              </div>
+              <div style="padding: 24px;">
+                <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
+                  Generate persistent API keys for triggering backups and restores from Terraform, Python scripts, or CI/CD pipelines without using passwords.
+                </p>
+
+                <!-- New Key Banner (Shown after generation) -->
+                <div id="new-key-banner" style="display:none; background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.3); border-radius:8px; padding:16px; margin-bottom:20px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <span style="font-weight:600; color:#22c55e; font-size:14px;"><i data-lucide="check-circle" style="width:16px; height:16px; vertical-align:middle; margin-right:4px;"></i> API Key Generated Successfully</span>
+                    <button class="btn btn-sm btn-secondary" onclick="copyNewApiKey()"><i data-lucide="copy"></i> Copy Key</button>
+                  </div>
+                  <div style="font-family:monospace; background:rgba(0,0,0,0.3); padding:10px 12px; border-radius:6px; word-break:break-all; font-size:13px; color:#a7f3d0;" id="new-key-value"></div>
+                  <div style="font-size:12px; color:#f87171; margin-top:8px;">
+                    ⚠️ Copy your key now! For security reasons, it will never be displayed again.
+                  </div>
+                </div>
+
+                <div style="display:flex; gap:12px; align-items:flex-end; margin-bottom:24px;">
+                  <div class="form-group" style="flex:1; margin-bottom:0;">
+                    <label>Key Name / Description</label>
+                    <input type="text" id="new-api-key-name" placeholder="e.g. Terraform-Dev or CI-Backup-Key" />
+                  </div>
+                  <button class="btn btn-primary" onclick="generateApiKey()" style="white-space:nowrap;">
+                    <i data-lucide="plus"></i> Generate Key
+                  </button>
+                </div>
+
+                <h4 style="font-size:14px; margin-bottom:12px; font-weight:600;">Active API Keys</h4>
+                <div class="table-container">
+                  <table class="table" style="width:100%;">
+                    <thead>
+                      <tr>
+                        <th>Key Prefix</th>
+                        <th>Name</th>
+                        <th>Created</th>
+                        <th>Last Used</th>
+                        <th style="text-align:right;">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="api-keys-list">
+                      <tr><td colspan="5" style="text-align:center; color:var(--text-muted); padding:20px;">Loading API keys...</td></tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>
@@ -5712,6 +5765,7 @@
         document.getElementById('set-teams').value = settings.teams_webhook || '';
         document.getElementById('set-telegram').value = settings.telegram_webhook || '';
       } catch (e) { toast(e.message, 'error'); }
+      await loadApiKeys();
     }
 
     async function saveSettings() {
@@ -5755,6 +5809,73 @@
           btn.disabled = false;
           btn.innerHTML = 'Test Webhooks';
         }
+      }
+    }
+
+    // ---- API KEYS FOR AUTOMATION ----
+    async function loadApiKeys() {
+      try {
+        const keys = await apiFetch('/settings/api-keys');
+        const tbody = document.getElementById('api-keys-list');
+        if (!tbody) return;
+        if (!keys || keys.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-muted); padding:20px;">No API keys generated yet.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = keys.map(k => `
+          <tr>
+            <td style="font-family:monospace; font-weight:600; color:#38bdf8;">${k.prefix ? (k.prefix.endsWith('...') ? k.prefix : k.prefix + '...') : ''}</td>
+            <td style="font-weight:500;">${esc(k.name || 'API Key')}</td>
+            <td>${k.created_at ? new Date(k.created_at).toLocaleString() : '-'}</td>
+            <td>${k.last_used_at ? new Date(k.last_used_at).toLocaleString() : '<span style="color:var(--text-muted)">Never</span>'}</td>
+            <td style="text-align:right;">
+              <button class="btn btn-sm btn-danger" onclick="revokeApiKey('${k.prefix}')">Revoke</button>
+            </td>
+          </tr>
+        `).join('');
+        lucide.createIcons();
+      } catch (e) {
+        console.error('Failed to load API keys:', e);
+      }
+    }
+
+    async function generateApiKey() {
+      const nameInput = document.getElementById('new-api-key-name');
+      const name = (nameInput.value || '').trim() || 'Automation Key';
+      try {
+        const res = await apiFetch('/settings/api-keys', {
+          method: 'POST',
+          body: JSON.stringify({ name })
+        });
+        if (res.api_key) {
+          nameInput.value = '';
+          const banner = document.getElementById('new-key-banner');
+          const valEl = document.getElementById('new-key-value');
+          valEl.innerText = res.api_key;
+          banner.style.display = 'block';
+          toast('API key created successfully!', 'success');
+          await loadApiKeys();
+        }
+      } catch (e) {
+        toast(e.message || 'Failed to create API key', 'error');
+      }
+    }
+
+    function copyNewApiKey() {
+      const val = document.getElementById('new-key-value').innerText;
+      if (!val) return;
+      navigator.clipboard.writeText(val);
+      toast('API key copied to clipboard!', 'success');
+    }
+
+    async function revokeApiKey(prefix) {
+      if (!confirm(`Are you sure you want to revoke API key ${prefix}? Any scripts using it will stop working.`)) return;
+      try {
+        await apiFetch('/settings/api-keys/' + encodeURIComponent(prefix), { method: 'DELETE' });
+        toast('API key revoked successfully', 'success');
+        await loadApiKeys();
+      } catch (e) {
+        toast(e.message || 'Failed to revoke API key', 'error');
       }
     }
 
