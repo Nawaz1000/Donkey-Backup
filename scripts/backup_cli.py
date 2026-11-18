@@ -20,8 +20,7 @@ def get_headers(url: str, api_key: str = None, email: str = None, password: str 
         d = login_res.json()
         token = d.get("token") or d.get("access_token")
         return {"Authorization": f"Bearer {token}"}
-    else:
-        raise ValueError("Must provide either --api-key or both --email and --password")
+    return {}
 
 def cmd_backup(args):
     url = args.url.rstrip("/")

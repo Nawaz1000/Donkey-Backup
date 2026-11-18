@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, Literal
 import uuid
 from datetime import datetime
-from utils import get_current_user, read_json, write_json, parse_mongo_uri, encrypt_secret, decrypt_secret, get_decrypted_db
+from utils import get_current_user, read_json, write_json, parse_mongo_uri, encrypt_secret, decrypt_secret, get_decrypted_db, has_access
 
 router = APIRouter()
 
@@ -110,7 +110,7 @@ def list_databases(user=Depends(get_current_user)):
 
     return [
         {k: v for k, v in d.items() if k != "password"}
-        for d in dbs if d["user_id"] == user["sub"]
+        for d in dbs if has_access(d, user)
     ]
 
 
@@ -207,7 +207,7 @@ def test_uri(req: TestUriRequest, user=Depends(get_current_user)):
 def list_db_names(db_id: str, user=Depends(get_current_user)):
     """Fetch all databases from the server dynamically."""
     dbs = read_json("data/databases.json")
-    db = next((d for d in dbs if d["id"] == db_id and d["user_id"] == user["sub"]), None)
+    db = next((d for d in dbs if d["id"] == db_id and has_access(d, user)), None)
     if not db:
         raise HTTPException(404, "Database not found")
     db = get_decrypted_db(db)
@@ -304,7 +304,7 @@ def list_db_names(db_id: str, user=Depends(get_current_user)):
 def list_collections(db_id: str, database: str = "", user=Depends(get_current_user)):
     """Fetch all collections/tables for a given database."""
     dbs = read_json("data/databases.json")
-    db = next((d for d in dbs if d["id"] == db_id and d["user_id"] == user["sub"]), None)
+    db = next((d for d in dbs if d["id"] == db_id and has_access(d, user)), None)
     if not db:
         raise HTTPException(404, "Database not found")
     db = get_decrypted_db(db)
@@ -374,7 +374,7 @@ def list_collections(db_id: str, database: str = "", user=Depends(get_current_us
 @router.get("/{db_id}/test")
 def test_connection(db_id: str, user=Depends(get_current_user)):
     dbs = read_json("data/databases.json")
-    db = next((d for d in dbs if d["id"] == db_id and d["user_id"] == user["sub"]), None)
+    db = next((d for d in dbs if d["id"] == db_id and has_access(d, user)), None)
     if not db:
         raise HTTPException(404, "Database not found")
     db = get_decrypted_db(db)
@@ -470,7 +470,7 @@ def test_connection(db_id: str, user=Depends(get_current_user)):
 def update_database(db_id: str, req: dict, user=Depends(get_current_user)):
     dbs = read_json("data/databases.json")
     for d in dbs:
-        if d["id"] == db_id and d["user_id"] == user["sub"]:
+        if d["id"] == db_id and has_access(d, user):
             for k, v in req.items():
                 if k not in ["id", "user_id", "type"]:
                     if k == "password":
@@ -487,6 +487,6 @@ def update_database(db_id: str, req: dict, user=Depends(get_current_user)):
 @router.delete("/{db_id}")
 def delete_database(db_id: str, user=Depends(get_current_user)):
     dbs = read_json("data/databases.json")
-    dbs = [d for d in dbs if not (d["id"] == db_id and d["user_id"] == user["sub"])]
+    dbs = [d for d in dbs if not (d["id"] == db_id and has_access(d, user))]
     write_json("data/databases.json", dbs)
     return {"message": "Deleted"}

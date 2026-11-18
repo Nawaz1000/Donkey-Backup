@@ -4,7 +4,7 @@ from typing import Optional, Literal
 import uuid
 import os
 from datetime import datetime
-from utils import get_current_user, read_json, write_json, get_decrypted_storage
+from utils import get_current_user, read_json, write_json, get_decrypted_storage, has_access
 from engine import do_backup, do_restore, cancel_job
 
 router = APIRouter()
@@ -42,10 +42,10 @@ def list_backups(user=Depends(get_current_user)):
     backups = read_json("data/backups.json")
     dbs = read_json("data/databases.json")
     storages = read_json("data/storages.json")
-    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
+    allowed_db_ids = {d["id"] for d in dbs if has_access(d, user)}
     result = []
     for b in backups:
-        if b["database_id"] in user_db_ids:
+        if user.get("is_admin") or b["database_id"] in allowed_db_ids:
             db = next((d for d in dbs if d["id"] == b["database_id"]), {})
             st = next((s for s in storages if s["id"] == b["storage_id"]), {})
             result.append({**b,
@@ -62,11 +62,11 @@ def list_backups(user=Depends(get_current_user)):
 @router.post("/")
 def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
     dbs = read_json("data/databases.json")
-    db = next((d for d in dbs if d["id"] == req.database_id and d["user_id"] == user["sub"]), None)
+    db = next((d for d in dbs if d["id"] == req.database_id and has_access(d, user)), None)
     if not db:
         raise HTTPException(404, "Database not found")
     storages = read_json("data/storages.json")
-    storage = next((s for s in storages if s["id"] == req.storage_id and s["user_id"] == user["sub"]), None)
+    storage = next((s for s in storages if s["id"] == req.storage_id and has_access(s, user)), None)
     if not storage:
         raise HTTPException(404, "Storage not found")
 
@@ -114,8 +114,8 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
 def get_backup_logs(backup_id: str, user=Depends(get_current_user)):
     backups = read_json("data/backups.json")
     dbs = read_json("data/databases.json")
-    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
-    backup = next((b for b in backups if b["id"] == backup_id and b["database_id"] in user_db_ids), None)
+    allowed_db_ids = {d["id"] for d in dbs if has_access(d, user)}
+    backup = next((b for b in backups if b["id"] == backup_id and (user.get("is_admin") or b["database_id"] in allowed_db_ids)), None)
     if not backup:
         raise HTTPException(404, "Backup not found")
     from engine import get_log_path, read_log, ACTIVE_TRACKERS
@@ -148,9 +148,9 @@ def get_backup_logs(backup_id: str, user=Depends(get_current_user)):
 def delete_backup(backup_id: str, delete_from_remote: bool = True, user=Depends(get_current_user)):
     backups = read_json("data/backups.json")
     dbs = read_json("data/databases.json")
-    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
+    allowed_db_ids = {d["id"] for d in dbs if has_access(d, user)}
     
-    backup = next((b for b in backups if b["id"] == backup_id and b["database_id"] in user_db_ids), None)
+    backup = next((b for b in backups if b["id"] == backup_id and (user.get("is_admin") or b["database_id"] in allowed_db_ids)), None)
     if not backup:
         raise HTTPException(404, "Backup not found")
         
@@ -212,18 +212,18 @@ def backup_stats(user=Depends(get_current_user)):
     if not os.path.exists("data/restores.json"):
         write_json("data/restores.json", [])
     restores = read_json("data/restores.json")
-    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
-    user_backups = [b for b in backups if b["database_id"] in user_db_ids]
+    allowed_db_ids = {d["id"] for d in dbs if has_access(d, user)}
+    user_backups = [b for b in backups if user.get("is_admin") or b["database_id"] in allowed_db_ids]
     completed = [b for b in user_backups if b["status"] == "completed"]
     total_size = sum(b.get("size_mb", 0) or 0 for b in completed)
-    user_restores = [r for r in restores if r["target_database_id"] in user_db_ids]
+    user_restores = [r for r in restores if user.get("is_admin") or r["target_database_id"] in allowed_db_ids]
     return {
         "total": len(user_backups),
         "completed": len(completed),
         "running": len([b for b in user_backups if b["status"] == "running"]),
         "failed": len([b for b in user_backups if b["status"] == "failed"]),
         "total_size_mb": round(total_size, 2),
-        "databases": len(user_db_ids),
+        "databases": len(allowed_db_ids),
         "total_restores": len(user_restores),
     }
 
@@ -234,10 +234,10 @@ def list_restores(user=Depends(get_current_user)):
     restores = read_json("data/restores.json")
     dbs = read_json("data/databases.json")
     backups = read_json("data/backups.json")
-    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
+    allowed_db_ids = {d["id"] for d in dbs if has_access(d, user)}
     result = []
     for r in restores:
-        if r["target_database_id"] in user_db_ids:
+        if user.get("is_admin") or r["target_database_id"] in allowed_db_ids:
             db = next((d for d in dbs if d["id"] == r["target_database_id"]), {})
             bk = next((b for b in backups if b["id"] == r["backup_id"]), {})
             result.append({**r,
@@ -256,8 +256,8 @@ def get_restore_logs(restore_id: str, user=Depends(get_current_user)):
         raise HTTPException(404, "No restores found")
     restores = read_json("data/restores.json")
     dbs = read_json("data/databases.json")
-    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
-    restore = next((r for r in restores if r["id"] == restore_id and r["target_database_id"] in user_db_ids), None)
+    allowed_db_ids = {d["id"] for d in dbs if has_access(d, user)}
+    restore = next((r for r in restores if r["id"] == restore_id and (user.get("is_admin") or r["target_database_id"] in allowed_db_ids)), None)
     if not restore:
         raise HTTPException(404, "Restore not found")
     from engine import get_log_path, read_log, ACTIVE_TRACKERS
@@ -292,11 +292,11 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
         write_json("data/restores.json", [])
 
     dbs = read_json("data/databases.json")
-    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
+    allowed_db_ids = {d["id"] for d in dbs if has_access(d, user)}
 
     if req.backup_id:
         backups = read_json("data/backups.json")
-        backup = next((b for b in backups if b["id"] == req.backup_id and b["database_id"] in user_db_ids), None)
+        backup = next((b for b in backups if b["id"] == req.backup_id and (user.get("is_admin") or b["database_id"] in allowed_db_ids)), None)
         if not backup:
             raise HTTPException(404, "Backup not found")
         if backup["status"] != "completed":
@@ -305,13 +305,13 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
             raise HTTPException(400, "Backup has no remote file stored")
     elif req.storage_id and req.remote_name:
         storages = read_json("data/storages.json")
-        storage = next((s for s in storages if s["id"] == req.storage_id and s["user_id"] == user["sub"]), None)
+        storage = next((s for s in storages if s["id"] == req.storage_id and has_access(s, user)), None)
         if not storage:
             raise HTTPException(404, "Storage not found")
     else:
         raise HTTPException(400, "Must provide either backup_id or both storage_id and remote_name")
 
-    target_db = next((d for d in dbs if d["id"] == req.target_database_id and d["user_id"] == user["sub"]), None)
+    target_db = next((d for d in dbs if d["id"] == req.target_database_id and has_access(d, user)), None)
     if not target_db:
         raise HTTPException(404, "Target database not found")
 

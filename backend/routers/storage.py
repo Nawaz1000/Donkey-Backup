@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, Literal
 import uuid
 from datetime import datetime
-from utils import get_current_user, read_json, write_json, encrypt_secret, decrypt_secret, get_decrypted_storage
+from utils import get_current_user, read_json, write_json, encrypt_secret, decrypt_secret, get_decrypted_storage, has_access
 
 router = APIRouter()
 
@@ -41,7 +41,7 @@ def list_storages(user=Depends(get_current_user)):
     storages = read_json("data/storages.json")
     result = []
     for s in storages:
-        if s["user_id"] == user["sub"]:
+        if has_access(s, user):
             result.append(_mask_storage(s))
     return result
 
@@ -95,7 +95,7 @@ def add_storage(req: StorageCreate, user=Depends(get_current_user)):
 @router.delete("/{storage_id}")
 def delete_storage(storage_id: str, user=Depends(get_current_user)):
     storages = read_json("data/storages.json")
-    storages = [s for s in storages if not (s["id"] == storage_id and s["user_id"] == user["sub"])]
+    storages = [s for s in storages if not (s["id"] == storage_id and has_access(s, user))]
     write_json("data/storages.json", storages)
     return {"message": "Deleted"}
 
@@ -104,7 +104,7 @@ def delete_storage(storage_id: str, user=Depends(get_current_user)):
 def update_storage(storage_id: str, req: StorageCreate, user=Depends(get_current_user)):
     storages = read_json("data/storages.json")
     for s in storages:
-        if s["id"] == storage_id and s["user_id"] == user["sub"]:
+        if s["id"] == storage_id and has_access(s, user):
             s["name"] = req.name
             s["type"] = req.type
             folder = (req.folder_name or "").strip().strip("/")
@@ -219,7 +219,7 @@ def test_new_storage_connection(req: StorageCreate, user=Depends(get_current_use
 @router.post("/{storage_id}/test")
 def test_storage_connection(storage_id: str, user=Depends(get_current_user)):
     storages = read_json("data/storages.json")
-    storage = next((s for s in storages if s["id"] == storage_id and s["user_id"] == user["sub"]), None)
+    storage = next((s for s in storages if s["id"] == storage_id and has_access(s, user)), None)
     if not storage:
         raise HTTPException(404, "Storage not found")
     return perform_test_storage(storage)
@@ -227,7 +227,7 @@ def test_storage_connection(storage_id: str, user=Depends(get_current_user)):
 @router.get("/{storage_id}/files")
 def list_storage_files(storage_id: str, user=Depends(get_current_user)):
     storages = read_json("data/storages.json")
-    storage = next((s for s in storages if s["id"] == storage_id and s["user_id"] == user["sub"]), None)
+    storage = next((s for s in storages if s["id"] == storage_id and has_access(s, user)), None)
     if not storage:
         raise HTTPException(404, "Storage not found")
     storage = get_decrypted_storage(storage)

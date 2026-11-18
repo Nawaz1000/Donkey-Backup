@@ -1,80 +1,69 @@
-# BackupVault API Documentation
+# BackupVault API Documentation (Open Direct URL Access)
 
-Complete guide for triggering automated backups and restores via API using your persistent API Key on `https://autobackup.dev.travelswitch.com`.
+Complete guide for triggering automated backups and restores directly via URL on `https://autobackup.dev.travelswitch.com`.
 
 ---
 
-## 1. Authentication & Base URL
+## 1. Direct URL Access (No API Key or Token Required)
+
+The API is fully open for direct automation. You **do NOT need any headers, tokens, or API keys** to access your databases, storages, backups, or triggers.
 
 - **Base URL:** `https://autobackup.dev.travelswitch.com`
-- **Header:** `X-API-Key: bv_live_YOUR_KEY`
-
-All API endpoints accept the persistent key via the `X-API-Key` HTTP header.
+- **Authentication:** None required (simply make standard HTTP GET/POST calls).
 
 ```bash
-# Example curl test
-curl -H "X-API-Key: bv_live_YOUR_KEY" https://autobackup.dev.travelswitch.com/api/databases/
+# Example test - directly query your databases with zero headers:
+curl -s https://autobackup.dev.travelswitch.com/api/databases/
 ```
 
 ---
 
-## 2. Step 1: Retrieve Database and Storage IDs
+## 2. Step 1: Get Your Database ID & Storage ID
 
-Before triggering a backup, you need the unique ID of the database you want to back up and the ID of the storage destination where the archive will be saved.
-
-### List Databases
+### List Databases:
 ```bash
-curl -s -X GET "https://autobackup.dev.travelswitch.com/api/databases/" \
-  -H "X-API-Key: bv_live_YOUR_KEY"
+curl -s https://autobackup.dev.travelswitch.com/api/databases/
 ```
 
-**Sample Output:**
+**Output:**
 ```json
 [
   {
-    "id": "a1b2c3d4-db01",
-    "name": "Production MongoDB",
+    "id": "e9e4dee6-8a0e-45c0-8267-83edafc73368",
+    "name": "MongoDB-Production",
     "type": "mongodb",
     "database_name": "HotelStaticData"
   }
 ]
 ```
-> Note the `"id"` value (e.g. `a1b2c3d4-db01`).
+> Copy the `"id"` value for your target database.
 
-### List Storage Destinations
+### List Storage Destinations:
 ```bash
-curl -s -X GET "https://autobackup.dev.travelswitch.com/api/storage/" \
-  -H "X-API-Key: bv_live_YOUR_KEY"
+curl -s https://autobackup.dev.travelswitch.com/api/storage/
 ```
 
-**Sample Output:**
+**Output:**
 ```json
 [
   {
-    "id": "e5f6g7h8-st01",
-    "name": "Azure Blob Storage",
+    "id": "7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e",
+    "name": "Azure-Blob-Storage",
     "type": "azure",
     "azure_container": "backups"
   }
 ]
 ```
-> Note the `"id"` value (e.g. `e5f6g7h8-st01`).
+> Copy the `"id"` value for your target storage.
 
 ---
 
-## 3. Step 2: Trigger a Database Backup
+## 3. Step 2: Trigger a Backup via API (cURL)
 
-### API Endpoint
-- **Method:** `POST`
-- **Path:** `/api/backups/`
-- **Headers:**
-  - `X-API-Key: bv_live_YOUR_KEY`
-  - `Content-Type: application/json`
+Trigger a backup by sending a `POST` request to `/api/backups/`:
 
-### cURL Example
 ```bash
 curl -s -X POST "https://autobackup.dev.travelswitch.com/api/backups/" \
-  -H "X-API-Key: bv_live_YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "database_id": "YOUR_DATABASE_ID",
@@ -82,122 +71,74 @@ curl -s -X POST "https://autobackup.dev.travelswitch.com/api/backups/" \
     "backup_method": "full",
     "speed_profile": "extreme",
     "indexing_mode": "with_index",
-    "label": "daily-prod-backup"
+    "label": "automated-backup"
   }'
 ```
 
-### Response (`200 OK`)
+### Response (`200 OK`):
 ```json
 {
-  "id": "9c8b7a6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d",
+  "id": "b74900a2-3f12-4d2c-8a19-b2f9104ac715",
   "database_id": "YOUR_DATABASE_ID",
   "storage_id": "YOUR_STORAGE_ID",
   "status": "pending",
   "created_at": "2026-11-18T12:00:00Z"
 }
 ```
-Save the returned `"id"` (this is the `backup_id`).
-
-### Request Parameters Reference
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `database_id` | string | **Yes** | — | ID of the target database connection |
-| `storage_id` | string | **Yes** | — | ID of the storage destination (Azure, S3, Bunny, GCS) |
-| `database_name` | string | No | `null` | Target a specific database if cluster connection |
-| `collection` | string | No | `""` | Single table/collection name (`""` or `"full"` for entire DB) |
-| `backup_method` | string | No | `"full"` | `"full"`, `"incremental"`, or `"differential"` |
-| `speed_profile` | string | No | `"extreme"` | `"extreme"` (fastest, maximum concurrency), `"balanced"`, `"default"` |
-| `indexing_mode` | string | No | `"with_index"` | `"with_index"` (data + separate index metadata), `"without_index"`, `"only_index"` |
-| `label` | string | No | `""` | Human-readable tag or CI/CD job reference |
-| `archive_mode` | string | No | `"single"` | `"single"` (unified archive) or `"multiple"` (parallel cluster format) |
+The returned `"id"` is your `backup_id`.
 
 ---
 
-## 4. Step 3: Check / Monitor Backup Status
+## 4. Step 3: Check / Monitor Live Backup Status
 
-To check the progress, throughput speed, and completion status of your backup:
-
-### Poll All Backups
 ```bash
-curl -s -X GET "https://autobackup.dev.travelswitch.com/api/backups/" \
-  -H "X-API-Key: bv_live_YOUR_KEY"
+curl -s https://autobackup.dev.travelswitch.com/api/backups/
 ```
 
 Find the entry matching your `backup_id`:
-
 ```json
 {
-  "id": "9c8b7a6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d",
+  "id": "b74900a2-3f12-4d2c-8a19-b2f9104ac715",
   "status": "in_progress",
-  "progress_percentage": 68,
-  "speed_mbps": 142.5,
-  "size_mb": 420.15,
-  "remote_name": "ts-prod-mongodb-2026-11-18_12-00-00/backup.archive.zst"
+  "progress_percentage": 78,
+  "speed_mbps": 154.2,
+  "size_mb": 425.8,
+  "remote_name": "ts-prod-mongodb-2026-11-18/backup.archive.zst"
 }
 ```
 
-### Possible Status Values
-- `pending`: Job queued, preparing streaming pipeline.
-- `in_progress`: Actively streaming compressed data to cloud storage.
-- `completed`: Successfully uploaded and validated.
-- `failed`: An error occurred (check `"error"` field for details).
-
-### View Live Logs
+To view live terminal logs of the backup:
 ```bash
-curl -s -X GET "https://autobackup.dev.travelswitch.com/api/backups/YOUR_BACKUP_ID/logs" \
-  -H "X-API-Key: bv_live_YOUR_KEY"
+curl -s https://autobackup.dev.travelswitch.com/api/backups/YOUR_BACKUP_ID/logs
 ```
 
 ---
 
 ## 5. Step 4: Trigger a Restore via API
 
-To restore an existing backup into a target database:
+To restore a backup into a database:
 
-### API Endpoint
-- **Method:** `POST`
-- **Path:** `/api/backups/restore`
-- **Headers:**
-  - `X-API-Key: bv_live_YOUR_KEY`
-  - `Content-Type: application/json`
-
-### cURL Example
 ```bash
 curl -s -X POST "https://autobackup.dev.travelswitch.com/api/backups/restore" \
-  -H "X-API-Key: bv_live_YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "backup_id": "YOUR_BACKUP_ID",
     "target_database_id": "TARGET_DATABASE_ID",
-    "target_database_name": "HotelStaticData_Restored",
+    "target_database_name": "HotelStaticData",
     "speed_profile": "extreme",
     "indexing_mode": "with_index"
   }'
 ```
 
-### Restore Request Parameters Reference
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `backup_id` | string | **Yes** | ID of the backup record to restore |
-| `target_database_id` | string | **Yes** | ID of destination database connection |
-| `target_database_name` | string | No | Restore into a custom database name |
-| `selected_database` | string | No | Source database to extract if restoring from a cluster archive |
-| `speed_profile` | string | No | `"extreme"` (default), `"balanced"`, `"safe"` |
-| `indexing_mode` | string | No | `"with_index"` (restores tables first, then builds indexes in parallel) |
-| `changes_only` | boolean | No | `true` for Smart Sync / Diff Mode (`--mode=upsert`) |
-
 ---
 
-## 6. One-Command Automation via CLI Script
+## 6. One-Line Command via Python CLI Script
 
-Your repo contains [`scripts/backup_cli.py`](file:///c:/Users/nawaz/OneDrive/Desktop/IH-Projects/Auto-Backup/scripts/backup_cli.py), which handles triggering, live progress polling, and exit codes in a single command.
+Use [`scripts/backup_cli.py`](file:///c:/Users/nawaz/OneDrive/Desktop/IH-Projects/Auto-Backup/scripts/backup_cli.py) directly without any API keys or credentials:
 
 ### Trigger Backup & Wait for Completion:
 ```bash
 python scripts/backup_cli.py backup \
-  --api-key "bv_live_YOUR_KEY" \
   --db-id "YOUR_DATABASE_ID" \
   --storage-id "YOUR_STORAGE_ID" \
   --speed-profile extreme \
@@ -207,7 +148,6 @@ python scripts/backup_cli.py backup \
 ### Trigger Restore & Wait for Completion:
 ```bash
 python scripts/backup_cli.py restore \
-  --api-key "bv_live_YOUR_KEY" \
   --backup-id "YOUR_BACKUP_ID" \
   --target-db-id "TARGET_DATABASE_ID" \
   --target-name "HotelStaticData" \
@@ -219,82 +159,56 @@ python scripts/backup_cli.py restore \
 
 ## 7. Python Script Integration Example
 
-Here is a lightweight Python script using `requests` you can copy directly into your automation pipelines:
-
 ```python
 import time
 import requests
 
 API_URL = "https://autobackup.dev.travelswitch.com"
-API_KEY = "bv_live_YOUR_KEY"
-HEADERS = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
 
-def trigger_backup(db_id: str, storage_id: str, label: str = "automated-backup"):
+def run_backup(db_id: str, storage_id: str):
+    # 1. Trigger backup (no auth headers required!)
     payload = {
         "database_id": db_id,
         "storage_id": storage_id,
         "backup_method": "full",
         "speed_profile": "extreme",
-        "indexing_mode": "with_index",
-        "label": label
+        "indexing_mode": "with_index"
     }
-    
-    # 1. Trigger backup
-    print(f"[*] Triggering backup for DB: {db_id}...")
-    res = requests.post(f"{API_URL}/api/backups/", json=payload, headers=HEADERS)
+    res = requests.post(f"{API_URL}/api/backups/", json=payload)
     res.raise_for_status()
     backup_id = res.json()["id"]
-    print(f"[+] Backup job started! ID: {backup_id}")
+    print(f"[*] Backup triggered! ID: {backup_id}")
 
-    # 2. Poll until completed or failed
-    print("[*] Waiting for completion...")
+    # 2. Wait for completion
     while True:
-        poll = requests.get(f"{API_URL}/api/backups/", headers=HEADERS).json()
+        poll = requests.get(f"{API_URL}/api/backups/").json()
         job = next((b for b in poll if b["id"] == backup_id), None)
-        if not job:
-            time.sleep(3)
-            continue
-        
-        status = job.get("status")
-        pct = job.get("progress_percentage", 0)
-        speed = job.get("speed_mbps", 0)
-        print(f" -> Status: {status.upper()} | Progress: {pct}% | Speed: {speed} MB/s")
-
-        if status == "completed":
-            print(f"[SUCCESS] Backup finished! Remote archive: {job.get('remote_name')}")
-            return job
-        elif status == "failed":
-            raise RuntimeError(f"Backup failed: {job.get('error')}")
-
+        if job:
+            status = job.get("status")
+            pct = job.get("progress_percentage", 0)
+            spd = job.get("speed_mbps", 0)
+            print(f" -> Status: {status.upper()} | Progress: {pct}% | Speed: {spd} MB/s")
+            
+            if status == "completed":
+                print(f"[SUCCESS] Done! Remote file: {job.get('remote_name')}")
+                return job
+            elif status == "failed":
+                raise RuntimeError(f"Backup failed: {job.get('error')}")
         time.sleep(3)
 
 if __name__ == "__main__":
-    trigger_backup(
-        db_id="YOUR_DATABASE_ID",
-        storage_id="YOUR_STORAGE_ID",
-        label="pre-deployment-backup"
-    )
+    run_backup("YOUR_DATABASE_ID", "YOUR_STORAGE_ID")
 ```
 
 ---
 
 ## 8. Terraform Integration Example
 
-In your Terraform root or module:
-
 ```hcl
-variable "backupvault_api_key" {
-  type        = string
-  description = "BackupVault persistent API key"
-  sensitive   = true
-}
-
-resource "null_resource" "pre_release_backup" {
-  # Trigger before database migrations or infrastructure changes
+resource "null_resource" "trigger_backup" {
   provisioner "local-exec" {
     command = <<EOT
       python scripts/backup_cli.py backup \
-        --api-key "${var.backupvault_api_key}" \
         --db-id "YOUR_DATABASE_ID" \
         --storage-id "YOUR_STORAGE_ID" \
         --speed-profile extreme \
@@ -303,4 +217,3 @@ resource "null_resource" "pre_release_backup" {
   }
 }
 ```
-If the backup fails or times out, Terraform will automatically halt and fail the deployment.

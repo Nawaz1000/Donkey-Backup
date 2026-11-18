@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, Literal
 import uuid
 from datetime import datetime
-from utils import get_current_user, read_json, write_json, calculate_next_run
+from utils import get_current_user, read_json, write_json, calculate_next_run, has_access
 from engine import do_backup
 
 router = APIRouter()
@@ -30,10 +30,10 @@ def list_schedules(user=Depends(get_current_user)):
     schedules = read_json("data/schedules.json")
     dbs = read_json("data/databases.json")
     storages = read_json("data/storages.json")
-    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
+    allowed_db_ids = {d["id"] for d in dbs if has_access(d, user)}
     result = []
     for s in schedules:
-        if s["database_id"] in user_db_ids:
+        if user.get("is_admin") or s["database_id"] in allowed_db_ids:
             db = next((d for d in dbs if d["id"] == s["database_id"]), {})
             st = next((st for st in storages if st["id"] == s["storage_id"]), {})
             # Ensure next_run is populated
@@ -60,7 +60,7 @@ def list_schedules(user=Depends(get_current_user)):
 @router.post("/")
 def create_schedule(req: ScheduleCreate, user=Depends(get_current_user)):
     dbs = read_json("data/databases.json")
-    db = next((d for d in dbs if d["id"] == req.database_id and d["user_id"] == user["sub"]), None)
+    db = next((d for d in dbs if d["id"] == req.database_id and has_access(d, user)), None)
     if not db:
         raise HTTPException(404, "Database not found")
     schedules = read_json("data/schedules.json")
@@ -103,9 +103,9 @@ def trigger_schedule(schedule_id: str, background_tasks: BackgroundTasks, user=D
     schedules = read_json("data/schedules.json")
     dbs = read_json("data/databases.json")
     storages = read_json("data/storages.json")
-    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
+    allowed_db_ids = {d["id"] for d in dbs if has_access(d, user)}
 
-    s = next((sch for sch in schedules if sch["id"] == schedule_id and sch["database_id"] in user_db_ids), None)
+    s = next((sch for sch in schedules if sch["id"] == schedule_id and (user.get("is_admin") or sch["database_id"] in allowed_db_ids)), None)
     if not s:
         raise HTTPException(404, "Schedule not found")
 
@@ -171,12 +171,12 @@ def trigger_all_schedules(background_tasks: BackgroundTasks, user=Depends(get_cu
     schedules = read_json("data/schedules.json")
     dbs = read_json("data/databases.json")
     storages = read_json("data/storages.json")
-    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
+    allowed_db_ids = {d["id"] for d in dbs if has_access(d, user)}
 
     triggered = []
     now = datetime.utcnow()
     for s in schedules:
-        if not s.get("enabled", True) or s["database_id"] not in user_db_ids:
+        if not s.get("enabled", True) or (not user.get("is_admin") and s["database_id"] not in allowed_db_ids):
             continue
         db = next((d for d in dbs if d["id"] == s["database_id"]), None)
         storage = next((st for st in storages if st["id"] == s["storage_id"]), None)
@@ -235,9 +235,9 @@ def trigger_all_schedules(background_tasks: BackgroundTasks, user=Depends(get_cu
 def toggle_schedule(schedule_id: str, user=Depends(get_current_user)):
     schedules = read_json("data/schedules.json")
     dbs = read_json("data/databases.json")
-    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
+    allowed_db_ids = {d["id"] for d in dbs if has_access(d, user)}
     for s in schedules:
-        if s["id"] == schedule_id and s["database_id"] in user_db_ids:
+        if s["id"] == schedule_id and (user.get("is_admin") or s["database_id"] in allowed_db_ids):
             s["enabled"] = not s["enabled"]
             break
     write_json("data/schedules.json", schedules)
@@ -247,8 +247,8 @@ def toggle_schedule(schedule_id: str, user=Depends(get_current_user)):
 def delete_schedule(schedule_id: str, user=Depends(get_current_user)):
     schedules = read_json("data/schedules.json")
     dbs = read_json("data/databases.json")
-    user_db_ids = {d["id"] for d in dbs if d["user_id"] == user["sub"]}
-    schedules = [s for s in schedules if not (s["id"] == schedule_id and s["database_id"] in user_db_ids)]
+    allowed_db_ids = {d["id"] for d in dbs if has_access(d, user)}
+    schedules = [s for s in schedules if not (s["id"] == schedule_id and (user.get("is_admin") or s["database_id"] in allowed_db_ids))]
     write_json("data/schedules.json", schedules)
     return {"message": "Deleted"}
 
