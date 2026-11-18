@@ -129,7 +129,7 @@ def cmd_restore(args):
 
 def main():
     parser = argparse.ArgumentParser(description="BackupVault Automation CLI for Terraform & CI/CD")
-    parser.add_argument("--url", default=os.getenv("BACKUPVAULT_URL", "http://localhost:8000"), help="BackupVault API base URL")
+    parser.add_argument("--url", default=os.getenv("BACKUPVAULT_URL", "https://autobackup.dev.travelswitch.com"), help="BackupVault API base URL")
     parser.add_argument("--api-key", default=os.getenv("BACKUPVAULT_API_KEY"), help="API Key (X-API-Key: bv_live_...)")
     parser.add_argument("--email", default=os.getenv("BACKUPVAULT_EMAIL"), help="User email")
     parser.add_argument("--password", default=os.getenv("BACKUPVAULT_PASSWORD"), help="User password")
