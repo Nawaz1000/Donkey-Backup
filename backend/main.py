@@ -151,6 +151,8 @@ async def lifespan(app: FastAPI):
     # Ensure SQLite database is initialized and any legacy JSON files migrated
     try:
         from database import db_manager
+        from routers.auth import ensure_admin_user
+        ensure_admin_user()
     except Exception as e:
         print(f"Database initialization error: {e}")
 
