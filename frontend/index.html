@@ -1285,10 +1285,331 @@
     #inline-storage-list::-webkit-scrollbar-thumb:hover {
       background: rgba(255, 255, 255, 0.2);
     }
+
+    /* ── Auth Screen ── */
+    #auth-screen {
+      display: none;
+      min-height: 100vh;
+      width: 100%;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: radial-gradient(circle at 50% 0%, rgba(16, 185, 129, 0.08) 0%, transparent 50%),
+                  radial-gradient(circle at 80% 80%, rgba(59, 130, 246, 0.05) 0%, transparent 40%),
+                  var(--bg);
+      position: relative;
+      overflow-y: auto;
+      z-index: 9999;
+    }
+
+    .auth-card {
+      width: 100%;
+      max-width: 440px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 36px 32px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+      position: relative;
+      backdrop-filter: blur(20px);
+    }
+
+    .auth-header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+
+    .auth-logo-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 52px;
+      height: 52px;
+      background: #ffffff;
+      border-radius: 14px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 20px rgba(255, 255, 255, 0.15);
+    }
+
+    .auth-logo-badge i {
+      color: #000000;
+      width: 26px;
+      height: 26px;
+    }
+
+    .auth-header h1 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #ffffff;
+      letter-spacing: -0.5px;
+      margin-bottom: 6px;
+    }
+
+    .auth-header p {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .auth-tabs {
+      display: flex;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 4px;
+      margin-bottom: 24px;
+      gap: 4px;
+    }
+
+    .auth-tab-btn {
+      flex: 1;
+      padding: 9px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: var(--transition);
+      text-align: center;
+    }
+
+    .auth-tab-btn.active {
+      background: #ffffff;
+      color: #000000;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    .auth-error {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      background: var(--danger-dim);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+      font-size: 13px;
+      margin-bottom: 20px;
+    }
+
+    .auth-error i {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      color: var(--danger);
+    }
+
+    .password-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .password-wrap input {
+      padding-right: 44px !important;
+    }
+
+    .password-toggle-btn {
+      position: absolute;
+      right: 12px;
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.15s;
+    }
+
+    .password-toggle-btn:hover {
+      color: var(--text);
+    }
+
+    .auth-footer-note {
+      margin-top: 24px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    /* ── Sidebar Footer Profile ── */
+    .sidebar-footer {
+      padding: 16px;
+      border-top: 1px solid var(--border);
+      background: rgba(0, 0, 0, 0.2);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .user-profile-badge {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .user-avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--surface3), #333333);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 12px;
+      color: #ffffff;
+      flex-shrink: 0;
+    }
+
+    .user-details {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      line-height: 1.25;
+    }
+
+    .user-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #ffffff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .user-email {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .btn-logout {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xs);
+      color: var(--muted);
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: var(--transition);
+      flex-shrink: 0;
+    }
+
+    .btn-logout:hover {
+      background: var(--danger-dim);
+      border-color: rgba(239, 68, 68, 0.3);
+      color: var(--danger);
+    }
   </style>
 </head>
 
 <body>
+
+  <!-- AUTH SCREEN -->
+  <div id="auth-screen">
+    <div class="auth-card">
+      <div class="auth-header">
+        <div class="auth-logo-badge">
+          <i data-lucide="database"></i>
+        </div>
+        <h1>DataVault</h1>
+        <p>Enterprise Database Backup & Recovery Platform</p>
+      </div>
+
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab-btn active" id="tab-btn-login" onclick="switchAuthTab('login')">
+          Sign In
+        </button>
+        <button type="button" class="auth-tab-btn" id="tab-btn-register" onclick="switchAuthTab('register')">
+          Create Account
+        </button>
+      </div>
+
+      <div id="auth-error-banner" class="auth-error">
+        <i data-lucide="alert-circle"></i>
+        <span id="auth-error-msg">Error message</span>
+      </div>
+
+      <!-- SIGN IN FORM -->
+      <form id="auth-form-login" onsubmit="handleLoginSubmit(event)">
+        <div class="form-group">
+          <label for="login-email">Email Address</label>
+          <input type="email" id="login-email" required placeholder="admin@example.com" autocomplete="username" />
+        </div>
+        <div class="form-group">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <label for="login-password" style="margin-bottom:0;">Password</label>
+          </div>
+          <div class="password-wrap">
+            <input type="password" id="login-password" required placeholder="Enter your password" autocomplete="current-password" />
+            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('login-password', this)" title="Show/Hide Password">
+              <i data-lucide="eye" style="width:16px;height:16px;"></i>
+            </button>
+          </div>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; font-size:12px; color:var(--muted);">
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer; text-transform:none; font-weight:normal; letter-spacing:normal; margin-bottom:0; color:var(--text2);">
+            <input type="checkbox" id="login-remember" checked style="width:auto; margin:0;" /> Remember this session
+          </label>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full" id="btn-login-submit" style="padding:12px; font-size:14px;">
+          <span>Sign In</span>
+          <i data-lucide="arrow-right" style="width:16px;height:16px;"></i>
+        </button>
+        <div style="margin-top:12px; text-align:center;">
+          <button type="button" class="btn btn-secondary btn-full" style="font-size:12px; padding:9px 12px; gap:6px; color:var(--text2);" onclick="quickFillAdmin()">
+            <i data-lucide="key" style="width:14px;height:14px;"></i> Quick Admin Sign In
+          </button>
+        </div>
+      </form>
+
+      <!-- REGISTER FORM -->
+      <form id="auth-form-register" style="display:none;" onsubmit="handleRegisterSubmit(event)">
+        <div class="form-group">
+          <label for="reg-name">Full Name</label>
+          <input type="text" id="reg-name" required placeholder="Administrator" autocomplete="name" />
+        </div>
+        <div class="form-group">
+          <label for="reg-email">Work Email</label>
+          <input type="email" id="reg-email" required placeholder="admin@company.com" autocomplete="email" />
+        </div>
+        <div class="form-group">
+          <label for="reg-password">Password</label>
+          <div class="password-wrap">
+            <input type="password" id="reg-password" required placeholder="Minimum 6 characters" minlength="6" autocomplete="new-password" />
+            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('reg-password', this)" title="Show/Hide Password">
+              <i data-lucide="eye" style="width:16px;height:16px;"></i>
+            </button>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full" id="btn-reg-submit" style="padding:12px; font-size:14px; margin-top:8px;">
+          <span>Create Account</span>
+          <i data-lucide="user-plus" style="width:16px;height:16px;"></i>
+        </button>
+      </form>
+
+      <div class="auth-footer-note">
+        Protected by DataVault RBAC & Token Authentication.<br>
+        <span style="color:var(--text2);">Direct programmatic API calls can run with API key or direct URL.</span>
+      </div>
+    </div>
+  </div>
 
   <!-- APP -->
   <div id="app">
@@ -1324,6 +1645,18 @@
           <i data-lucide="settings"></i> Settings
         </div>
       </nav>
+      <div class="sidebar-footer">
+        <div class="user-profile-badge">
+          <div class="user-avatar" id="sidebar-user-avatar">AD</div>
+          <div class="user-details">
+            <div class="user-name" id="sidebar-user-name">Admin</div>
+            <div class="user-email" id="sidebar-user-email">admin@local</div>
+          </div>
+        </div>
+        <button type="button" class="btn-logout" onclick="logout()" title="Sign Out">
+          <i data-lucide="log-out" style="width:15px;height:15px;"></i>
+        </button>
+      </div>
     </div>
 
     <div class="main">
@@ -3164,16 +3497,218 @@
       }
     }
 
-    let token = 'no-auth';
-    let currentUser = { id: 'local', name: 'Admin', email: 'admin@local' };
+    // ---- AUTHENTICATION STATE & LOGIC ----
+    let token = localStorage.getItem('bv_token') || '';
+    let currentUser = null;
+    try {
+      currentUser = JSON.parse(localStorage.getItem('bv_user') || 'null');
+    } catch (e) {
+      currentUser = null;
+    }
 
-    // ---- APP INIT ----
-    function initApp() {
-      document.getElementById('app').style.display = 'flex';
+    function switchAuthTab(tab) {
+      clearAuthError();
+      const loginTab = document.getElementById('tab-btn-login');
+      const regTab = document.getElementById('tab-btn-register');
+      const loginForm = document.getElementById('auth-form-login');
+      const regForm = document.getElementById('auth-form-register');
+
+      if (tab === 'login') {
+        loginTab.classList.add('active');
+        regTab.classList.remove('active');
+        loginForm.style.display = 'block';
+        regForm.style.display = 'none';
+      } else {
+        loginTab.classList.remove('active');
+        regTab.classList.add('active');
+        loginForm.style.display = 'none';
+        regForm.style.display = 'block';
+      }
+      lucide.createIcons();
+    }
+
+    function showAuthError(msg) {
+      const banner = document.getElementById('auth-error-banner');
+      const text = document.getElementById('auth-error-msg');
+      if (banner && text) {
+        text.textContent = msg || 'An error occurred. Please try again.';
+        banner.style.display = 'flex';
+        lucide.createIcons();
+      }
+    }
+
+    function clearAuthError() {
+      const banner = document.getElementById('auth-error-banner');
+      if (banner) banner.style.display = 'none';
+    }
+
+    function togglePasswordVisibility(inputId, btn) {
+      const input = document.getElementById(inputId);
+      if (!input) return;
+      const isPassword = input.type === 'password';
+      input.type = isPassword ? 'text' : 'password';
+      const icon = isPassword ? 'eye-off' : 'eye';
+      btn.innerHTML = `<i data-lucide="${icon}" style="width:16px;height:16px;"></i>`;
+      lucide.createIcons();
+    }
+
+    function quickFillAdmin() {
+      const emailInput = document.getElementById('login-email');
+      const passInput = document.getElementById('login-password');
+      if (emailInput && passInput) {
+        emailInput.value = 'admin@autobackup.local';
+        passInput.value = 'adminpassword123';
+      }
+      clearAuthError();
+      const form = document.getElementById('auth-form-login');
+      if (form) form.requestSubmit();
+    }
+
+    async function handleLoginSubmit(e) {
+      e.preventDefault();
+      clearAuthError();
+      const email = document.getElementById('login-email').value.trim();
+      const password = document.getElementById('login-password').value;
+      const submitBtn = document.getElementById('btn-login-submit');
+
+      const originalText = submitBtn.innerHTML;
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = `<span>Signing in...</span>`;
+
+      try {
+        const resp = await fetch(`${API}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          throw new Error(data.detail || 'Invalid email or password');
+        }
+
+        token = data.token;
+        currentUser = data.user;
+        localStorage.setItem('bv_token', token);
+        localStorage.setItem('bv_user', JSON.stringify(currentUser));
+
+        showApp();
+      } catch (err) {
+        showAuthError(err.message || 'Login failed');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalText;
+        lucide.createIcons();
+      }
+    }
+
+    async function handleRegisterSubmit(e) {
+      e.preventDefault();
+      clearAuthError();
+      const name = document.getElementById('reg-name').value.trim();
+      const email = document.getElementById('reg-email').value.trim();
+      const password = document.getElementById('reg-password').value;
+      const submitBtn = document.getElementById('btn-reg-submit');
+
+      const originalText = submitBtn.innerHTML;
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = `<span>Creating account...</span>`;
+
+      try {
+        const resp = await fetch(`${API}/auth/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, email, password })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          throw new Error(data.detail || 'Registration failed');
+        }
+
+        token = data.token;
+        currentUser = data.user;
+        localStorage.setItem('bv_token', token);
+        localStorage.setItem('bv_user', JSON.stringify(currentUser));
+
+        showApp();
+      } catch (err) {
+        showAuthError(err.message || 'Registration failed');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalText;
+        lucide.createIcons();
+      }
+    }
+
+    function updateUserUI() {
+      const avatarEl = document.getElementById('sidebar-user-avatar');
+      const nameEl = document.getElementById('sidebar-user-name');
+      const emailEl = document.getElementById('sidebar-user-email');
+
+      const name = (currentUser && currentUser.name) ? currentUser.name : 'Administrator';
+      const email = (currentUser && currentUser.email) ? currentUser.email : 'admin@local';
+
+      if (nameEl) nameEl.textContent = name;
+      if (emailEl) emailEl.textContent = email;
+      if (avatarEl) {
+        const initials = name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() || 'AD';
+        avatarEl.textContent = initials;
+      }
+    }
+
+    function showApp() {
+      const authScreen = document.getElementById('auth-screen');
+      const app = document.getElementById('app');
+      if (authScreen) authScreen.style.display = 'none';
+      if (app) app.style.display = 'flex';
+
+      updateUserUI();
       showPage('dashboard');
       if (typeof initTimePicker === 'function') initTimePicker();
       startQuotesSlideshow();
       lucide.createIcons();
+    }
+
+    function showAuthScreen() {
+      const authScreen = document.getElementById('auth-screen');
+      const app = document.getElementById('app');
+      if (app) app.style.display = 'none';
+      if (authScreen) authScreen.style.display = 'flex';
+      clearAuthError();
+      lucide.createIcons();
+    }
+
+    function logout() {
+      token = '';
+      currentUser = null;
+      localStorage.removeItem('bv_token');
+      localStorage.removeItem('bv_user');
+      showAuthScreen();
+    }
+
+    // ---- APP INIT ----
+    async function initApp() {
+      if (!token) {
+        showAuthScreen();
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API}/auth/me`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.user) {
+            currentUser = data.user;
+            localStorage.setItem('bv_user', JSON.stringify(currentUser));
+          }
+          showApp();
+        } else {
+          logout();
+        }
+      } catch (err) {
+        showApp();
+      }
     }
 
     // ---- NAVIGATION ----
@@ -3581,7 +4116,13 @@
         }
         throw new Error('Invalid response format from server');
       }
-      if (!r.ok) throw new Error(d.detail || `Request failed (HTTP ${r.status})`);
+      if (!r.ok) {
+        if (r.status === 401 && !path.startsWith('/auth/')) {
+          logout();
+          throw new Error('Session expired. Please sign in again.');
+        }
+        throw new Error(d.detail || `Request failed (HTTP ${r.status})`);
+      }
       return d;
     }
 
