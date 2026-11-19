@@ -614,6 +614,7 @@ def parse_mongo_uri(db_or_uri) -> dict:
     # Reconstruct URI
     uri_path = f"/{dbname}" if dbname else "/"
     reconstructed_uri = f"{scheme}://{quoted_userinfo}{hosts}{uri_path}{query_str}"
+    uri_no_db = f"{scheme}://{quoted_userinfo}{hosts}/{query_str}"
 
     # Parse first host and port for compatibility
     first_host = hosts.split(",")[0]
@@ -629,6 +630,7 @@ def parse_mongo_uri(db_or_uri) -> dict:
 
     return {
         "uri": reconstructed_uri,
+        "uri_no_db": uri_no_db,
         "hosts": hosts,
         "host": h,
         "port": port_val,

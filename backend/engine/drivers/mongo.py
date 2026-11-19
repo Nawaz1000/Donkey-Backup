@@ -28,6 +28,18 @@ except ImportError:
     from engine.pipeline import stream_backup_to_storage, stream_restore_from_storage
 
 from utils import read_json, parse_mongo_uri, get_decrypted_db, get_decrypted_storage, decrypt_secret
+from urllib.parse import urlsplit, urlunsplit
+
+
+def strip_mongo_uri_database(uri: str) -> str:
+    """Strips any database path from a MongoDB URI so mongodump/mongorestore do not conflict with --db or --ns options."""
+    if not uri:
+        return uri
+    try:
+        parts = urlsplit(uri)
+        return urlunsplit((parts.scheme, parts.netloc, "/", parts.query, parts.fragment))
+    except Exception:
+        return uri
 
 
 def backup_mongo_indexes(uri: str, dbname: str, collection_name: str, storage: dict, remote_indexes_name: str, log_path: str):
@@ -118,6 +130,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
 
     settings = get_speed_settings(speed_profile)
     archive_mode = backup_info.get("archive_mode", "single")
+    uri_no_db = strip_mongo_uri_database(m["uri"])
     if is_cluster:
         import pymongo
         write_log(log_path, f"INFO  Cluster-wide backup requested (Format: {archive_mode}). Fetching databases...")
@@ -137,7 +150,6 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
         comp_info = get_compressor_info(speed_profile, log_path)
         ext = comp_info["ext"] if comp_info else "gz"
         compression_cmd = comp_info["cmd"] if comp_info else None
-        uri_no_db = m["uri"].replace(f"/{m['dbname']}?", "/?").replace(f"/{m['dbname']}", "/") if m['dbname'] else m["uri"]
 
         if archive_mode == "multiple" or remote_name.endswith("/"):
             folder_remote_name = remote_name if remote_name.endswith("/") else f"{remote_name}/"
@@ -189,7 +201,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
 
     cmd = [
         "mongodump",
-        f"--uri={m['uri']}",
+        f"--uri={uri_no_db}",
         f"--db={dbname}",
         "--archive",
         f"--numParallelCollections={settings['mongo_parallel']}",
@@ -228,7 +240,7 @@ def run_mongo_backup(db: dict, backup_info: dict, storage: dict, remote_name: st
     env["GOGC"] = "100"
     env["GOMAXPROCS"] = str(settings["threads"])
     
-    backup_mongo_indexes(m["uri"], dbname, collection, storage, remote_name + ".indexes.json", log_path)
+    backup_mongo_indexes(uri_no_db, dbname, collection, storage, remote_name + ".indexes.json", log_path)
     
     return stream_backup_to_storage(cmd, env, storage, remote_name, log_path, compression_cmd=compression_cmd, tracker=tracker, speed_profile=speed_profile)
 
@@ -342,7 +354,7 @@ def run_mongo_restore(db: dict, collection: str, storage: dict, remote_name: str
         batch_size = 10000
         write_concern = "{w: 1}"
         
-    uri_to_use = (m["uri"].replace(f"/{m['dbname']}?", "/?").replace(f"/{m['dbname']}", "/") if m['dbname'] else m["uri"]) if is_cluster_restore else m["uri"]
+    uri_to_use = strip_mongo_uri_database(m["uri"])
     cmd = [
         "mongorestore",
         f"--uri={uri_to_use}",
