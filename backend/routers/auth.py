@@ -47,20 +47,7 @@ class LoginRequest(BaseModel):
 
 @router.post("/register")
 def register(req: RegisterRequest):
-    users = read_json("data/users.json")
-    if any(u["email"].lower() == req.email.lower() or u.get("username", "").lower() == req.email.lower() for u in users):
-        raise HTTPException(400, "Email or username already registered")
-    user = {
-        "id": str(uuid.uuid4()),
-        "name": req.name,
-        "email": req.email,
-        "username": req.email.split("@")[0] if "@" in req.email else req.email,
-        "password": hash_password(req.password),
-    }
-    users.append(user)
-    write_json("data/users.json", users)
-    token = create_token(user["id"], user["email"])
-    return {"token": token, "user": {"id": user["id"], "name": user["name"], "email": user["email"], "username": user.get("username", user["email"])}}
+    raise HTTPException(403, "Public registration is disabled. Please contact the administrator.")
 
 @router.post("/login")
 def login(req: LoginRequest):

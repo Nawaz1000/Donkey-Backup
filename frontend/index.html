@@ -1350,36 +1350,6 @@
       color: var(--muted);
     }
 
-    .auth-tabs {
-      display: flex;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 4px;
-      margin-bottom: 24px;
-      gap: 4px;
-    }
-
-    .auth-tab-btn {
-      flex: 1;
-      padding: 9px 14px;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 600;
-      border: none;
-      background: transparent;
-      color: var(--muted);
-      cursor: pointer;
-      transition: var(--transition);
-      text-align: center;
-    }
-
-    .auth-tab-btn.active {
-      background: #ffffff;
-      color: #000000;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    }
-
     .auth-error {
       display: none;
       align-items: center;
@@ -1532,15 +1502,6 @@
         <p>Enterprise Database Backup & Recovery Platform</p>
       </div>
 
-      <div class="auth-tabs">
-        <button type="button" class="auth-tab-btn active" id="tab-btn-login" onclick="switchAuthTab('login')">
-          Sign In
-        </button>
-        <button type="button" class="auth-tab-btn" id="tab-btn-register" onclick="switchAuthTab('register')">
-          Create Account
-        </button>
-      </div>
-
       <div id="auth-error-banner" class="auth-error">
         <i data-lucide="alert-circle"></i>
         <span id="auth-error-msg">Error message</span>
@@ -1550,7 +1511,7 @@
       <form id="auth-form-login" onsubmit="handleLoginSubmit(event)">
         <div class="form-group">
           <label for="login-email">Username or Email</label>
-          <input type="text" id="login-email" required placeholder="admin" value="admin" autocomplete="username" />
+          <input type="text" id="login-email" required placeholder="Enter username or email" autocomplete="username" />
         </div>
         <div class="form-group">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
@@ -1572,41 +1533,10 @@
           <span>Sign In</span>
           <i data-lucide="arrow-right" style="width:16px;height:16px;"></i>
         </button>
-        <div style="margin-top:12px; text-align:center;">
-          <button type="button" class="btn btn-secondary btn-full" style="font-size:12px; padding:9px 12px; gap:6px; color:var(--text2);" onclick="quickFillAdmin()">
-            <i data-lucide="key" style="width:14px;height:14px;"></i> Quick Sign In as admin
-          </button>
-        </div>
-      </form>
-
-      <!-- REGISTER FORM -->
-      <form id="auth-form-register" style="display:none;" onsubmit="handleRegisterSubmit(event)">
-        <div class="form-group">
-          <label for="reg-name">Full Name</label>
-          <input type="text" id="reg-name" required placeholder="Administrator" autocomplete="name" />
-        </div>
-        <div class="form-group">
-          <label for="reg-email">Work Email</label>
-          <input type="email" id="reg-email" required placeholder="admin@company.com" autocomplete="email" />
-        </div>
-        <div class="form-group">
-          <label for="reg-password">Password</label>
-          <div class="password-wrap">
-            <input type="password" id="reg-password" required placeholder="Minimum 6 characters" minlength="6" autocomplete="new-password" />
-            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('reg-password', this)" title="Show/Hide Password">
-              <i data-lucide="eye" style="width:16px;height:16px;"></i>
-            </button>
-          </div>
-        </div>
-        <button type="submit" class="btn btn-primary btn-full" id="btn-reg-submit" style="padding:12px; font-size:14px; margin-top:8px;">
-          <span>Create Account</span>
-          <i data-lucide="user-plus" style="width:16px;height:16px;"></i>
-        </button>
       </form>
 
       <div class="auth-footer-note">
-        Default credentials: Username <strong style="color:#ffffff;">admin</strong> | Password <strong style="color:#ffffff;">KXbTv6n7d6</strong><br>
-        <span style="color:var(--text2);">Direct programmatic API calls can run with API key or direct URL.</span>
+        Protected by DataVault Enterprise Security.
       </div>
     </div>
   </div>
@@ -3506,27 +3436,6 @@
       currentUser = null;
     }
 
-    function switchAuthTab(tab) {
-      clearAuthError();
-      const loginTab = document.getElementById('tab-btn-login');
-      const regTab = document.getElementById('tab-btn-register');
-      const loginForm = document.getElementById('auth-form-login');
-      const regForm = document.getElementById('auth-form-register');
-
-      if (tab === 'login') {
-        loginTab.classList.add('active');
-        regTab.classList.remove('active');
-        loginForm.style.display = 'block';
-        regForm.style.display = 'none';
-      } else {
-        loginTab.classList.remove('active');
-        regTab.classList.add('active');
-        loginForm.style.display = 'none';
-        regForm.style.display = 'block';
-      }
-      lucide.createIcons();
-    }
-
     function showAuthError(msg) {
       const banner = document.getElementById('auth-error-banner');
       const text = document.getElementById('auth-error-msg');
@@ -3550,18 +3459,6 @@
       const icon = isPassword ? 'eye-off' : 'eye';
       btn.innerHTML = `<i data-lucide="${icon}" style="width:16px;height:16px;"></i>`;
       lucide.createIcons();
-    }
-
-    function quickFillAdmin() {
-      const emailInput = document.getElementById('login-email');
-      const passInput = document.getElementById('login-password');
-      if (emailInput && passInput) {
-        emailInput.value = 'admin';
-        passInput.value = 'KXbTv6n7d6';
-      }
-      clearAuthError();
-      const form = document.getElementById('auth-form-login');
-      if (form) form.requestSubmit();
     }
 
     async function handleLoginSubmit(e) {
@@ -3594,44 +3491,6 @@
         showApp();
       } catch (err) {
         showAuthError(err.message || 'Login failed');
-      } finally {
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = originalText;
-        lucide.createIcons();
-      }
-    }
-
-    async function handleRegisterSubmit(e) {
-      e.preventDefault();
-      clearAuthError();
-      const name = document.getElementById('reg-name').value.trim();
-      const email = document.getElementById('reg-email').value.trim();
-      const password = document.getElementById('reg-password').value;
-      const submitBtn = document.getElementById('btn-reg-submit');
-
-      const originalText = submitBtn.innerHTML;
-      submitBtn.disabled = true;
-      submitBtn.innerHTML = `<span>Creating account...</span>`;
-
-      try {
-        const resp = await fetch(`${API}/auth/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, email, password })
-        });
-        const data = await resp.json();
-        if (!resp.ok) {
-          throw new Error(data.detail || 'Registration failed');
-        }
-
-        token = data.token;
-        currentUser = data.user;
-        localStorage.setItem('bv_token', token);
-        localStorage.setItem('bv_user', JSON.stringify(currentUser));
-
-        showApp();
-      } catch (err) {
-        showAuthError(err.message || 'Registration failed');
       } finally {
         submitBtn.disabled = false;
         submitBtn.innerHTML = originalText;
@@ -3674,6 +3533,8 @@
       if (app) app.style.display = 'none';
       if (authScreen) authScreen.style.display = 'flex';
       clearAuthError();
+      const passEl = document.getElementById('login-password');
+      if (passEl) passEl.value = '';
       lucide.createIcons();
     }
 
