@@ -635,6 +635,87 @@
       padding: 48px 20px
     }
 
+    /* ── History Expandable Table Rows ── */
+    .history-clickable-row {
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .history-clickable-row:hover td {
+      background: rgba(255, 255, 255, 0.035) !important;
+    }
+
+    .history-clickable-row.expanded td {
+      background: rgba(255, 255, 255, 0.04) !important;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.02) !important;
+    }
+
+    .history-row-chevron {
+      transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s;
+    }
+
+    .history-clickable-row.expanded .history-row-chevron {
+      transform: rotate(90deg) !important;
+      color: var(--accent) !important;
+    }
+
+    .history-detail-card {
+      padding: 20px 24px;
+      border-left: 3px solid var(--accent);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.005) 100%);
+    }
+
+    .history-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+      margin-bottom: 14px;
+    }
+
+    .history-meta-box {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: var(--radius-sm);
+      padding: 13px 15px;
+    }
+
+    .history-meta-box .meta-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--muted);
+      margin-bottom: 10px;
+      letter-spacing: 0.6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .history-meta-box .meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+      margin-bottom: 6px;
+      gap: 8px;
+    }
+
+    .history-meta-box .meta-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .history-meta-box .meta-label {
+      color: var(--text2);
+      font-size: 12px;
+    }
+
+    .history-meta-box .meta-val {
+      color: #ffffff;
+      font-weight: 600;
+      text-align: right;
+    }
+
     /* ── Badges ── */
     .badge {
       display: inline-flex;
@@ -4673,6 +4754,94 @@
     let filteredHistoryItems = [];
     let historyCurrentPage = 1;
     const HISTORY_ITEMS_PER_PAGE = 8;
+    const expandedHistoryRows = new Set();
+
+    function copyToClipboard(text, msg) {
+      if (!text) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+          toast(msg || 'Copied to clipboard!', 'success');
+        }).catch(() => {
+          fallbackCopyText(text, msg);
+        });
+      } else {
+        fallbackCopyText(text, msg);
+      }
+    }
+
+    function fallbackCopyText(text, msg) {
+      const t = document.createElement('textarea');
+      t.value = text;
+      t.style.position = 'fixed';
+      t.style.opacity = '0';
+      document.body.appendChild(t);
+      t.select();
+      try {
+        document.execCommand('copy');
+        toast(msg || 'Copied to clipboard!', 'success');
+      } catch (e) {
+        toast('Failed to copy', 'error');
+      }
+      document.body.removeChild(t);
+    }
+
+    function toggleHistoryRow(id, event) {
+      if (event && event.target && event.target.closest('button, a, input, select')) {
+        return;
+      }
+      const detailRow = document.getElementById(`history-detail-${id}`);
+      const chevron = document.getElementById(`chevron-${id}`);
+      const mainRow = document.getElementById(`history-row-${id}`);
+      if (!detailRow) return;
+
+      const isExpanded = detailRow.style.display !== 'none';
+      if (isExpanded) {
+        detailRow.style.display = 'none';
+        if (mainRow) mainRow.classList.remove('expanded');
+        if (chevron) {
+          chevron.style.transform = 'rotate(0deg)';
+          chevron.style.color = 'var(--text2)';
+        }
+        expandedHistoryRows.delete(id);
+      } else {
+        detailRow.style.display = 'table-row';
+        if (mainRow) mainRow.classList.add('expanded');
+        if (chevron) {
+          chevron.style.transform = 'rotate(90deg)';
+          chevron.style.color = 'var(--accent)';
+        }
+        expandedHistoryRows.add(id);
+        lucide.createIcons();
+      }
+    }
+
+    async function viewHistoryLogs(id, isRestore, e) {
+      if (e) e.stopPropagation();
+      const detailRow = document.getElementById(`history-detail-${id}`);
+      if (detailRow && detailRow.style.display === 'none') {
+        toggleHistoryRow(id);
+      }
+      const box = document.getElementById(`logs-box-${id}`);
+      if (!box) return;
+
+      if (box.style.display !== 'none') {
+        box.style.display = 'none';
+        return;
+      }
+
+      box.style.display = 'block';
+      box.innerHTML = '<span class="spinner" style="display:inline-block;width:13px;height:13px;margin-right:6px;"></span> Fetching execution logs...';
+
+      try {
+        const endpoint = isRestore ? `/backups/restores/${id}/logs` : `/backups/${id}/logs`;
+        const res = await apiFetch(endpoint);
+        const logs = res.logs || 'No execution logs recorded for this job.';
+        box.textContent = logs;
+        box.scrollTop = box.scrollHeight;
+      } catch (err) {
+        box.textContent = 'Failed to load logs: ' + err.message;
+      }
+    }
 
     async function loadBackups() {
       const btn = document.getElementById("btn-refresh-history");
@@ -4760,25 +4929,206 @@
         else if (item.status === 'running') statusBadgeHtml = '<span class="badge badge-orange" style="background:rgba(255,255,255,0.1); color:#fff; font-weight:600; border:1px solid rgba(255,255,255,0.2); padding:4px 8px;">Running</span>';
         else statusBadgeHtml = `<span class="badge" style="background:rgba(255,255,255,0.05); color:var(--text2); padding:4px 8px;">${item.status}</span>`;
 
+        const isExpanded = expandedHistoryRows.has(item.id);
+        const destinationStr = item.remote_path || item.remote_name || 'Configured Destination';
+        const storageProvider = item.storage_type ? item.storage_type.toUpperCase() : (item.remote_path?.split('://')[0]?.toUpperCase() || 'STORAGE');
+        const storageTarget = item.storage_name || 'Cloud Destination';
+        const rawDb = item.actual_db_name || item.target_actual_db_name || item.source_dbname || dbName;
+        const dbEngine = item.database_type ? item.database_type.toUpperCase() : 'DATABASE';
+        const scopeStr = item.collection === 'full' || !item.collection ? 'All Collections (Entire Database)' : `Collection: ${item.collection}`;
+        const archiveModeStr = item.archive_mode === 'multiple' ? 'Multiple Archives (Per DB)' : 'Single Unified Archive';
+        const indexModeStr = item.indexing_mode === 'only_index' ? 'Indexes Only' : (item.indexing_mode === 'without_index' ? 'No Indexes' : 'With Index Metadata');
+        const speedProf = item.speed_profile ? item.speed_profile.charAt(0).toUpperCase() + item.speed_profile.slice(1) : 'Default';
+        const compEngine = item.compression ? item.compression.toUpperCase() : 'ZSTD';
+        const processedSize = item.processed_mb ? (item.processed_mb > 1024 ? (item.processed_mb / 1024).toFixed(1) + ' GB' : item.processed_mb + ' MB') : '—';
+        const uncompressedTotal = item.total_mb ? (item.total_mb > 1024 ? (item.total_mb / 1024).toFixed(1) + ' GB' : item.total_mb + ' MB') : '—';
+        const transferSpeed = item.speed_mbps ? `${item.speed_mbps} MB/s` : '—';
+        const startedTime = fmtDate(item.created_at || item.started_at || new Date(item.timestamp).toISOString());
+        const completedTime = item.completed_at ? fmtDate(item.completed_at) : '—';
+
         return `
-    <tr>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${startIdx + idx + 1}</td>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); font-weight:600;"><i data-lucide="database" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;color:var(--text2);"></i> ${dbName}</td>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);"><span style="background:rgba(255,255,255,0.05); padding:4px 8px; border-radius:4px; font-size:11px; border:1px solid rgba(255,255,255,0.1);">${typeLabel}</span></td>
+    <tr id="history-row-${item.id}" class="history-clickable-row ${isExpanded ? 'expanded' : ''}" onclick="toggleHistoryRow('${item.id}', event)">
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2); white-space:nowrap;">
+        <span style="display:inline-flex; align-items:center; gap:8px;">
+          <i data-lucide="chevron-right" id="chevron-${item.id}" class="history-row-chevron" style="width:14px;height:14px; ${isExpanded ? 'transform:rotate(90deg); color:var(--accent);' : 'color:var(--text2);'}"></i>
+          <span>${startIdx + idx + 1}</span>
+        </span>
+      </td>
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); font-weight:600;">
+        <i data-lucide="database" style="width:14px;height:14px;display:inline-block;vertical-align:middle;margin-right:6px;color:var(--text2);"></i> ${dbName}
+      </td>
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);">
+        <span style="background:rgba(255,255,255,0.05); padding:4px 8px; border-radius:4px; font-size:11px; border:1px solid rgba(255,255,255,0.1);">${typeLabel}</span>
+      </td>
       <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${sizeStr}</td>
       <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${opStr}</td>
       <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${durStr}</td>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${fmtDate(new Date(item.timestamp).toISOString())}</td>
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05); color:var(--text2);">${startedTime}</td>
       <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);">${statusBadgeHtml}</td>
-      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);">
+      <td style="padding:16px 24px; border-bottom:1px solid rgba(255,255,255,0.05);" onclick="event.stopPropagation()">
         <div style="display:inline-flex; gap:4px; align-items:center;">
-          <button class="btn btn-icon" title="View Details" style="background:transparent; border:none; color:var(--text2); cursor:pointer; width:28px; height:28px;" onclick="alert('Operation Details\n\nID: ${item.id}\nMessage: ${item.error || item.status}\nDate: ${fmtDate(new Date(item.timestamp).toISOString())}')"><i data-lucide="eye" style="width:15px;height:15px;"></i></button>
+          <button class="btn btn-icon" title="Toggle Details" style="background:transparent; border:none; color:var(--text2); cursor:pointer; width:28px; height:28px;" onclick="toggleHistoryRow('${item.id}', event)"><i data-lucide="${isExpanded ? 'chevron-up' : 'info'}" style="width:15px;height:15px;"></i></button>
+          <button class="btn btn-icon" title="View Logs" style="background:transparent; border:none; color:var(--text2); cursor:pointer; width:28px; height:28px;" onclick="viewHistoryLogs('${item.id}', ${item.is_restore}, event)"><i data-lucide="file-text" style="width:15px;height:15px;"></i></button>
           ${item.is_restore ? `
             <button class="btn btn-icon" title="Delete Restore Record" style="background:transparent; border:none; color:var(--danger); cursor:pointer; width:28px; height:28px;" onclick="deleteRestoreRecord('${item.id}')"><i data-lucide="trash" style="width:15px;height:15px;"></i></button>
           ` : `
-            <button class="btn btn-icon" title="Delete Record Only" style="background:transparent; border:none; color:var(--text2); cursor:pointer; width:28px; height:28px;" onclick="deleteBackup('${item.id}', true)"><i data-lucide="trash" style="width:15px;height:15px;"></i></button>
+            <button class="btn btn-icon" title="Restore From This Backup" style="background:transparent; border:none; color:var(--accent); cursor:pointer; width:28px; height:28px;" onclick="openRestoreFromBackup('${item.id}', '${item.label || ''}')"><i data-lucide="rotate-ccw" style="width:15px;height:15px;"></i></button>
+            <button class="btn btn-icon" title="Delete Record Only" style="background:transparent; border:none; color:var(--text2); cursor:pointer; width:28px; height:28px;" onclick="deleteBackup('${item.id}', false)"><i data-lucide="trash" style="width:15px;height:15px;"></i></button>
             <button class="btn btn-icon" title="Delete from Cloud Bucket & Local" style="background:transparent; border:none; color:var(--danger); cursor:pointer; width:28px; height:28px;" onclick="deleteBackup('${item.id}', true)"><i data-lucide="cloud-off" style="width:15px;height:15px;"></i></button>
           `}
+        </div>
+      </td>
+    </tr>
+
+    <!-- EXPANDABLE DETAIL ROW -->
+    <tr id="history-detail-${item.id}" class="history-detail-row" style="display: ${isExpanded ? 'table-row' : 'none'};">
+      <td colspan="9" style="padding:0; border-bottom:1px solid rgba(255,255,255,0.08); background:rgba(0,0,0,0.3);">
+        <div class="history-detail-card">
+          
+          <!-- Header Bar -->
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.05);">
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <span style="font-size:14px; font-weight:700; color:#fff;">
+                <i data-lucide="${item.is_restore ? 'rotate-ccw' : 'hard-drive'}" style="width:16px;height:16px;display:inline-block;vertical-align:middle;margin-right:6px;color:var(--accent);"></i>
+                ${item.is_restore ? 'Restore Operation Details' : 'Backup Operation Details'}
+              </span>
+              <span style="font-family:'SF Mono','Cascadia Code',monospace; font-size:11px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); padding:3px 8px; border-radius:4px; color:var(--text2); display:inline-flex; align-items:center; gap:6px;">
+                Job ID: ${item.id}
+                <i data-lucide="copy" style="width:12px;height:12px;cursor:pointer;color:var(--accent);" onclick="copyToClipboard('${item.id}', 'Job ID copied to clipboard!')" title="Copy Job ID"></i>
+              </span>
+              <span style="font-size:11px; text-transform:uppercase; letter-spacing:0.5px; background:rgba(16,185,129,0.1); color:var(--accent); border:1px solid rgba(16,185,129,0.2); padding:3px 8px; border-radius:4px; font-weight:600;">
+                ${dbEngine}
+              </span>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <button class="btn btn-secondary btn-sm" style="font-size:12px; padding:6px 12px; gap:6px; background:var(--surface); border:1px solid var(--border);" onclick="viewHistoryLogs('${item.id}', ${item.is_restore}, event)">
+                <i data-lucide="terminal" style="width:13px;height:13px;"></i> View Execution Logs
+              </button>
+              ${!item.is_restore && item.status === 'completed' ? `
+                <button class="btn btn-primary btn-sm" style="font-size:12px; padding:6px 14px; gap:6px; background:#ffffff; color:#000000; box-shadow:none; font-weight:600;" onclick="openRestoreFromBackup('${item.id}', '${item.label || ''}')">
+                  <i data-lucide="rotate-ccw" style="width:13px;height:13px;color:#000000;"></i> Restore This Backup
+                </button>
+              ` : ''}
+            </div>
+          </div>
+
+          <!-- 4-Box Metadata Grid -->
+          <div class="history-detail-grid">
+            
+            <!-- BOX 1: Backup Type & Scope -->
+            <div class="history-meta-box">
+              <div class="meta-title">
+                <i data-lucide="layers" style="width:13px;height:13px;color:var(--accent);"></i>
+                Backup Type & Strategy
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">Backup Method:</span>
+                <span class="meta-val" style="color:var(--accent);">${typeLabel}</span>
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">Collection Scope:</span>
+                <span class="meta-val">${scopeStr}</span>
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">Indexing Mode:</span>
+                <span class="meta-val">${indexModeStr}</span>
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">Archive Format:</span>
+                <span class="meta-val">${archiveModeStr}</span>
+              </div>
+            </div>
+
+            <!-- BOX 2: Destination & Cloud Storage -->
+            <div class="history-meta-box">
+              <div class="meta-title">
+                <i data-lucide="cloud" style="width:13px;height:13px;color:#3b82f6;"></i>
+                Destination & Storage
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">Storage Provider:</span>
+                <span class="meta-val" style="color:#60a5fa;">${storageProvider}</span>
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">Storage Target:</span>
+                <span class="meta-val">${storageTarget}</span>
+              </div>
+              <div class="meta-row" style="align-items:flex-start;">
+                <span class="meta-label">Remote Path:</span>
+                <span class="meta-val" style="font-family:'SF Mono','Cascadia Code',monospace; font-size:11px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-flex; align-items:center; gap:4px;" title="${destinationStr}">
+                  <span>${destinationStr}</span>
+                  ${(item.remote_path || item.remote_name) ? `<i data-lucide="copy" style="width:12px;height:12px;cursor:pointer;color:var(--accent);flex-shrink:0;" onclick="copyToClipboard('${item.remote_path || item.remote_name}', 'Storage destination path copied!')" title="Copy Destination Path"></i>` : ''}
+                </span>
+              </div>
+            </div>
+
+            <!-- BOX 3: Database & Source -->
+            <div class="history-meta-box">
+              <div class="meta-title">
+                <i data-lucide="server" style="width:13px;height:13px;color:#a855f7;"></i>
+                Database Details
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">Connection Profile:</span>
+                <span class="meta-val">${dbName}</span>
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">${item.is_restore ? 'Target Database:' : 'Source Database:'}</span>
+                <span class="meta-val">${rawDb}</span>
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">Engine:</span>
+                <span class="meta-val">${dbEngine}</span>
+              </div>
+              ${item.is_restore && item.backup_id ? `
+                <div class="meta-row">
+                  <span class="meta-label">Source Backup ID:</span>
+                  <span class="meta-val" style="font-family:monospace;font-size:11px;">${item.backup_id.substring(0, 10)}...</span>
+                </div>
+              ` : ''}
+            </div>
+
+            <!-- BOX 4: Performance & Size -->
+            <div class="history-meta-box">
+              <div class="meta-title">
+                <i data-lucide="zap" style="width:13px;height:13px;color:#f59e0b;"></i>
+                Performance & Metrics
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">Compressed Size:</span>
+                <span class="meta-val" style="color:var(--accent);">${sizeStr}</span>
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">Data Processed:</span>
+                <span class="meta-val">${processedSize} ${item.total_mb ? `<span style="color:var(--muted);font-size:10px;">(of ${uncompressedTotal})</span>` : ''}</span>
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">Speed & Profile:</span>
+                <span class="meta-val">${transferSpeed} <span style="color:var(--muted);font-size:11px;">(${speedProf})</span></span>
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">Duration:</span>
+                <span class="meta-val">${durStr}</span>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Error Alert (shown if failed) -->
+          ${item.error ? `
+            <div style="background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:6px; padding:12px 14px; margin-bottom:12px; display:flex; align-items:flex-start; gap:10px;">
+              <i data-lucide="alert-triangle" style="width:16px;height:16px;color:var(--danger);flex-shrink:0;margin-top:2px;"></i>
+              <div style="font-size:12px; color:#fca5a5; font-family:'SF Mono','Cascadia Code',monospace; word-break:break-all;">
+                <strong style="color:#ef4444;">Operation Error:</strong> ${escHtml(item.error)}
+              </div>
+            </div>
+          ` : ''}
+
+          <!-- Execution Logs Box (collapsible) -->
+          <div id="logs-box-${item.id}" style="display:none; margin-top:14px; background:#080808; border:1px solid rgba(255,255,255,0.08); border-radius:8px; padding:14px 16px; font-family:'SF Mono','Cascadia Code',monospace; font-size:11px; max-height:240px; overflow-y:auto; line-height:1.8; color:#d1d5db; white-space:pre-wrap; word-break:break-all;">
+            ${item.logs ? escHtml(item.logs) : 'Loading execution logs...'}
+          </div>
+
         </div>
       </td>
     </tr>`;
