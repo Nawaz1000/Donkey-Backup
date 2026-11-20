@@ -27,7 +27,7 @@ try:
         delete_remote_backup, prune_schedule_backups
     )
     from .pipeline import stream_backup_to_storage
-    from .drivers.postgres import get_pg_db_size, run_pg_backup, run_pg_restore
+    from .drivers.postgres import get_pg_db_size, run_pg_backup, run_pg_restore, ensure_pg_database_exists
     from .drivers.mongo import run_mongo_backup, run_mongo_restore
     from .drivers.solr import run_solr_backup, run_solr_restore
 except ImportError:
@@ -43,7 +43,7 @@ except ImportError:
         delete_remote_backup, prune_schedule_backups
     )
     from engine.pipeline import stream_backup_to_storage
-    from engine.drivers.postgres import get_pg_db_size, run_pg_backup, run_pg_restore
+    from engine.drivers.postgres import get_pg_db_size, run_pg_backup, run_pg_restore, ensure_pg_database_exists
     from engine.drivers.mongo import run_mongo_backup, run_mongo_restore
     from engine.drivers.solr import run_solr_backup, run_solr_restore
 
@@ -417,6 +417,37 @@ def do_restore(restore_id: str):
             write_log(log_path, f"INFO  Restoring to database: {explicit_dbname}")
             log.info(f"Restoring to database: {explicit_dbname}")
             target_db = {**target_db, "database_name": explicit_dbname}
+
+        target_dbname = (target_db.get("database_name") or "").strip()
+        if target_db.get("type") == "postgresql" and target_dbname and target_dbname not in ("__all__", "all"):
+            ensure_pg_database_exists(target_db, target_dbname, log_path)
+
+        # Auto-register newly targeted database profile in BackupVault if it does not exist
+        if target_dbname and target_dbname not in ("__all__", "all", "postgres"):
+            try:
+                all_dbs = read_json("data/databases.json")
+                existing = next((d for d in all_dbs if d.get("type") == target_db.get("type") and (d.get("host") == target_db.get("host") or d.get("mongo_uri") == target_db.get("mongo_uri")) and (d.get("database_name") or "").lower() == target_dbname.lower()), None)
+                if not existing:
+                    new_id = str(uuid.uuid4())
+                    reg_profile = {
+                        "id": new_id,
+                        "name": f"{target_db.get('name', target_db.get('type'))}-{target_dbname}",
+                        "type": target_db.get("type"),
+                        "host": target_db.get("host", ""),
+                        "port": target_db.get("port", 5432 if target_db.get("type") == "postgresql" else 27017),
+                        "database_name": target_dbname,
+                        "username": target_db.get("username", ""),
+                        "password": target_db.get("password", ""),
+                        "mongo_uri": target_db.get("mongo_uri", ""),
+                        "description": f"Auto-created database profile from restore ({target_dbname})",
+                        "created_at": datetime.utcnow().isoformat() + "Z",
+                        "user_id": target_db.get("user_id")
+                    }
+                    all_dbs.append(reg_profile)
+                    write_json("data/databases.json", all_dbs)
+                    write_log(log_path, f"INFO  Auto-registered database profile '{reg_profile['name']}' in BackupVault (ID: {new_id}).")
+            except Exception as ex_reg:
+                write_log(log_path, f"WARN  Could not auto-register database profile in BackupVault: {ex_reg}")
 
         if total_size <= 0 and not remote_name.endswith("/"):
             total_size = get_storage_object_size(storage, remote_name)

@@ -641,7 +641,8 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
                 optimize_pipe_fd(p_dec.stdin)
                 optimize_pipe_fd(p_dec.stdout)
 
-                needs_filter = bool(sql_db_filter or changes_only or (indexing_mode != "with_index"))
+                is_psql = bool(cmd and len(cmd) > 0 and "psql" in cmd[0])
+                needs_filter = is_psql and bool(sql_db_filter or changes_only or (indexing_mode != "with_index"))
                 p_restore = subprocess.Popen(
                     cmd,
                     stdin=subprocess.PIPE if needs_filter else p_dec.stdout,
@@ -1239,7 +1240,16 @@ def stream_restore_from_storage(cmd: list, env: dict, storage: dict, remote_name
 
         p_restore = processes[-1]
         if p_restore.returncode != 0:
-            if is_mongo or p_restore.returncode != 1:
+            is_fatal = False
+            if os.path.exists(log_path):
+                try:
+                    with open(log_path, "r", encoding="utf-8", errors="ignore") as lf:
+                        log_content = lf.read().lower()
+                        if "fatal:" in log_content or "does not exist" in log_content or "could not connect" in log_content or "authentication failed" in log_content:
+                            is_fatal = True
+                except Exception:
+                    pass
+            if is_mongo or p_restore.returncode != 1 or is_fatal:
                 raise RuntimeError(f"Restore command failed with exit code {p_restore.returncode}. Check logs.")
             else:
                 write_log(log_path, f"WARN  Restore completed with warnings (exit code 1). This is often harmless in pg_restore.")

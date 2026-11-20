@@ -10,9 +10,9 @@ from engine import do_backup, do_restore, cancel_job
 router = APIRouter()
 
 class BackupCreate(BaseModel):
-    database_id: str
+    database_id: Optional[str] = None
     database_name: Optional[str] = None
-    storage_id: str
+    storage_id: Optional[str] = None
     label: Optional[str] = ""
     collection: Optional[str] = ""
     backup_method: Literal["full", "incremental", "differential"] = "full"
@@ -27,10 +27,11 @@ class RestoreRequest(BaseModel):
     backup_id: Optional[str] = None
     storage_id: Optional[str] = None
     remote_name: Optional[str] = None
-    target_database_id: str
+    target_database_id: Optional[str] = None
     new_database: bool = False
     new_database_name: Optional[str] = None
     target_database_name: Optional[str] = None
+    database_name: Optional[str] = None
     selected_database: Optional[str] = None
     collection: Optional[str] = ""
     indexing_mode: Literal["with_index", "without_index", "only_index"] = "with_index"
@@ -62,13 +63,38 @@ def list_backups(user=Depends(get_current_user)):
 @router.post("/")
 def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
     dbs = read_json("data/databases.json")
-    db = next((d for d in dbs if d["id"] == req.database_id and has_access(d, user)), None)
+    db = None
+    if req.database_id:
+        db = next((d for d in dbs if d["id"] == req.database_id and has_access(d, user)), None)
+        if not db:
+            db = next((d for d in dbs if d.get("name", "").lower() == req.database_id.lower() and has_access(d, user)), None)
+        if not db:
+            db = next((d for d in dbs if (d.get("database_name") or "").lower() == req.database_id.lower() and has_access(d, user)), None)
+        if not db:
+            db = next((d for d in dbs if d.get("type", "").lower() == req.database_id.lower() and has_access(d, user)), None)
     if not db:
-        raise HTTPException(404, "Database not found")
+        user_dbs = [d for d in dbs if has_access(d, user)]
+        if len(user_dbs) == 1:
+            db = user_dbs[0]
+        elif len(user_dbs) > 1 and req.database_name:
+            db = next((d for d in user_dbs if (d.get("database_name") or "").lower() == req.database_name.lower()), user_dbs[0])
+        else:
+            raise HTTPException(404, "Database not found. Please provide a valid database ID or name.")
+
     storages = read_json("data/storages.json")
-    storage = next((s for s in storages if s["id"] == req.storage_id and has_access(s, user)), None)
+    storage = None
+    if req.storage_id:
+        storage = next((s for s in storages if s["id"] == req.storage_id and has_access(s, user)), None)
+        if not storage:
+            storage = next((s for s in storages if s.get("name", "").lower() == req.storage_id.lower() and has_access(s, user)), None)
+        if not storage:
+            storage = next((s for s in storages if s.get("type", "").lower() == req.storage_id.lower() and has_access(s, user)), None)
     if not storage:
-        raise HTTPException(404, "Storage not found")
+        user_storages = [s for s in storages if has_access(s, user)]
+        if user_storages:
+            storage = next((s for s in user_storages if s.get("is_default")), user_storages[0])
+        else:
+            raise HTTPException(400, "No storage destinations configured. Please add a storage destination first.")
 
     folder_val = req.folder_name if req.folder_name is not None else storage.get("folder_name", "")
     folder_clean = (folder_val or "").strip().strip("/")
@@ -79,10 +105,10 @@ def create_backup(req: BackupCreate, background_tasks: BackgroundTasks, user=Dep
     target_dbname = req.database_name if req.database_name is not None else db.get("database_name", "")
     backup = {
         "id": str(uuid.uuid4()),
-        "database_id": req.database_id,
+        "database_id": db["id"],
         "database_name": target_dbname,
         "source_dbname": target_dbname,
-        "storage_id": req.storage_id,
+        "storage_id": storage["id"],
         "folder_name": folder_clean,
         "label": req.label or f"backup-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}",
         "collection": req.collection or "full",
@@ -293,15 +319,16 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
 
     dbs = read_json("data/databases.json")
     allowed_db_ids = {d["id"] for d in dbs if has_access(d, user)}
+    backups = read_json("data/backups.json") if os.path.exists("data/backups.json") else []
 
+    target_backup = None
     if req.backup_id:
-        backups = read_json("data/backups.json")
-        backup = next((b for b in backups if b["id"] == req.backup_id and (user.get("is_admin") or b["database_id"] in allowed_db_ids)), None)
-        if not backup:
+        target_backup = next((b for b in backups if b["id"] == req.backup_id and (user.get("is_admin") or b["database_id"] in allowed_db_ids)), None)
+        if not target_backup:
             raise HTTPException(404, "Backup not found")
-        if backup["status"] != "completed":
+        if target_backup["status"] != "completed":
             raise HTTPException(400, "Only completed backups can be restored")
-        if not backup.get("remote_name"):
+        if not target_backup.get("remote_name"):
             raise HTTPException(400, "Backup has no remote file stored")
     elif req.storage_id and req.remote_name:
         storages = read_json("data/storages.json")
@@ -311,9 +338,44 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
     else:
         raise HTTPException(400, "Must provide either backup_id or both storage_id and remote_name")
 
-    target_db = next((d for d in dbs if d["id"] == req.target_database_id and has_access(d, user)), None)
+    # Determine desired target database name
+    effective_target_name = (req.target_database_name or req.database_name or req.new_database_name or "").strip()
+
+    target_db = None
+    if req.target_database_id:
+        # 1. Match by exact ID
+        target_db = next((d for d in dbs if d["id"] == req.target_database_id and has_access(d, user)), None)
+        # 2. Match by connection profile name
+        if not target_db:
+            target_db = next((d for d in dbs if d.get("name", "").lower() == req.target_database_id.lower() and has_access(d, user)), None)
+        # 3. Match by database_name
+        if not target_db:
+            target_db = next((d for d in dbs if (d.get("database_name") or "").lower() == req.target_database_id.lower() and has_access(d, user)), None)
+        # 4. Match by type (e.g. "postgres", "mongodb")
+        if not target_db:
+            target_db = next((d for d in dbs if d.get("type", "").lower() == req.target_database_id.lower() and has_access(d, user)), None)
+
+    # If target_database_id did not match an existing profile, the user might have passed the new database name in target_database_id!
+    if not target_db and req.target_database_id:
+        if not effective_target_name:
+            effective_target_name = req.target_database_id.strip()
+
+    # If still not found, try using the source connection profile of the backup
+    if not target_db and target_backup and target_backup.get("database_id"):
+        target_db = next((d for d in dbs if d["id"] == target_backup["database_id"] and has_access(d, user)), None)
+
+    # If still not found, fallback to single available DB
     if not target_db:
-        raise HTTPException(404, "Target database not found")
+        user_dbs = [d for d in dbs if has_access(d, user)]
+        if len(user_dbs) == 1:
+            target_db = user_dbs[0]
+        else:
+            raise HTTPException(404, "Target database connection profile not found. Please provide a valid target_database_id or connection name.")
+
+    # When a specific new database name is requested, ensure new_database is set so auto-creation takes effect
+    if effective_target_name:
+        req.new_database = True
+        req.target_database_name = effective_target_name
 
     restores = read_json("data/restores.json")
     restore = {
@@ -321,10 +383,10 @@ def restore_backup(req: RestoreRequest, background_tasks: BackgroundTasks, user=
         "backup_id": req.backup_id,
         "storage_id": req.storage_id,
         "remote_name": req.remote_name,
-        "target_database_id": req.target_database_id,
+        "target_database_id": target_db["id"],
         "new_database": req.new_database,
-        "new_database_name": req.new_database_name if req.new_database else None,
-        "target_database_name": req.target_database_name,
+        "new_database_name": effective_target_name if req.new_database else None,
+        "target_database_name": effective_target_name or target_db.get("database_name"),
         "selected_database": req.selected_database,
         "collection": req.collection or "full",
         "indexing_mode": req.indexing_mode,

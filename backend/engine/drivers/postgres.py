@@ -68,6 +68,95 @@ def check_pg_options_supported(db: dict, test_options: str = "-c statement_timeo
         return False
 
 
+def ensure_pg_database_exists(db: dict, target_dbname: str, log_path: str = None) -> bool:
+    """
+    Checks if target_dbname exists on the PostgreSQL server.
+    If it does not exist, automatically executes CREATE DATABASE.
+    Tries candidate maintenance databases: 'postgres', 'template1', db.get('database_name').
+    """
+    if not target_dbname or target_dbname in ("__all__", "all"):
+        return True
+
+    db = get_decrypted_db(db)
+    host = str(db.get("host", "")).strip()
+    port = str(db.get("port", 5432)).strip()
+    username = str(db.get("username", "")).strip()
+    env = pg_env(db)
+
+    # Determine candidate maintenance databases to connect to
+    candidates = []
+    if db.get("database_name") and db["database_name"] not in ("__all__", "all", target_dbname):
+        candidates.append(db["database_name"])
+    candidates.extend(["postgres", "template1"])
+    seen = set()
+    maint_dbs = []
+    for d in candidates:
+        if d and d not in seen:
+            seen.add(d)
+            maint_dbs.append(d)
+
+    exists = False
+    connected_maint_db = None
+    for maint_db in maint_dbs:
+        try:
+            check_cmd = [
+                "psql", f"--host={host}", f"--port={port}",
+                f"--username={username}", "--no-password", f"--dbname={maint_db}",
+                "-t", "-A", "-c",
+                f"SELECT 1 FROM pg_database WHERE datname = '{target_dbname}';"
+            ]
+            res = subprocess.run(check_cmd, capture_output=True, text=True, env=env, timeout=10)
+            if res.returncode == 0:
+                connected_maint_db = maint_db
+                if res.stdout.strip() == "1":
+                    exists = True
+                break
+        except Exception:
+            continue
+
+    if exists:
+        if log_path:
+            write_log(log_path, f"INFO  Target database '{target_dbname}' exists on PostgreSQL server.")
+        return True
+
+    if not connected_maint_db:
+        connected_maint_db = maint_dbs[0] if maint_dbs else "postgres"
+
+    msg = f"INFO  Target database '{target_dbname}' does not exist on PostgreSQL server. Auto-creating database '{target_dbname}'..."
+    if log_path:
+        write_log(log_path, msg)
+    print(msg)
+
+    create_cmd = [
+        "psql", f"--host={host}", f"--port={port}",
+        f"--username={username}", "--no-password", f"--dbname={connected_maint_db}",
+        "-c", f'CREATE DATABASE "{target_dbname}";'
+    ]
+    try:
+        res = subprocess.run(create_cmd, capture_output=True, text=True, env=env, timeout=30)
+        if res.returncode == 0:
+            success_msg = f"INFO  Successfully created new database '{target_dbname}' on PostgreSQL server."
+            if log_path:
+                write_log(log_path, success_msg)
+            print(success_msg)
+            return True
+        else:
+            err = res.stderr.strip() or res.stdout.strip()
+            if "already exists" in err.lower():
+                return True
+            warn_msg = f"WARN  Could not auto-create database '{target_dbname}': {err}"
+            if log_path:
+                write_log(log_path, warn_msg)
+            print(warn_msg)
+            return False
+    except Exception as e:
+        err_msg = f"ERROR Exception while auto-creating database '{target_dbname}': {e}"
+        if log_path:
+            write_log(log_path, err_msg)
+        print(err_msg)
+        return False
+
+
 def get_pg_db_size(db: dict, dbname: str) -> int:
     try:
         db = get_decrypted_db(db)
@@ -396,45 +485,42 @@ def run_pg_restore(db: dict, storage: dict, remote_name: str, log_path: str, new
     settings = get_speed_settings(speed_profile)
     parallel_jobs = jobs or settings.get("restore_workers", 2)
 
-    if selected_database:
-        target_name = dbname if dbname and dbname != "__all__" else selected_database
-        if new_database:
-            create_cmd = [
-                "psql", f"--host={db['host']}", f"--port={db['port']}",
-                f"--username={db['username']}", "--no-password", "--dbname=postgres",
-                "-c", f'CREATE DATABASE "{target_name}";'
+    target_name = dbname if dbname and dbname != "__all__" else (selected_database or "postgres")
+
+    # Automatically ensure target database exists on PostgreSQL server before running restore!
+    if target_name and target_name not in ("__all__", "all"):
+        ensure_pg_database_exists(db, target_name, log_path)
+
+    # Detect whether this archive is a plain SQL dump or custom format (-Fc) archive
+    # Custom format archives (-Fc) are always used for single db and folder archives
+    # Plain SQL is used ONLY for unified cluster dumps or files explicitly ending in .sql
+    is_plain_sql = (remote_name.endswith(".sql") or remote_name.endswith(".sql.gz") or remote_name.endswith(".sql.zst") or (is_all and not remote_name.endswith(".archive.zst") and not remote_name.endswith(".archive.gz")))
+
+    if is_plain_sql:
+        if is_all:
+            cmd = [
+                "psql",
+                f"--host={db['host']}", f"--port={db['port']}",
+                f"--username={db['username']}", "--dbname=postgres",
+                "--no-password",
+                "-v", "ON_ERROR_STOP=0"
             ]
-            subprocess.run(create_cmd, capture_output=True, env=pg_env(db), timeout=30)
-            
-        cmd = [
-            "psql",
-            f"--host={db['host']}", f"--port={db['port']}",
-            f"--username={db['username']}", f"--dbname={target_name}",
-            "--no-password",
-            "-v", "ON_ERROR_STOP=0"
-        ]
-        sql_db_filter = selected_database
-    elif is_all:
-        cmd = [
-            "psql",
-            f"--host={db['host']}", f"--port={db['port']}",
-            f"--username={db['username']}", "--dbname=postgres",
-            "--no-password",
-            "-v", "ON_ERROR_STOP=0"
-        ]
+        else:
+            cmd = [
+                "psql",
+                f"--host={db['host']}", f"--port={db['port']}",
+                f"--username={db['username']}", f"--dbname={target_name}",
+                "--no-password",
+                "-v", "ON_ERROR_STOP=0"
+            ]
+            if selected_database:
+                sql_db_filter = selected_database
     else:
-        if new_database:
-            create_cmd = [
-                "psql", f"--host={db['host']}", f"--port={db['port']}",
-                f"--username={db['username']}", "--no-password", "--dbname=postgres",
-                "-c", f'CREATE DATABASE "{dbname}";'
-            ]
-            subprocess.run(create_cmd, capture_output=True, env=pg_env(db), timeout=30)
-            
+        # Custom-format archive (-Fc) -> MUST use pg_restore!
         cmd = [
             "pg_restore",
             f"--host={db['host']}", f"--port={db['port']}",
-            f"--username={db['username']}", f"--dbname={dbname}",
+            f"--username={db['username']}", f"--dbname={target_name}",
             "--no-password", "--no-acl", "--no-owner",
             "--disable-triggers",
             "--verbose"
